@@ -22,10 +22,13 @@ from src.utils.logging_utils import setup_logging
 # 1. SETUP
 # ==========================================
 logger = setup_logging()
+headless = os.getenv("SIMBAY_HEADLESS", "").lower() in {"1", "true", "yes", "on"}
 
 # Setup "real" robot
 real_robot = initialize_mujoco_env()
-viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
+viewer = None
+if not headless:
+    viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
 real_robot.viewer = viewer
 dt = real_robot.dt
 
@@ -41,7 +44,7 @@ memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
 logger.info(
-    "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+    "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d headless=%s "
     "state_memory_total_bytes=%d state_memory_total=%s "
     "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
     "process_memory_per_particle_estimate_bytes=%.2f "
@@ -55,6 +58,7 @@ logger.info(
     true_mass,
     num_particles,
     cpu_cores,
+    headless,
     memory_profile["state_bytes_total"],
     format_bytes(memory_profile["state_bytes_total"]),
     memory_profile["state_bytes_per_particle"],
@@ -103,7 +107,8 @@ logger.info("phase_start name=approach")
 traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
 for qpos in traj1:
     real_robot.move_joints(qpos)
-    viewer.sync()
+    if viewer is not None:
+        viewer.sync()
 
     particle_filter.predict(qpos) 
 
@@ -113,7 +118,8 @@ logger.info("phase_start name=descend")
 traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
 for qpos in traj2:
     real_robot.move_joints(qpos)
-    viewer.sync()
+    if viewer is not None:
+        viewer.sync()
 
     particle_filter.predict(qpos)
 
@@ -123,7 +129,8 @@ logger.info("phase_start name=close_gripper")
 traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
 for qpos in traj3:
     real_robot.move_joints(qpos)
-    viewer.sync()
+    if viewer is not None:
+        viewer.sync()
 
     particle_filter.predict(qpos)
 
@@ -140,7 +147,8 @@ pf_cpu_durations = []
 
 for step, qpos in enumerate(traj4):
     real_robot.move_joints(qpos)
-    viewer.sync()
+    if viewer is not None:
+        viewer.sync()
 
     step_wall_start = time.perf_counter()
     step_cpu_start = time.process_time()
@@ -225,8 +233,9 @@ logger.info(
     format_bytes(env_memory_profile["native_bytes_total"]),
 )
 
-logger.info("sequence_complete awaiting_user_input=true")
-input()
+logger.info("sequence_complete awaiting_user_input=%s", not headless)
+if not headless:
+    input()
 logger.info("final_mass_prediction_kg=%.4f", float(particle_filter.estimate()))
 logger.info("final_error_pct=%.2f", abs(true_mass - particle_filter.estimate()) * 100)
 # You should also print the real mass here to see if the filter got it right!

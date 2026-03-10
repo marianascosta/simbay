@@ -1,4 +1,4 @@
-.PHONY: install shell run run-macos check
+.PHONY: install shell run run-macos check docker-build docker-run
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -16,3 +16,10 @@ run-macos:
 
 check:
 	poetry run python -m compileall main.py src
+
+docker-build:
+	docker compose build
+
+docker-run:
+	docker compose up --build
+	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"

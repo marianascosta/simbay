@@ -1,0 +1,15 @@
+services:
+  simbay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: simbay
+    environment:
+      MPLBACKEND: Agg
+      SIMBAY_HEADLESS: "1"
+    mem_limit: 10g
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    stdin_open: true
+    tty: true
