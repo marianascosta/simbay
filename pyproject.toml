@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "simbay"
+version = "0.1.0"
+description = "MuJoCo-based Franka simulation, planning, and mass estimation."
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.11"
+matplotlib = "^3.9.4"
+mujoco = "^3.3.7"
+numpy = "^2.2.6"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

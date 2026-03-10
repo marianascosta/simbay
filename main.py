@@ -1,3 +1,6 @@
+from pathlib import Path
+import os
+import time
 
 import matplotlib.pyplot as plt
 import mujoco
@@ -11,10 +14,15 @@ from src.planning import plan_linear_trajectory
 from src.utils import DEFAULT_OBJECT_PROPS
 from src.utils import FRANKA_HOME_QPOS
 from src.utils import initialize_mujoco_env
+from src.utils.logging_utils import format_bytes
+from src.utils.logging_utils import get_process_memory_bytes
+from src.utils.logging_utils import setup_logging
 
 # ==========================================
 # 1. SETUP
 # ==========================================
+logger = setup_logging()
+
 # Setup "real" robot
 real_robot = initialize_mujoco_env()
 viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
@@ -29,6 +37,41 @@ num_particles = 100
 limits = ((0.0, 3.0))
 env = FrankaMuJoCoEnv(limits, num_particles)
 particle_filter = ParticleFilter(env)
+memory_profile = particle_filter.memory_profile()
+env_memory_profile = env.memory_profile()
+cpu_cores = os.cpu_count() or 1
+logger.info(
+    "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+    "state_memory_total_bytes=%d state_memory_total=%s "
+    "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
+    "process_memory_per_particle_estimate_bytes=%.2f "
+    "process_memory_per_particle_estimate=%s "
+    "mujoco_model_buffer_per_particle_bytes=%d mujoco_model_buffer_per_particle=%s "
+    "mujoco_data_buffer_per_particle_bytes=%d mujoco_data_buffer_per_particle=%s "
+    "mujoco_data_arena_per_particle_bytes=%d mujoco_data_arena_per_particle=%s "
+    "mujoco_native_memory_per_particle_bytes=%d mujoco_native_memory_per_particle=%s "
+    "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
+    dt,
+    true_mass,
+    num_particles,
+    cpu_cores,
+    memory_profile["state_bytes_total"],
+    format_bytes(memory_profile["state_bytes_total"]),
+    memory_profile["state_bytes_per_particle"],
+    format_bytes(memory_profile["state_bytes_per_particle"]),
+    memory_profile["process_memory_per_particle_estimate_bytes"],
+    format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
+    env_memory_profile["model_nbuffer_bytes_per_robot"],
+    format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+    env_memory_profile["data_nbuffer_bytes_per_robot"],
+    format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+    env_memory_profile["data_narena_bytes_per_robot"],
+    format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
+    env_memory_profile["native_bytes_per_robot"],
+    format_bytes(env_memory_profile["native_bytes_per_robot"]),
+    env_memory_profile["native_bytes_total"],
+    format_bytes(env_memory_profile["native_bytes_total"]),
+)
 
 # ==========================================
 # 2. TRAJECTORY PLANNING
@@ -56,7 +99,7 @@ q_lift_closed = np.append(lift_q7, CLOSED)
 # ==========================================
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
-print("Moving to Approach position...")
+logger.info("phase_start name=approach")
 traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
 for qpos in traj1:
     real_robot.move_joints(qpos)
@@ -66,7 +109,7 @@ for qpos in traj1:
 
 
 # Phase 2: Descend vertically to the object (No PF updates)
-print("Descending to grasp...")
+logger.info("phase_start name=descend")
 traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
 for qpos in traj2:
     real_robot.move_joints(qpos)
@@ -76,7 +119,7 @@ for qpos in traj2:
 
 
 # Phase 3: Close the Gripper (No PF updates)
-print("Closing Gripper...")
+logger.info("phase_start name=close_gripper")
 traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
 for qpos in traj3:
     real_robot.move_joints(qpos)
@@ -86,17 +129,22 @@ for qpos in traj3:
 
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
-print("Lifting object and running Particle Filter...")
+logger.info("phase_start name=lift_and_estimate")
 traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0) 
 
 # <--- Initialize lists to hold the historical data for the graph --->
 history_particles = []
 history_estimates = []
+pf_wall_durations = []
+pf_cpu_durations = []
 
 for step, qpos in enumerate(traj4):
     real_robot.move_joints(qpos)
     viewer.sync()
-    
+
+    step_wall_start = time.perf_counter()
+    step_cpu_start = time.process_time()
+
     # 1. Step the particles forward
     particle_filter.predict(qpos)
     
@@ -115,18 +163,79 @@ for step, qpos in enumerate(traj4):
     history_particles.append(particle_filter.particles.copy())
     history_estimates.append(particle_filter.estimate())
 
+    step_wall_duration = time.perf_counter() - step_wall_start
+    step_cpu_duration = time.process_time() - step_cpu_start
+    pf_wall_durations.append(step_wall_duration)
+    pf_cpu_durations.append(step_cpu_duration)
 
-print("\nSequence complete. Press Enter to close.")
+    cpu_equivalent_cores_used = (
+        step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
+    )
+    cpu_percent_single_core = cpu_equivalent_cores_used * 100.0
+    cpu_percent_total_machine = (
+        (cpu_equivalent_cores_used / cpu_cores) * 100.0 if cpu_cores > 0 else 0.0
+    )
+    step_rate_hz = 1.0 / step_wall_duration if step_wall_duration > 0 else 0.0
+    should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0
+    if should_log_step:
+        rss_bytes = get_process_memory_bytes()
+        logger.info(
+            "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
+            "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
+            "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
+            "rss_bytes=%d rss=%s mujoco_native_memory_total_bytes=%d "
+            "mujoco_native_memory_total=%s",
+            step,
+            particle_filter.N,
+            step_wall_duration * 1000.0,
+            step_rate_hz,
+            step_cpu_duration * 1000.0,
+            cpu_equivalent_cores_used,
+            cpu_percent_single_core,
+            cpu_percent_total_machine,
+            particle_filter.effective_sample_size(),
+            float(particle_filter.estimate()),
+            rss_bytes,
+            format_bytes(rss_bytes),
+            env_memory_profile["native_bytes_total"],
+            format_bytes(env_memory_profile["native_bytes_total"]),
+        )
+
+avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
+avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
+avg_step_rate_hz = 1.0 / avg_wall_duration if avg_wall_duration > 0 else 0.0
+avg_cpu_equivalent_cores = (
+    avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
+)
+logger.info(
+    "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
+    "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
+    "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
+    "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
+    len(pf_wall_durations),
+    avg_wall_duration * 1000.0,
+    avg_step_rate_hz,
+    avg_cpu_duration * 1000.0,
+    avg_cpu_equivalent_cores,
+    float(particle_filter.estimate()),
+    abs(true_mass - particle_filter.estimate()) * 100,
+    get_process_memory_bytes(),
+    format_bytes(get_process_memory_bytes()),
+    env_memory_profile["native_bytes_total"],
+    format_bytes(env_memory_profile["native_bytes_total"]),
+)
+
+logger.info("sequence_complete awaiting_user_input=true")
 input()
-print(f"Final Mass Prediction: {particle_filter.estimate():.4f} kg")
-print(f"Final Error: {abs (true_mass - particle_filter.estimate()) * 100:.2f} %")
+logger.info("final_mass_prediction_kg=%.4f", float(particle_filter.estimate()))
+logger.info("final_error_pct=%.2f", abs(true_mass - particle_filter.estimate()) * 100)
 # You should also print the real mass here to see if the filter got it right!
 
 
 # ==========================================
 # 4. GRAPH GENERATION
 # ==========================================
-print("Generating Particle Filter Evolution Plot...")
+logger.info("plot_generation_start")
 
 
 plt.figure(figsize=(10, 6))
@@ -150,4 +259,9 @@ plt.ylim(env.min, env.max) # Lock the Y-axis to physical limits
 plt.legend(loc='upper right')
 plt.grid(True, linestyle=':', alpha=0.7)
 
-plt.show()
+output_dir = Path("temp")
+output_dir.mkdir(exist_ok=True)
+output_path = output_dir / "particle_filter_evolution.png"
+plt.savefig(output_path, dpi=150, bbox_inches="tight")
+plt.close()
+logger.info("plot_saved path=%s", output_path)

@@ -30,11 +30,14 @@ env/
 .idea/
 *.swp
 *.swo
+temp/
+/docs/
 
 # --- Robotics & Simulation ---
 *.log
 *.out
 *.lock
+!poetry.lock
 *.mjb
 *.qpos
 *.qvel

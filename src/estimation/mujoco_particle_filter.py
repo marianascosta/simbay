@@ -43,6 +43,36 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         )
 
         return masses
+
+    def memory_profile(self) -> dict[str, int | float]:
+        """
+        Return the MuJoCo memory owned by the particle robots.
+        """
+        if not self.robots:
+            return {
+                "robot_count": 0,
+                "model_nbuffer_bytes_per_robot": 0,
+                "data_nbuffer_bytes_per_robot": 0,
+                "data_narena_bytes_per_robot": 0,
+                "native_bytes_per_robot": 0,
+                "native_bytes_total": 0,
+            }
+
+        model = self.robots[0].model
+        data = self.robots[0].data
+        model_nbuffer = int(model.nbuffer)
+        data_nbuffer = int(data.nbuffer)
+        data_narena = int(data.narena)
+        native_bytes_per_robot = model_nbuffer + data_nbuffer + data_narena
+
+        return {
+            "robot_count": len(self.robots),
+            "model_nbuffer_bytes_per_robot": model_nbuffer,
+            "data_nbuffer_bytes_per_robot": data_nbuffer,
+            "data_narena_bytes_per_robot": data_narena,
+            "native_bytes_per_robot": native_bytes_per_robot,
+            "native_bytes_total": native_bytes_per_robot * len(self.robots),
+        }
     
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         # 1. Apply process noise to the mathematical state (the Artificial Random Walk)

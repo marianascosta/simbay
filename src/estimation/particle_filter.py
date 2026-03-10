@@ -1,6 +1,9 @@
+import logging
+
 import numpy as np
 
 from .base import ParticleEnvironment
+from src.utils.logging_utils import get_process_memory_bytes
 
 
 class ParticleFilter:
@@ -19,15 +22,34 @@ class ParticleFilter:
         Args:
             env (ParticleEnvironment): The domain-specific model (motion and measurement logic).
         """
+        self.logger = logging.getLogger("simbay.particle_filter")
         self.env = env
 
         # Ask the environment for the initial states first
+        init_memory_before = get_process_memory_bytes()
         self.particles = self.env.initialize_particles()
+        init_memory_after = get_process_memory_bytes()
         self.N = len(self.particles)
         
         # Before receiving any sensor data, we assume a uniform prior where 
         # every random guess has an exact equal probability of being the true state.
         self.weights = np.ones(self.N) / self.N
+        self.state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
+        self.state_bytes_per_particle = (
+            self.state_bytes_total / self.N if self.N else 0.0
+        )
+        self.process_memory_per_particle_estimate = (
+            max(init_memory_after - init_memory_before, 0) / self.N if self.N else 0.0
+        )
+
+        self.logger.info(
+            "particle_filter_initialized particles=%d state_bytes_total=%d "
+            "state_bytes_per_particle=%.2f process_memory_per_particle_estimate_bytes=%.2f",
+            self.N,
+            self.state_bytes_total,
+            self.state_bytes_per_particle,
+            self.process_memory_per_particle_estimate,
+        )
 
     def predict(self, control_input: np.ndarray):
         """
@@ -94,7 +116,24 @@ class ParticleFilter:
             
             # Reset weights back to uniform for the surviving clones
             self.weights.fill(1.0 / self.N)
-    
+
+    def effective_sample_size(self) -> float:
+        """
+        Return the current effective sample size (ESS).
+        """
+        return float(1.0 / np.sum(self.weights**2))
+
+    def memory_profile(self) -> dict[str, float | int]:
+        """
+        Return memory metrics for the particle state and an RSS-based estimate.
+        """
+        return {
+            "particles": self.N,
+            "state_bytes_total": self.state_bytes_total,
+            "state_bytes_per_particle": self.state_bytes_per_particle,
+            "process_memory_per_particle_estimate_bytes": self.process_memory_per_particle_estimate,
+        }
+
     def estimate(self):
         """
         Computes the current state estimation by calculating the weighted average 
