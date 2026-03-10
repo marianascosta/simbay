@@ -1,0 +1,45 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py,cover
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# --- Environments & IDEs ---
+.venv/
+venv/
+env/
+.env.*
+.env
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Robotics & Simulation ---
+*.log
+*.out
+*.lock
+*.mjb
+*.qpos
+*.qvel
+Backups/
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
