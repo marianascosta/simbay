@@ -44,6 +44,17 @@ class ParticleEnvironment(ABC):
         """
         pass
 
+    def resample_states(self, indexes: np.ndarray) -> None:
+        """Reindex internal simulation states after particle resampling.
+
+        Called by the particle filter immediately after resampling so that
+        concrete environments can keep their physics state in sync with the
+        resampled particle array.  The default implementation is a no-op.
+
+        Args:
+            indexes: Integer array of shape (N,) mapping new particles to old.
+        """
+
     @abstractmethod
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         """

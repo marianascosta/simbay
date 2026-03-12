@@ -7,7 +7,9 @@ package-mode = false
 [tool.poetry.dependencies]
 python = ">=3.10,<3.11"
 matplotlib = "^3.9.4"
-mujoco = "^3.3.7"
+mujoco = "^3.6.0"
+mujoco-mjx = "^3.6.0"
+jax = {version = ">=0.4.20", extras = ["cpu"]}
 numpy = "^2.2.6"
 
 [build-system]

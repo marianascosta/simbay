@@ -74,6 +74,9 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
             "native_bytes_total": native_bytes_per_robot * len(self.robots),
         }
     
+    def resample_states(self, indexes: np.ndarray) -> None:
+        self.robots = [self.robots[i] for i in indexes]
+
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         # 1. Apply process noise to the mathematical state (the Artificial Random Walk)
         particles += np.random.normal(0.0, self.std_dev, self.num_particles)

@@ -7,6 +7,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from src.estimation import FrankaMJXEnv
 from src.estimation import FrankaMuJoCoEnv
 from src.estimation import ParticleFilter
 from src.planning import FrankaSmartSolver
@@ -23,6 +24,7 @@ from src.utils.logging_utils import setup_logging
 # ==========================================
 logger = setup_logging()
 headless = os.getenv("SIMBAY_HEADLESS", "").lower() in {"1", "true", "yes", "on"}
+use_mjx = os.getenv("SIMBAY_USE_MJX", "").lower() in {"1", "true", "yes", "on"}
 
 # Setup "real" robot
 real_robot = initialize_mujoco_env()
@@ -36,46 +38,79 @@ obj_pos = DEFAULT_OBJECT_PROPS['pos']
 true_mass = DEFAULT_OBJECT_PROPS['mass']
 
 # Initiate Particle Filter
-num_particles = 100
+num_particles = int(os.getenv("SIMBAY_PARTICLES", "100"))
 limits = ((0.0, 3.0))
-env = FrankaMuJoCoEnv(limits, num_particles)
+if use_mjx:
+    env = FrankaMJXEnv(limits, num_particles)
+else:
+    env = FrankaMuJoCoEnv(limits, num_particles)
 particle_filter = ParticleFilter(env)
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
-logger.info(
-    "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d headless=%s "
-    "state_memory_total_bytes=%d state_memory_total=%s "
-    "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
-    "process_memory_per_particle_estimate_bytes=%.2f "
-    "process_memory_per_particle_estimate=%s "
-    "mujoco_model_buffer_per_particle_bytes=%d mujoco_model_buffer_per_particle=%s "
-    "mujoco_data_buffer_per_particle_bytes=%d mujoco_data_buffer_per_particle=%s "
-    "mujoco_data_arena_per_particle_bytes=%d mujoco_data_arena_per_particle=%s "
-    "mujoco_native_memory_per_particle_bytes=%d mujoco_native_memory_per_particle=%s "
-    "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
-    dt,
-    true_mass,
-    num_particles,
-    cpu_cores,
-    headless,
-    memory_profile["state_bytes_total"],
-    format_bytes(memory_profile["state_bytes_total"]),
-    memory_profile["state_bytes_per_particle"],
-    format_bytes(memory_profile["state_bytes_per_particle"]),
-    memory_profile["process_memory_per_particle_estimate_bytes"],
-    format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
-    env_memory_profile["model_nbuffer_bytes_per_robot"],
-    format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
-    env_memory_profile["data_nbuffer_bytes_per_robot"],
-    format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
-    env_memory_profile["data_narena_bytes_per_robot"],
-    format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
-    env_memory_profile["native_bytes_per_robot"],
-    format_bytes(env_memory_profile["native_bytes_per_robot"]),
-    env_memory_profile["native_bytes_total"],
-    format_bytes(env_memory_profile["native_bytes_total"]),
-)
+
+if use_mjx:
+    logger.info(
+        "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+        "headless=%s backend=mjx "
+        "state_memory_total_bytes=%d state_memory_total=%s "
+        "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
+        "process_memory_per_particle_estimate_bytes=%.2f "
+        "process_memory_per_particle_estimate=%s "
+        "jax_backend=%s jax_device=%s "
+        "jax_bytes_in_use=%d jax_peak_bytes_in_use=%d jax_bytes_limit=%d",
+        dt,
+        true_mass,
+        num_particles,
+        cpu_cores,
+        headless,
+        memory_profile["state_bytes_total"],
+        format_bytes(memory_profile["state_bytes_total"]),
+        memory_profile["state_bytes_per_particle"],
+        format_bytes(memory_profile["state_bytes_per_particle"]),
+        memory_profile["process_memory_per_particle_estimate_bytes"],
+        format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
+        env_memory_profile["backend"],
+        env_memory_profile["device_name"],
+        env_memory_profile["bytes_in_use"],
+        env_memory_profile["peak_bytes_in_use"],
+        env_memory_profile["bytes_limit"],
+    )
+else:
+    logger.info(
+        "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+        "headless=%s backend=mujoco "
+        "state_memory_total_bytes=%d state_memory_total=%s "
+        "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
+        "process_memory_per_particle_estimate_bytes=%.2f "
+        "process_memory_per_particle_estimate=%s "
+        "mujoco_model_buffer_per_particle_bytes=%d mujoco_model_buffer_per_particle=%s "
+        "mujoco_data_buffer_per_particle_bytes=%d mujoco_data_buffer_per_particle=%s "
+        "mujoco_data_arena_per_particle_bytes=%d mujoco_data_arena_per_particle=%s "
+        "mujoco_native_memory_per_particle_bytes=%d mujoco_native_memory_per_particle=%s "
+        "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
+        dt,
+        true_mass,
+        num_particles,
+        cpu_cores,
+        headless,
+        memory_profile["state_bytes_total"],
+        format_bytes(memory_profile["state_bytes_total"]),
+        memory_profile["state_bytes_per_particle"],
+        format_bytes(memory_profile["state_bytes_per_particle"]),
+        memory_profile["process_memory_per_particle_estimate_bytes"],
+        format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
+        env_memory_profile["model_nbuffer_bytes_per_robot"],
+        format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+        env_memory_profile["data_nbuffer_bytes_per_robot"],
+        format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+        env_memory_profile["data_narena_bytes_per_robot"],
+        format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
+        env_memory_profile["native_bytes_per_robot"],
+        format_bytes(env_memory_profile["native_bytes_per_robot"]),
+        env_memory_profile["native_bytes_total"],
+        format_bytes(env_memory_profile["native_bytes_total"]),
+    )
 
 # ==========================================
 # 2. TRAJECTORY PLANNING
@@ -103,36 +138,39 @@ q_lift_closed = np.append(lift_q7, CLOSED)
 # ==========================================
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
-logger.info("phase_start name=approach")
 traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
-for qpos in traj1:
+logger.info("phase_start name=approach steps=%d", len(traj1))
+for i, qpos in enumerate(traj1):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-
-    particle_filter.predict(qpos) 
+    particle_filter.predict(qpos)
+    if (i + 1) % 100 == 0 or i == len(traj1) - 1:
+        logger.info("phase_progress name=approach step=%d/%d", i + 1, len(traj1))
 
 
 # Phase 2: Descend vertically to the object (No PF updates)
-logger.info("phase_start name=descend")
 traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
-for qpos in traj2:
+logger.info("phase_start name=descend steps=%d", len(traj2))
+for i, qpos in enumerate(traj2):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-
     particle_filter.predict(qpos)
+    if (i + 1) % 100 == 0 or i == len(traj2) - 1:
+        logger.info("phase_progress name=descend step=%d/%d", i + 1, len(traj2))
 
 
 # Phase 3: Close the Gripper (No PF updates)
-logger.info("phase_start name=close_gripper")
 traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
-for qpos in traj3:
+logger.info("phase_start name=close_gripper steps=%d", len(traj3))
+for i, qpos in enumerate(traj3):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-
     particle_filter.predict(qpos)
+    if (i + 1) % 100 == 0 or i == len(traj3) - 1:
+        logger.info("phase_progress name=close_gripper step=%d/%d", i + 1, len(traj3))
 
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
@@ -187,27 +225,48 @@ for step, qpos in enumerate(traj4):
     should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0
     if should_log_step:
         rss_bytes = get_process_memory_bytes()
-        logger.info(
-            "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
-            "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
-            "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
-            "rss_bytes=%d rss=%s mujoco_native_memory_total_bytes=%d "
-            "mujoco_native_memory_total=%s",
-            step,
-            particle_filter.N,
-            step_wall_duration * 1000.0,
-            step_rate_hz,
-            step_cpu_duration * 1000.0,
-            cpu_equivalent_cores_used,
-            cpu_percent_single_core,
-            cpu_percent_total_machine,
-            particle_filter.effective_sample_size(),
-            float(particle_filter.estimate()),
-            rss_bytes,
-            format_bytes(rss_bytes),
-            env_memory_profile["native_bytes_total"],
-            format_bytes(env_memory_profile["native_bytes_total"]),
-        )
+        if use_mjx:
+            logger.info(
+                "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
+                "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
+                "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
+                "rss_bytes=%d rss=%s backend=mjx jax_backend=%s",
+                step,
+                particle_filter.N,
+                step_wall_duration * 1000.0,
+                step_rate_hz,
+                step_cpu_duration * 1000.0,
+                cpu_equivalent_cores_used,
+                cpu_percent_single_core,
+                cpu_percent_total_machine,
+                particle_filter.effective_sample_size(),
+                float(particle_filter.estimate()),
+                rss_bytes,
+                format_bytes(rss_bytes),
+                env_memory_profile["backend"],
+            )
+        else:
+            logger.info(
+                "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
+                "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
+                "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
+                "rss_bytes=%d rss=%s mujoco_native_memory_total_bytes=%d "
+                "mujoco_native_memory_total=%s",
+                step,
+                particle_filter.N,
+                step_wall_duration * 1000.0,
+                step_rate_hz,
+                step_cpu_duration * 1000.0,
+                cpu_equivalent_cores_used,
+                cpu_percent_single_core,
+                cpu_percent_total_machine,
+                particle_filter.effective_sample_size(),
+                float(particle_filter.estimate()),
+                rss_bytes,
+                format_bytes(rss_bytes),
+                env_memory_profile["native_bytes_total"],
+                format_bytes(env_memory_profile["native_bytes_total"]),
+            )
 
 avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
 avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
@@ -215,23 +274,41 @@ avg_step_rate_hz = 1.0 / avg_wall_duration if avg_wall_duration > 0 else 0.0
 avg_cpu_equivalent_cores = (
     avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
 )
-logger.info(
-    "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
-    "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
-    "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
-    "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
-    len(pf_wall_durations),
-    avg_wall_duration * 1000.0,
-    avg_step_rate_hz,
-    avg_cpu_duration * 1000.0,
-    avg_cpu_equivalent_cores,
-    float(particle_filter.estimate()),
-    abs(true_mass - particle_filter.estimate()) * 100,
-    get_process_memory_bytes(),
-    format_bytes(get_process_memory_bytes()),
-    env_memory_profile["native_bytes_total"],
-    format_bytes(env_memory_profile["native_bytes_total"]),
-)
+if use_mjx:
+    logger.info(
+        "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
+        "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
+        "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
+        "backend=mjx jax_backend=%s",
+        len(pf_wall_durations),
+        avg_wall_duration * 1000.0,
+        avg_step_rate_hz,
+        avg_cpu_duration * 1000.0,
+        avg_cpu_equivalent_cores,
+        float(particle_filter.estimate()),
+        abs(true_mass - particle_filter.estimate()) * 100,
+        get_process_memory_bytes(),
+        format_bytes(get_process_memory_bytes()),
+        env_memory_profile["backend"],
+    )
+else:
+    logger.info(
+        "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
+        "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
+        "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
+        "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
+        len(pf_wall_durations),
+        avg_wall_duration * 1000.0,
+        avg_step_rate_hz,
+        avg_cpu_duration * 1000.0,
+        avg_cpu_equivalent_cores,
+        float(particle_filter.estimate()),
+        abs(true_mass - particle_filter.estimate()) * 100,
+        get_process_memory_bytes(),
+        format_bytes(get_process_memory_bytes()),
+        env_memory_profile["native_bytes_total"],
+        format_bytes(env_memory_profile["native_bytes_total"]),
+    )
 
 logger.info("sequence_complete awaiting_user_input=%s", not headless)
 if not headless:

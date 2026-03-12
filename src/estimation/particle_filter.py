@@ -113,7 +113,8 @@ class ParticleFilter:
 
             indexes = np.searchsorted(cumulative_sum, positions, side='right')
             self.particles = self.particles[indexes]
-            
+            self.env.resample_states(indexes)
+
             # Reset weights back to uniform for the surviving clones
             self.weights.fill(1.0 / self.N)
 

@@ -7,9 +7,17 @@ services:
     environment:
       MPLBACKEND: Agg
       SIMBAY_HEADLESS: "1"
+      SIMBAY_USE_MJX: "1"
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
       - ./temp:/app/temp
     stdin_open: true
     tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
