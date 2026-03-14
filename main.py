@@ -57,8 +57,10 @@ if use_mjx:
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
         "process_memory_per_particle_estimate=%s "
-        "jax_backend=%s jax_device=%s "
-        "jax_bytes_in_use=%d jax_peak_bytes_in_use=%d jax_bytes_limit=%d",
+        "mjx_execution_platform=%s mjx_execution_device=%s "
+        "jax_default_platform=%s jax_default_device=%s "
+        "mjx_device_fallback_applied=%s "
+        "mjx_bytes_in_use=%d mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
         dt,
         true_mass,
         num_particles,
@@ -70,8 +72,11 @@ if use_mjx:
         format_bytes(memory_profile["state_bytes_per_particle"]),
         memory_profile["process_memory_per_particle_estimate_bytes"],
         format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
-        env_memory_profile["backend"],
-        env_memory_profile["device_name"],
+        env_memory_profile["execution_platform"],
+        env_memory_profile["execution_device"],
+        env_memory_profile["default_jax_platform"],
+        env_memory_profile["default_jax_device"],
+        env_memory_profile["device_fallback_applied"],
         env_memory_profile["bytes_in_use"],
         env_memory_profile["peak_bytes_in_use"],
         env_memory_profile["bytes_limit"],
@@ -226,11 +231,15 @@ for step, qpos in enumerate(traj4):
     if should_log_step:
         rss_bytes = get_process_memory_bytes()
         if use_mjx:
+            env_memory_profile = env.memory_profile()
             logger.info(
                 "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
                 "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
                 "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
-                "rss_bytes=%d rss=%s backend=mjx jax_backend=%s",
+                "rss_bytes=%d rss=%s backend=mjx "
+                "mjx_execution_platform=%s mjx_execution_device=%s "
+                "jax_default_platform=%s jax_default_device=%s "
+                "mjx_device_fallback_applied=%s",
                 step,
                 particle_filter.N,
                 step_wall_duration * 1000.0,
@@ -243,7 +252,11 @@ for step, qpos in enumerate(traj4):
                 float(particle_filter.estimate()),
                 rss_bytes,
                 format_bytes(rss_bytes),
-                env_memory_profile["backend"],
+                env_memory_profile["execution_platform"],
+                env_memory_profile["execution_device"],
+                env_memory_profile["default_jax_platform"],
+                env_memory_profile["default_jax_device"],
+                env_memory_profile["device_fallback_applied"],
             )
         else:
             logger.info(
@@ -275,11 +288,14 @@ avg_cpu_equivalent_cores = (
     avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
 )
 if use_mjx:
+    env_memory_profile = env.memory_profile()
     logger.info(
         "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
         "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
         "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
-        "backend=mjx jax_backend=%s",
+        "backend=mjx mjx_execution_platform=%s mjx_execution_device=%s "
+        "jax_default_platform=%s jax_default_device=%s "
+        "mjx_device_fallback_applied=%s",
         len(pf_wall_durations),
         avg_wall_duration * 1000.0,
         avg_step_rate_hz,
@@ -289,7 +305,11 @@ if use_mjx:
         abs(true_mass - particle_filter.estimate()) * 100,
         get_process_memory_bytes(),
         format_bytes(get_process_memory_bytes()),
-        env_memory_profile["backend"],
+        env_memory_profile["execution_platform"],
+        env_memory_profile["execution_device"],
+        env_memory_profile["default_jax_platform"],
+        env_memory_profile["default_jax_device"],
+        env_memory_profile["device_fallback_applied"],
     )
 else:
     logger.info(
