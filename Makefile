@@ -23,3 +23,18 @@ docker-build:
 docker-run:
 	docker compose up --build
 	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"
+
+bootstrap:
+	pip install poetry
+
+install:
+	poetry install --no-root
+
+setup-precommit:
+	poetry run pre-commit install
+
+format:
+	poetry run black -l 120 ./
+
+lint:
+	poetry run black --check -l 120 ./

@@ -43,12 +43,17 @@ class FrankaMJXEnv(ParticleEnvironment):
 
         self._batch: MJXBatch | None = None
         self._rng_key = jax.random.PRNGKey(42)
+        self._propagate_once = jax.jit(self._build_propagate_once())
+        self._propagate_many = jax.jit(self._build_propagate_many())
 
     @property
     def num_particles(self) -> int:
         return self._num_particles
 
     def initialize_particles(self) -> np.ndarray:
+        return np.asarray(self.initialize_particles_device())
+
+    def initialize_particles_device(self) -> jax.Array:
         n = self._num_particles
         masses = np.random.uniform(self.min, self.max, size=n)
 
@@ -59,28 +64,83 @@ class FrankaMJXEnv(ParticleEnvironment):
 
         self._step_count = 0
 
-        return masses
+        return jax.device_put(masses, self._batch.device)
+
+    def _build_propagate_once(self):
+        minimum = self.min
+        maximum = self.max
+
+        def propagate(particles: jax.Array, noise: jax.Array) -> jax.Array:
+            return jnp.clip(particles + noise, minimum, maximum)
+
+        return propagate
+
+    def _build_propagate_many(self):
+        minimum = self.min
+        maximum = self.max
+
+        def propagate(particles: jax.Array, noise_steps: jax.Array) -> tuple[jax.Array, jax.Array]:
+            def scan_step(carry: jax.Array, noise: jax.Array):
+                next_particles = jnp.clip(carry + noise, minimum, maximum)
+                return next_particles, next_particles
+
+            final_particles, trajectory = jax.lax.scan(scan_step, particles, noise_steps)
+            return final_particles, trajectory
+
+        return propagate
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
-        n = self._num_particles
+        return np.asarray(self.propagate_particles_device(particles, control_input))
 
-        # Apply process noise
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        noise = jax.random.normal(subkey, shape=(n,)) * self.std_dev
-        jax_particles = jnp.array(particles) + noise
-        jax_particles = jnp.clip(jax_particles, self.min, self.max)
-
+    def propagate_particles_device(
+        self,
+        particles: np.ndarray | jax.Array,
+        control_input: np.ndarray,
+    ) -> jax.Array:
         if self._batch is None:
             raise RuntimeError("MJX batch must be initialized before propagation.")
+
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        noise = jax.random.normal(subkey, shape=(self._num_particles,)) * self.std_dev
+        jax_particles = self._propagate_once(jnp.asarray(particles), noise)
         self._batch.step(control_input, jax_particles)
 
         self._step_count += 1
         if self._step_count % 500 == 0:
             self.logger.info("mjx_propagate step=%d", self._step_count)
 
-        return np.asarray(jax_particles)
+        return jax_particles
+
+    def rollout_predict_only_device(
+        self,
+        particles: np.ndarray | jax.Array,
+        trajectory: np.ndarray,
+    ) -> jax.Array:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before propagation.")
+        controls = jnp.asarray(trajectory)
+        if controls.size == 0:
+            return jnp.asarray(particles)
+
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        noise_steps = jax.random.normal(
+            subkey,
+            shape=(controls.shape[0], self._num_particles),
+        ) * self.std_dev
+        final_particles, particle_trajectory = self._propagate_many(
+            jnp.asarray(particles),
+            noise_steps,
+        )
+        self._batch.rollout(controls, particle_trajectory)
+        self._step_count += int(controls.shape[0])
+        if self._step_count and self._step_count % 500 == 0:
+            self.logger.info("mjx_rollout_complete step=%d", self._step_count)
+        return final_particles
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
+        return np.asarray(self.compute_likelihoods_device(observation))
+
+    def compute_likelihoods_device(self, observation: np.ndarray) -> jax.Array:
         if self._batch is None:
             raise RuntimeError("MJX batch must be initialized before likelihood evaluation.")
         sim_forces = self._batch.sensor_slice(self.force_adr, 3)
@@ -91,9 +151,12 @@ class FrankaMJXEnv(ParticleEnvironment):
         dist_sq = jnp.sum(diff ** 2, axis=1)
         likelihoods = jnp.exp(-0.5 * dist_sq / R)
 
-        return np.asarray(likelihoods)
+        return likelihoods
 
     def resample_states(self, indexes: np.ndarray) -> None:
+        self.resample_states_device(indexes)
+
+    def resample_states_device(self, indexes: np.ndarray | jax.Array) -> None:
         if self._batch is None:
             raise RuntimeError("MJX batch must be initialized before resampling.")
         self._batch.resample(indexes)

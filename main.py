@@ -9,6 +9,7 @@ import numpy as np
 
 from src.estimation import FrankaMJXEnv
 from src.estimation import FrankaMuJoCoEnv
+from src.estimation import MJXParticleFilter
 from src.estimation import ParticleFilter
 from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
@@ -42,9 +43,10 @@ num_particles = int(os.getenv("SIMBAY_PARTICLES", "100"))
 limits = ((0.0, 3.0))
 if use_mjx:
     env = FrankaMJXEnv(limits, num_particles)
+    particle_filter = MJXParticleFilter(env)
 else:
     env = FrankaMuJoCoEnv(limits, num_particles)
-particle_filter = ParticleFilter(env)
+    particle_filter = ParticleFilter(env)
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
@@ -149,9 +151,13 @@ for i, qpos in enumerate(traj1):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    particle_filter.predict(qpos)
     if (i + 1) % 100 == 0 or i == len(traj1) - 1:
         logger.info("phase_progress name=approach step=%d/%d", i + 1, len(traj1))
+if use_mjx:
+    particle_filter.predict_trajectory(traj1)
+else:
+    for qpos in traj1:
+        particle_filter.predict(qpos)
 
 
 # Phase 2: Descend vertically to the object (No PF updates)
@@ -161,9 +167,13 @@ for i, qpos in enumerate(traj2):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    particle_filter.predict(qpos)
     if (i + 1) % 100 == 0 or i == len(traj2) - 1:
         logger.info("phase_progress name=descend step=%d/%d", i + 1, len(traj2))
+if use_mjx:
+    particle_filter.predict_trajectory(traj2)
+else:
+    for qpos in traj2:
+        particle_filter.predict(qpos)
 
 
 # Phase 3: Close the Gripper (No PF updates)
@@ -173,9 +183,13 @@ for i, qpos in enumerate(traj3):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    particle_filter.predict(qpos)
     if (i + 1) % 100 == 0 or i == len(traj3) - 1:
         logger.info("phase_progress name=close_gripper step=%d/%d", i + 1, len(traj3))
+if use_mjx:
+    particle_filter.predict_trajectory(traj3)
+else:
+    for qpos in traj3:
+        particle_filter.predict(qpos)
 
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
@@ -196,22 +210,26 @@ for step, qpos in enumerate(traj4):
     step_wall_start = time.perf_counter()
     step_cpu_start = time.process_time()
 
-    # 1. Step the particles forward
-    particle_filter.predict(qpos)
-    
-    # 2. Get the real measurement
+    # 1. Get the real measurement
     measurements = real_robot.get_sensor_reads()
     real_ft_reading = measurements
     
-    # 3. INJECT NOISE to simulate physical hardware (e.g., 0.5N of sensor noise)
+    # 2. INJECT NOISE to simulate physical hardware (e.g., 0.5N of sensor noise)
     noisy_ft_reading = real_ft_reading + np.random.normal(0, 0.5, size=3)
-    
-    # 4. Update beliefs based on the noisy real reading and resample
-    particle_filter.update(noisy_ft_reading)
-    particle_filter.resample()
+
+    # 3. Update beliefs based on the noisy real reading and resample
+    if use_mjx:
+        particle_filter.step(qpos, noisy_ft_reading)
+    else:
+        particle_filter.predict(qpos)
+        particle_filter.update(noisy_ft_reading)
+        particle_filter.resample()
 
     # <--- Save the state of the particles at this exact timestep --->
-    history_particles.append(particle_filter.particles.copy())
+    if use_mjx:
+        history_particles.append(particle_filter.particles_host().copy())
+    else:
+        history_particles.append(particle_filter.particles.copy())
     history_estimates.append(particle_filter.estimate())
 
     step_wall_duration = time.perf_counter() - step_wall_start

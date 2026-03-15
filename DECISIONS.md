@@ -3,6 +3,20 @@
 ## 2026-03-14
 
 ### Change
+Added a separate JAX-backed [src/estimation/mjx_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_filter.py) and extended the MJX backend to support device-resident particle propagation plus compiled predict-only rollouts. Updated [main.py](/Users/marianacosta/Documents/fcul/simbay/simbay/main.py) and the MJX notebooks to use that fast path only when the MJX backend is selected.
+
+### Reason
+The previous MJX path still stored particle weights in NumPy, converted particles and likelihoods back to host arrays every step, and drove all phases from Python one timestep at a time. That made GPU execution synchronization-heavy and erased most of the benefit of batched MJX stepping.
+
+### Tradeoffs
+This adds a second particle-filter implementation instead of folding JAX behavior into the existing reference [src/estimation/particle_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/particle_filter.py). The codebase is slightly larger, but the sequential reference path stays unchanged and the GPU-oriented path can make device-specific assumptions without contaminating the fallback implementation.
+
+### Future Considerations
+If the MJX path becomes the default execution mode, consider lifting the shared filter interface into a small protocol so both filter implementations can be consumed without backend checks. If lift-phase performance is still dominated by host orchestration, move the measurement update loop itself into a higher-level `jax.lax.scan` path once the observation source is device-friendly.
+
+## 2026-03-14
+
+### Change
 Introduced an `MJXBatch` wrapper in [src/estimation/mjx_batch.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_batch.py) and rewired [src/estimation/mjx_particle_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_particle_filter.py) to use it for batched `mjx` stepping and resampling.
 
 ### Reason
