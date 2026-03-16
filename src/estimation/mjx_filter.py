@@ -9,9 +9,21 @@ from .mjx_particle_filter import FrankaMJXEnv
 
 
 def _normalize_weights(weights: jax.Array, likelihoods: jax.Array) -> jax.Array:
-    updated = weights * likelihoods
-    updated = updated + 1.0e-300
-    return updated / jnp.sum(updated)
+    tiny = jnp.finfo(weights.dtype).tiny
+    safe_weights = jnp.maximum(weights, tiny)
+    safe_likelihoods = jnp.nan_to_num(
+        likelihoods,
+        nan=tiny,
+        posinf=1.0,
+        neginf=tiny,
+    )
+    safe_likelihoods = jnp.maximum(safe_likelihoods, tiny)
+
+    log_updated = jnp.log(safe_weights) + jnp.log(safe_likelihoods)
+    log_updated = log_updated - jnp.max(log_updated)
+    updated = jnp.exp(log_updated)
+    total = jnp.maximum(jnp.sum(updated), tiny)
+    return updated / total
 
 
 def _effective_sample_size(weights: jax.Array) -> jax.Array:
