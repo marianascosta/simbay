@@ -31,6 +31,7 @@ from src.utils.logging_utils import setup_logging
 # ==========================================
 # 1. SETUP
 # ==========================================
+run_wall_start = time.perf_counter()
 logger = setup_logging()
 headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
 use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
@@ -368,8 +369,15 @@ else:
 logger.info("sequence_complete awaiting_user_input=%s", not headless)
 if not headless:
     input()
-logger.info("final_mass_prediction_kg=%.4f", float(particle_filter.estimate()))
-logger.info("final_error_pct=%.2f", abs(true_mass - particle_filter.estimate()) * 100)
+final_prediction = float(particle_filter.estimate())
+time_to_prediction_seconds = time.perf_counter() - run_wall_start
+logger.info(
+    "prediction_ready total_wall_s=%.3f final_mass_prediction_kg=%.4f",
+    time_to_prediction_seconds,
+    final_prediction,
+)
+logger.info("final_mass_prediction_kg=%.4f", final_prediction)
+logger.info("final_error_pct=%.2f", abs(true_mass - final_prediction) * 100)
 # You should also print the real mass here to see if the filter got it right!
 
 

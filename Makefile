@@ -1,4 +1,4 @@
-.PHONY: install shell run run-macos check docker-build docker-run
+.PHONY: install shell run run-macos check docker-build docker-run make-smoke-test
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -16,6 +16,9 @@ run-macos:
 
 check:
 	poetry run python -m compileall main.py src
+
+make-smoke-test:
+	SIMBAY_HEADLESS=1 SIMBAY_USE_MJX=1 SIMBAY_PARTICLES=1 python main.py
 
 docker-build:
 	docker compose build
