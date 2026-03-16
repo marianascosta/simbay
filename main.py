@@ -1,8 +1,16 @@
-from pathlib import Path
+import gc
 import os
+from pathlib import Path
 import time
 
+# Apply JAX/XLA settings before importing modules that may load JAX.
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["XLA_FLAGS"] = "--xla_gpu_enable_triton_gemm=false"
+
 import matplotlib.pyplot as plt
+import jax
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -24,8 +32,17 @@ from src.utils.logging_utils import setup_logging
 # 1. SETUP
 # ==========================================
 logger = setup_logging()
-headless = os.getenv("SIMBAY_HEADLESS", "").lower() in {"1", "true", "yes", "on"}
-use_mjx = os.getenv("SIMBAY_USE_MJX", "").lower() in {"1", "true", "yes", "on"}
+headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
+use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
+
+if use_mjx:
+    try:
+        device = jax.devices("gpu")[0]
+        memory_stats = device.memory_stats() or {}
+        print(f"Available memory: {memory_stats}")
+        logger.info("gpu_memory_stats device=%s stats=%s", device, memory_stats)
+    except Exception as exc:
+        logger.warning("gpu_memory_stats_unavailable error=%s", exc)
 
 # Setup "real" robot
 real_robot = initialize_mujoco_env()
@@ -389,3 +406,8 @@ output_path = output_dir / "particle_filter_evolution.png"
 plt.savefig(output_path, dpi=150, bbox_inches="tight")
 plt.close()
 logger.info("plot_saved path=%s", output_path)
+
+if use_mjx:
+    jax.clear_caches()
+    gc.collect()
+    logger.info("jax_cleanup_complete")
