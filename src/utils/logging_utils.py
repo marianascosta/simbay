@@ -1,21 +1,9 @@
 import logging
 import os
+import resource
 import sys
-from ctypes import Structure
-from ctypes import WinDLL
-from ctypes import byref
-from ctypes import c_size_t
-from ctypes import sizeof
-from ctypes import windll
-from ctypes.wintypes import DWORD
-from ctypes.wintypes import HANDLE
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-
-try:
-    import resource
-except ImportError:
-    resource = None
 
 
 def setup_logging(log_dir: str | Path = "logs") -> logging.Logger:
@@ -59,54 +47,14 @@ def setup_logging(log_dir: str | Path = "logs") -> logging.Logger:
 
 def get_process_memory_bytes() -> int:
     """
-    Return the current process resident-set-size approximation.
+    Return the current process resident-set-size approximation from `resource`.
 
     On macOS `ru_maxrss` is reported in bytes. On Linux it is reported in KiB.
     """
-    if resource is not None:
-        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(usage)
-        return int(usage * 1024)
-
-    if sys.platform == "win32":
-        return _get_process_memory_bytes_windows()
-
-    return 0
-
-
-class PROCESS_MEMORY_COUNTERS(Structure):
-    _fields_ = [
-        ("cb", DWORD),
-        ("PageFaultCount", DWORD),
-        ("PeakWorkingSetSize", c_size_t),
-        ("WorkingSetSize", c_size_t),
-        ("QuotaPeakPagedPoolUsage", c_size_t),
-        ("QuotaPagedPoolUsage", c_size_t),
-        ("QuotaPeakNonPagedPoolUsage", c_size_t),
-        ("QuotaNonPagedPoolUsage", c_size_t),
-        ("PagefileUsage", c_size_t),
-        ("PeakPagefileUsage", c_size_t),
-    ]
-
-
-def _get_process_memory_bytes_windows() -> int:
-    psapi = WinDLL("Psapi.dll")
-    kernel32 = windll.kernel32
-
-    counters = PROCESS_MEMORY_COUNTERS()
-    counters.cb = sizeof(PROCESS_MEMORY_COUNTERS)
-    process: HANDLE = kernel32.GetCurrentProcess()
-
-    success = psapi.GetProcessMemoryInfo(
-        process,
-        byref(counters),
-        counters.cb,
-    )
-    if not success:
-        return 0
-
-    return int(counters.WorkingSetSize)
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return int(usage)
+    return int(usage * 1024)
 
 
 def format_bytes(num_bytes: float) -> str:

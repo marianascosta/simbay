@@ -39,7 +39,7 @@ if use_mjx:
     try:
         device = jax.devices("gpu")[0]
         memory_stats = device.memory_stats() or {}
-        print(f"Available memory: {memory_stats}")
+        print(f"GPU memory stats: {memory_stats}")
         logger.info("gpu_memory_stats device=%s stats=%s", device, memory_stats)
     except Exception as exc:
         logger.warning("gpu_memory_stats_unavailable error=%s", exc)
