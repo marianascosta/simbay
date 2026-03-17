@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-03-16
+
+### Change
+Added a minimal Prometheus-compatible observability layer with [src/utils/metrics.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/utils/metrics.py), stage-aware instrumentation in [main.py](/Users/marianacosta/Documents/fcul/simbay/simbay/main.py), and host-local Prometheus/Grafana configuration under [monitoring/](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/).
+
+### Reason
+The project needs stable resource visibility by stage without relying on parsing log lines. A small in-process metrics surface lets Prometheus and Grafana correlate simulation phases with host and GPU exporters while keeping `main.py` flat and preserving the existing sequential execution path.
+
+### Tradeoffs
+This adds a small amount of app-level instrumentation and a lightweight custom metrics endpoint instead of pulling in a larger Python metrics dependency. The result is intentionally narrow: the app exports simulation context and phase-4 filter state, while CPU and GPU hardware telemetry stay outside the process in standard host exporters.
+
+### Future Considerations
+If the observability stack becomes a core workflow, add a provisioned Grafana dashboard next rather than expanding the app metrics set aggressively. If logs also need to become queryable in Grafana, add Loki as a separate step instead of folding log shipping into the metrics helper.
+
 ## 2026-03-14
 
 ### Change

@@ -1,4 +1,4 @@
-.PHONY: install shell run run-macos check docker-build docker-run make-smoke-test
+.PHONY: install shell run run-macos run-local-observability check docker-build docker-run make-smoke-test
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -10,6 +10,9 @@ shell:
 
 run:
 	poetry run python main.py
+
+run-local-observability:
+	SIMBAY_METRICS_ENABLED=1 SIMBAY_METRICS_PORT=8000 poetry run python main.py
 
 run-macos:
 	MPLBACKEND=Agg "$(PROJECT_ROOT)/.venv/bin/python" "$(PROJECT_ROOT)/.venv/bin/mjpython" main.py

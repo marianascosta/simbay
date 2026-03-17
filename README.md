@@ -34,3 +34,14 @@ make run-macos
 environment's `mjpython` wrapper through its matching Python interpreter. This
 avoids stale shebang paths after moving or copying the repository, and it does
 not depend on `poetry` or `pyenv` resolving the active environment correctly.
+
+## Observability
+
+For a local run with the app metrics endpoint enabled:
+
+```sh
+make run-local-observability
+```
+
+This runs `main.py` with a local Prometheus-compatible `/metrics` endpoint on
+`http://localhost:8000/metrics`. See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the host-local Prometheus/Grafana setup.

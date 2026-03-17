@@ -27,11 +27,27 @@ from src.utils import initialize_mujoco_env
 from src.utils.logging_utils import format_bytes
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.logging_utils import setup_logging
+from src.utils.metrics import create_metrics_from_env
+from src.utils.metrics import shutdown_metrics
 
 # ==========================================
 # 1. SETUP
 # ==========================================
 run_wall_start = time.perf_counter()
+metrics = create_metrics_from_env()
+metrics.register_stages(
+    [
+        "setup",
+        "ik_planning",
+        "phase_1_approach",
+        "phase_2_descend",
+        "phase_3_grip",
+        "phase_4_lift",
+        "plot_generation",
+    ]
+)
+metrics.start()
+setup_stage = metrics.start_stage("setup")
 logger = setup_logging()
 headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
 use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
@@ -68,8 +84,16 @@ else:
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
+metrics.set_particle_count(num_particles)
 
 if use_mjx:
+    metrics.set_backend("mjx", str(env_memory_profile["execution_device"]))
+    metrics.update_mjx_memory(
+        "setup",
+        int(env_memory_profile["bytes_in_use"]),
+        int(env_memory_profile["peak_bytes_in_use"]),
+        int(env_memory_profile["bytes_limit"]),
+    )
     logger.info(
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
@@ -136,10 +160,13 @@ else:
         env_memory_profile["native_bytes_total"],
         format_bytes(env_memory_profile["native_bytes_total"]),
     )
+    metrics.set_backend("mujoco", "cpu")
+metrics.finish_stage(setup_stage)
 
 # ==========================================
 # 2. TRAJECTORY PLANNING
 # ==========================================
+planning_stage = metrics.start_stage("ik_planning")
 target_quat = np.array([0.0, 1.0, 0.0, 0.0])
 
 pre_grasp_pos = obj_pos + np.array([0.0, 0.0, 0.15])
@@ -157,12 +184,14 @@ q_pre_grasp = np.append(pre_grasp_q7, OPEN)
 q_grasp_open = np.append(grasp_q7, OPEN)
 q_grasp_closed = np.append(grasp_q7, CLOSED)
 q_lift_closed = np.append(lift_q7, CLOSED)
+metrics.finish_stage(planning_stage)
 
 # ==========================================
 # 3. EXECUTION
 # ==========================================
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
+approach_stage = metrics.start_stage("phase_1_approach")
 traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
 logger.info("phase_start name=approach steps=%d", len(traj1))
 for i, qpos in enumerate(traj1):
@@ -176,9 +205,19 @@ if use_mjx:
 else:
     for qpos in traj1:
         particle_filter.predict(qpos)
+if use_mjx:
+    env_memory_profile = env.memory_profile()
+    metrics.update_mjx_memory(
+        "phase_1_approach",
+        int(env_memory_profile["bytes_in_use"]),
+        int(env_memory_profile["peak_bytes_in_use"]),
+        int(env_memory_profile["bytes_limit"]),
+    )
+metrics.finish_stage(approach_stage)
 
 
 # Phase 2: Descend vertically to the object (No PF updates)
+descend_stage = metrics.start_stage("phase_2_descend")
 traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
 logger.info("phase_start name=descend steps=%d", len(traj2))
 for i, qpos in enumerate(traj2):
@@ -192,9 +231,19 @@ if use_mjx:
 else:
     for qpos in traj2:
         particle_filter.predict(qpos)
+if use_mjx:
+    env_memory_profile = env.memory_profile()
+    metrics.update_mjx_memory(
+        "phase_2_descend",
+        int(env_memory_profile["bytes_in_use"]),
+        int(env_memory_profile["peak_bytes_in_use"]),
+        int(env_memory_profile["bytes_limit"]),
+    )
+metrics.finish_stage(descend_stage)
 
 
 # Phase 3: Close the Gripper (No PF updates)
+grip_stage = metrics.start_stage("phase_3_grip")
 traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
 logger.info("phase_start name=close_gripper steps=%d", len(traj3))
 for i, qpos in enumerate(traj3):
@@ -208,9 +257,19 @@ if use_mjx:
 else:
     for qpos in traj3:
         particle_filter.predict(qpos)
+if use_mjx:
+    env_memory_profile = env.memory_profile()
+    metrics.update_mjx_memory(
+        "phase_3_grip",
+        int(env_memory_profile["bytes_in_use"]),
+        int(env_memory_profile["peak_bytes_in_use"]),
+        int(env_memory_profile["bytes_limit"]),
+    )
+metrics.finish_stage(grip_stage)
 
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
+lft_stage = metrics.start_stage("phase_4_lift")
 logger.info("phase_start name=lift_and_estimate")
 traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0) 
 
@@ -248,7 +307,8 @@ for step, qpos in enumerate(traj4):
         history_particles.append(particle_filter.particles_host().copy())
     else:
         history_particles.append(particle_filter.particles.copy())
-    history_estimates.append(particle_filter.estimate())
+    current_estimate = float(particle_filter.estimate())
+    history_estimates.append(current_estimate)
 
     step_wall_duration = time.perf_counter() - step_wall_start
     step_cpu_duration = time.process_time() - step_cpu_start
@@ -263,11 +323,24 @@ for step, qpos in enumerate(traj4):
         (cpu_equivalent_cores_used / cpu_cores) * 100.0 if cpu_cores > 0 else 0.0
     )
     step_rate_hz = 1.0 / step_wall_duration if step_wall_duration > 0 else 0.0
+    metrics.update_filter_state(
+        ess=particle_filter.effective_sample_size(),
+        estimate=current_estimate,
+        wall_seconds=step_wall_duration,
+        cpu_seconds=step_cpu_duration,
+        cpu_equivalent_cores=cpu_equivalent_cores_used,
+    )
     should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0
     if should_log_step:
         rss_bytes = get_process_memory_bytes()
         if use_mjx:
             env_memory_profile = env.memory_profile()
+            metrics.update_mjx_memory(
+                "phase_4_lift",
+                int(env_memory_profile["bytes_in_use"]),
+                int(env_memory_profile["peak_bytes_in_use"]),
+                int(env_memory_profile["bytes_limit"]),
+            )
             logger.info(
                 "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
                 "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
@@ -285,7 +358,7 @@ for step, qpos in enumerate(traj4):
                 cpu_percent_single_core,
                 cpu_percent_total_machine,
                 particle_filter.effective_sample_size(),
-                float(particle_filter.estimate()),
+                current_estimate,
                 rss_bytes,
                 format_bytes(rss_bytes),
                 env_memory_profile["execution_platform"],
@@ -310,12 +383,13 @@ for step, qpos in enumerate(traj4):
                 cpu_percent_single_core,
                 cpu_percent_total_machine,
                 particle_filter.effective_sample_size(),
-                float(particle_filter.estimate()),
+                current_estimate,
                 rss_bytes,
                 format_bytes(rss_bytes),
                 env_memory_profile["native_bytes_total"],
                 format_bytes(env_memory_profile["native_bytes_total"]),
             )
+metrics.finish_stage(lft_stage)
 
 avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
 avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
@@ -371,6 +445,10 @@ if not headless:
     input()
 final_prediction = float(particle_filter.estimate())
 time_to_prediction_seconds = time.perf_counter() - run_wall_start
+metrics.set_prediction_ready(
+    total_wall_seconds=time_to_prediction_seconds,
+    final_error_pct=abs(true_mass - final_prediction) * 100,
+)
 logger.info(
     "prediction_ready total_wall_s=%.3f final_mass_prediction_kg=%.4f",
     time_to_prediction_seconds,
@@ -384,6 +462,7 @@ logger.info("final_error_pct=%.2f", abs(true_mass - final_prediction) * 100)
 # ==========================================
 # 4. GRAPH GENERATION
 # ==========================================
+plot_stage = metrics.start_stage("plot_generation")
 logger.info("plot_generation_start")
 
 
@@ -414,8 +493,11 @@ output_path = output_dir / "particle_filter_evolution.png"
 plt.savefig(output_path, dpi=150, bbox_inches="tight")
 plt.close()
 logger.info("plot_saved path=%s", output_path)
+metrics.finish_stage(plot_stage)
 
 if use_mjx:
     jax.clear_caches()
     gc.collect()
     logger.info("jax_cleanup_complete")
+
+shutdown_metrics(metrics)
