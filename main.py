@@ -1,6 +1,7 @@
 import gc
 import os
 from pathlib import Path
+import signal
 import time
 
 # Apply JAX/XLA settings before importing modules that may load JAX.
@@ -29,6 +30,31 @@ from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.logging_utils import setup_logging
 from src.utils.metrics import create_metrics_from_env
 from src.utils.metrics import shutdown_metrics
+
+
+shutdown_requested = False
+shutdown_signal_name: str | None = None
+logger = None
+
+
+def _handle_shutdown_signal(signum, _frame) -> None:
+    global shutdown_requested
+    global shutdown_signal_name
+
+    shutdown_requested = True
+    shutdown_signal_name = signal.Signals(signum).name
+    message = (
+        f"shutdown_requested signal={shutdown_signal_name} "
+        "mode=graceful action=finish_current_run"
+    )
+    if logger is not None:
+        logger.info(message)
+    else:
+        print(message)
+
+
+signal.signal(signal.SIGINT, _handle_shutdown_signal)
+signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
 # ==========================================
 # 1. SETUP
@@ -441,8 +467,10 @@ else:
     )
 
 logger.info("sequence_complete awaiting_user_input=%s", not headless)
-if not headless:
+if not headless and not shutdown_requested:
     input()
+elif not headless and shutdown_requested:
+    logger.info("sequence_complete skipping_user_input signal=%s", shutdown_signal_name)
 final_prediction = float(particle_filter.estimate())
 time_to_prediction_seconds = time.perf_counter() - run_wall_start
 metrics.set_prediction_ready(
@@ -500,4 +528,9 @@ if use_mjx:
     gc.collect()
     logger.info("jax_cleanup_complete")
 
+logger.info(
+    "goodbye shutdown_requested=%s signal=%s",
+    shutdown_requested,
+    shutdown_signal_name or "none",
+)
 shutdown_metrics(metrics)

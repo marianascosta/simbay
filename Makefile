@@ -1,4 +1,4 @@
-.PHONY: install shell run run-macos run-local-observability check docker-build docker-run make-smoke-test
+.PHONY: install shell run run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -29,6 +29,12 @@ docker-build:
 docker-run:
 	docker compose up --build
 	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"
+
+docker-simbay-up:
+	docker compose up --build -d simbay
+
+docker-simbay-down:
+	docker compose stop simbay
 
 bootstrap:
 	pip install poetry
