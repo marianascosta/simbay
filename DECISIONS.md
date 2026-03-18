@@ -3,6 +3,20 @@
 ## 2026-03-18
 
 ### Change
+Extended the Compose-managed observability stack with Loki and Promtail via [monitoring/loki/config.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/loki/config.yml), [monitoring/promtail/config.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/promtail/config.yml), and updated [docker-compose.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/docker-compose.yml) plus Grafana datasource provisioning in [monitoring/grafana/provisioning/datasources/prometheus.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/grafana/provisioning/datasources/prometheus.yml).
+
+### Reason
+Prometheus only stores numeric time-series metrics, while debugging simulation flow and failed runs also requires searchable container logs. Adding Loki and Promtail keeps logs inside the same Compose workflow and makes Grafana a single entry point for both metrics and logs.
+
+### Tradeoffs
+This adds two more services and requires Promtail to read Docker container logs and the Docker socket from the host. The setup is still simpler than a separate external log stack, but it increases the local monitoring footprint and depends on the host exposing standard Docker log paths.
+
+### Future Considerations
+If log usage grows, add a dedicated Grafana logs dashboard or panel links from the metrics dashboard rather than overloading the existing metrics dashboard with raw log panels. If Docker log path compatibility becomes an issue on some hosts, consider switching Promtail discovery to a host-specific override file instead of making the base stack more conditional.
+
+## 2026-03-18
+
+### Change
 Reworked local observability to run as a Compose-managed stack with checked-in Prometheus and Grafana provisioning via [docker-compose.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/docker-compose.yml), [monitoring/prometheus/prometheus.compose.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/prometheus/prometheus.compose.yml), and [monitoring/grafana/provisioning/dashboards/simbay.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/grafana/provisioning/dashboards/simbay.yml). Updated [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) to use a one-command `docker compose` workflow.
 
 ### Reason

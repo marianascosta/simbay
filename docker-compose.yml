@@ -47,6 +47,7 @@ services:
     container_name: simbay-grafana
     depends_on:
       - prometheus
+      - loki
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
@@ -60,12 +61,32 @@ services:
   node-exporter:
     image: quay.io/prometheus/node-exporter:latest
     container_name: simbay-node-exporter
-    command:
-      - --path.rootfs=/host
-    volumes:
-      - /:/host:ro,rslave
     ports:
       - "9100:9100"
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: simbay-loki
+    command:
+      - -config.file=/etc/loki/config.yml
+    volumes:
+      - ./monitoring/loki/config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: simbay-promtail
+    depends_on:
+      - loki
+    command:
+      - -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./monitoring/promtail/config.yml:/etc/promtail/config.yml:ro
+      - promtail-data:/tmp/promtail
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   dcgm-exporter:
     image: nvcr.io/nvidia/k8s/dcgm-exporter:latest
@@ -79,3 +100,5 @@ services:
 volumes:
   prometheus-data:
   grafana-data:
+  loki-data:
+  promtail-data:
