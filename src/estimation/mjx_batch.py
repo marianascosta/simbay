@@ -32,32 +32,100 @@ class MJXBatch:
             body_mass=self._model.body_mass.at[:, self._body_id].set(jnp.asarray(masses))
         )
         self._data = jax.tree.map(lambda x: jnp.stack([x] * self._size), mjx_data)
-        self._step = jax.jit(jax.vmap(mjx.step, in_axes=(0, 0)))
         self._ctrl_dim = int(self._data.ctrl.shape[-1])
+        self._step = jax.jit(self._build_step_fn())
+        self._rollout = jax.jit(self._build_rollout_fn())
+        self._resample = jax.jit(self._build_resample_fn())
 
     @property
     def ctrl_dim(self) -> int:
         return self._ctrl_dim
 
+    @property
+    def device(self):
+        return self._device
+
+    def _build_step_fn(self):
+        body_id = self._body_id
+        size = self._size
+        ctrl_dim = self._ctrl_dim
+        step_fn = jax.vmap(mjx.step, in_axes=(0, 0))
+
+        def apply(model, data, control_input, masses):
+            next_model = model.replace(
+                body_mass=model.body_mass.at[:, body_id].set(jnp.asarray(masses))
+            )
+            control = jnp.broadcast_to(jnp.asarray(control_input), (size, ctrl_dim))
+            next_data = data.replace(ctrl=control)
+            next_data = step_fn(next_model, next_data)
+            return next_model, next_data
+
+        return apply
+
+    def _build_rollout_fn(self):
+        step_fn = self._build_step_fn()
+
+        def rollout(model, data, control_inputs, mass_trajectory):
+            def scan_step(carry, inputs):
+                scan_model, scan_data = carry
+                control_input, masses = inputs
+                next_model, next_data = step_fn(scan_model, scan_data, control_input, masses)
+                return (next_model, next_data), ()
+
+            (final_model, final_data), _ = jax.lax.scan(
+                scan_step,
+                (model, data),
+                (control_inputs, mass_trajectory),
+            )
+            return final_model, final_data
+
+        return rollout
+
+    def _build_resample_fn(self):
+        def resample(data, body_mass, indexes):
+            return (
+                jax.tree.map(lambda x: x[indexes], data),
+                body_mass[indexes],
+            )
+
+        return resample
+
     def warmup(self) -> None:
-        self._data = self._step(self._model, self._data)
+        self._model, self._data = self._step(
+            self._model,
+            self._data,
+            jnp.zeros((self._ctrl_dim,)),
+            self._model.body_mass[:, self._body_id],
+        )
         jax.block_until_ready(self._data)
 
     def step(self, control_input, masses) -> None:
-        control = jnp.broadcast_to(jnp.asarray(control_input), (self._size, self._ctrl_dim))
-        self._model = self._model.replace(
-            body_mass=self._model.body_mass.at[:, self._body_id].set(jnp.asarray(masses))
+        self._model, self._data = self._step(
+            self._model,
+            self._data,
+            control_input,
+            masses,
         )
-        self._data = self._data.replace(ctrl=control)
-        self._data = self._step(self._model, self._data)
+
+    def rollout(self, control_inputs, mass_trajectory) -> None:
+        self._model, self._data = self._rollout(
+            self._model,
+            self._data,
+            jnp.asarray(control_inputs),
+            jnp.asarray(mass_trajectory),
+        )
 
     def sensor_slice(self, start: int, width: int):
         return self._data.sensordata[:, start : start + width]
 
     def resample(self, indexes) -> None:
         jax_indexes = jnp.asarray(indexes)
-        self._data = jax.tree.map(lambda x: x[jax_indexes], self._data)
-        self._model = self._model.replace(body_mass=self._model.body_mass[jax_indexes])
+        self._data, body_mass = self._resample(
+            self._data,
+            self._model.body_mass,
+            jax_indexes,
+        )
+        self._model = self._model.replace(body_mass=body_mass)
 
     def memory_profile(self) -> dict[str, int | str | bool]:
         """Report the actual MJX execution device and its memory stats."""

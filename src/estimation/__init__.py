@@ -4,6 +4,7 @@ and model interfaces for robot tracking.
 """
 
 from .base import ParticleEnvironment
+from .mjx_filter import MJXParticleFilter
 from .mjx_particle_filter import FrankaMJXEnv
 from .mujoco_particle_filter import FrankaMuJoCoEnv
 from .particle_filter import ParticleFilter
@@ -11,6 +12,7 @@ from .particle_filter import ParticleFilter
 # List of publicly accessible classes when using 'from folder import *'
 __all__ = [
     "ParticleEnvironment",
+    "MJXParticleFilter",
     "FrankaMJXEnv",
     "FrankaMuJoCoEnv",
     "ParticleFilter",

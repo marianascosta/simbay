@@ -34,3 +34,16 @@ make run-macos
 environment's `mjpython` wrapper through its matching Python interpreter. This
 avoids stale shebang paths after moving or copying the repository, and it does
 not depend on `poetry` or `pyenv` resolving the active environment correctly.
+
+## Observability
+
+For the full local monitoring stack:
+
+```sh
+docker compose --profile gpu up --build
+```
+
+This starts the app metrics endpoint, Prometheus, Grafana, and `node-exporter`
+in one workflow. Omit `--profile gpu` if you do not want `dcgm-exporter`.
+
+See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the Compose-based setup and validation queries.

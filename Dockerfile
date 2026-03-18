@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -14,12 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install poetry
 
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --no-interaction --no-ansi
 
 COPY assets ./assets
 COPY src ./src
 COPY main.py ./
-COPY README.md ./
 
 CMD ["python", "main.py"]
