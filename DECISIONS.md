@@ -59,7 +59,7 @@ If the dashboard stabilizes as the team default, add one or two focused variants
 ## 2026-03-14
 
 ### Change
-Added a separate JAX-backed [src/estimation/mjx_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_filter.py) and extended the MJX backend to support device-resident particle propagation plus compiled predict-only rollouts. Updated [main.py](/Users/marianacosta/Documents/fcul/simbay/simbay/main.py) and the MJX notebooks to use that fast path only when the MJX backend is selected.
+Added a separate JAX-backed [src/estimation/mjx_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_filter.py) and extended the MJX backend to support device-resident particle propagation plus compiled predict-only rollouts. Updated [main.py](/Users/marianacosta/Documents/fcul/simbay/simbay/main.py) so that fast path is only used when the MJX backend is selected.
 
 ### Reason
 The previous MJX path still stored particle weights in NumPy, converted particles and likelihoods back to host arrays every step, and drove all phases from Python one timestep at a time. That made GPU execution synchronization-heavy and erased most of the benefit of batched MJX stepping.
@@ -79,7 +79,7 @@ Introduced an `MJXBatch` wrapper in [src/estimation/mjx_batch.py](/Users/mariana
 The previous `FrankaMJXEnv` mixed particle-environment logic with low-level batched `mjx` model/data orchestration. Splitting the backend wrapper out keeps the sequential MuJoCo path untouched, reduces divergence between the two environments, and makes the `mjx` path follow a clearer "wrap once, step many worlds" structure inspired by the tutorial reference.
 
 ### Tradeoffs
-This adds one new module and an extra handoff between the environment and the backend batch object. It does not implement `mujoco_warp`; the project still uses `mujoco-mjx`, so the notebook was treated as a batching pattern reference rather than a literal dependency target.
+This adds one new module and an extra handoff between the environment and the backend batch object. It does not implement `mujoco_warp`; the project still uses `mujoco-mjx`, so the batching pattern was treated as a reference rather than a literal dependency target.
 
 ### Future Considerations
 If the project later adopts `mujoco_warp`, add it as a separate opt-in backend instead of folding it into the `mjx` wrapper. If more particle state parameters become dynamic beyond body mass, extend `MJXBatch` in place rather than pushing backend-specific updates back into the environment.
