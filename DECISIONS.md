@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-03-18
+
+### Change
+Reworked local observability to run as a Compose-managed stack with checked-in Prometheus and Grafana provisioning via [docker-compose.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/docker-compose.yml), [monitoring/prometheus/prometheus.compose.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/prometheus/prometheus.compose.yml), and [monitoring/grafana/provisioning/dashboards/simbay.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/grafana/provisioning/dashboards/simbay.yml). Updated [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) to use a one-command `docker compose` workflow.
+
+### Reason
+The previous host-local setup required manual service startup, OS-specific package installation, and manual Grafana configuration. A Compose-first workflow is simpler to run, easier to reproduce across machines, and better aligned with the project's existing Docker-based local development path.
+
+### Tradeoffs
+This makes the local monitoring path more container-centric and introduces an optional GPU-specific Compose profile for `dcgm-exporter`. Host-native installs remain possible, but the documented happy path now depends on Docker and Compose rather than directly installed binaries.
+
+### Future Considerations
+If the Compose stack becomes the default team workflow, consider adding healthchecks and a small CPU-only override file for machines without GPU container support instead of expanding the base file with more conditionals.
+
 ## 2026-03-16
 
 ### Change
@@ -13,6 +27,20 @@ This adds a small amount of app-level instrumentation and a lightweight custom m
 
 ### Future Considerations
 If the observability stack becomes a core workflow, add a provisioned Grafana dashboard next rather than expanding the app metrics set aggressively. If logs also need to become queryable in Grafana, add Loki as a separate step instead of folding log shipping into the metrics helper.
+
+## 2026-03-17
+
+### Change
+Added a reusable local-development Grafana dashboard at [monitoring/grafana/dashboards/simbay-overview.json](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/grafana/dashboards/simbay-overview.json) and aligned the local Prometheus datasource reference in [monitoring/grafana/provisioning/datasources/prometheus.yml](/Users/marianacosta/Documents/fcul/simbay/simbay/monitoring/grafana/provisioning/datasources/prometheus.yml) to `localhost:9090`.
+
+### Reason
+The metrics endpoint is more useful when developers can immediately correlate prediction quality, phase timing, RSS, MJX allocator memory, and host/GPU resource pressure in a single dashboard. A checked-in dashboard JSON keeps the local observability workflow repeatable without forcing a Docker-specific deployment path.
+
+### Tradeoffs
+The dashboard includes panels for `node-exporter` and `dcgm-exporter`, so those graphs will be empty until the corresponding local exporters are running. The dashboard is imported manually rather than auto-provisioned because local Grafana installations do not share a stable filesystem layout.
+
+### Future Considerations
+If the dashboard stabilizes as the team default, add one or two focused variants for GPU-heavy benchmarking and CPU-reference debugging instead of expanding a single dashboard indefinitely.
 
 ## 2026-03-14
 

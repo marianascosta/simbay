@@ -37,11 +37,13 @@ not depend on `poetry` or `pyenv` resolving the active environment correctly.
 
 ## Observability
 
-For a local run with the app metrics endpoint enabled:
+For the full local monitoring stack:
 
 ```sh
-make run-local-observability
+docker compose --profile gpu up --build
 ```
 
-This runs `main.py` with a local Prometheus-compatible `/metrics` endpoint on
-`http://localhost:8000/metrics`. See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the host-local Prometheus/Grafana setup.
+This starts the app metrics endpoint, Prometheus, Grafana, and `node-exporter`
+in one workflow. Omit `--profile gpu` if you do not want `dcgm-exporter`.
+
+See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the Compose-based setup and validation queries.
