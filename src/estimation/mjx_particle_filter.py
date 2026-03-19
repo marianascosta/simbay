@@ -1,5 +1,6 @@
 import logging
 import os
+from collections.abc import Iterable
 
 import jax
 import jax.numpy as jnp
@@ -176,3 +177,16 @@ class FrankaMJXEnv(ParticleEnvironment):
             "peak_bytes_in_use": 0,
             "bytes_limit": 0,
         }
+
+    def warmup_runtime(self, rollout_lengths: Iterable[int]) -> list[int]:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before warmup.")
+        normalized_lengths = sorted({int(length) for length in rollout_lengths if int(length) > 0})
+        for length in normalized_lengths:
+            self._batch.warmup_rollout(length)
+        self.logger.info(
+            "mjx_runtime_rollout_warmup_done particles=%d rollout_lengths=%s",
+            self._num_particles,
+            normalized_lengths,
+        )
+        return normalized_lengths

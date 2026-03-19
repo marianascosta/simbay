@@ -276,6 +276,45 @@ q_pre_grasp = np.append(pre_grasp_q7, OPEN)
 q_grasp_open = np.append(grasp_q7, OPEN)
 q_grasp_closed = np.append(grasp_q7, CLOSED)
 q_lift_closed = np.append(lift_q7, CLOSED)
+traj1_profile = describe_linear_trajectory(
+    q_home,
+    q_pre_grasp,
+    max_velocity=1.0,
+    control_dt=control_dt,
+)
+traj2_profile = describe_linear_trajectory(
+    q_pre_grasp,
+    q_grasp_open,
+    max_velocity=0.5,
+    control_dt=control_dt,
+)
+traj3_profile = describe_linear_trajectory(
+    q_grasp_closed,
+    q_grasp_closed,
+    max_velocity=500,
+    control_dt=control_dt,
+    settle_time=0.5,
+)
+traj4_profile = describe_linear_trajectory(
+    q_grasp_closed,
+    q_lift_closed,
+    max_velocity=0.5,
+    control_dt=control_dt,
+    settle_time=1.0,
+)
+if use_mjx:
+    warmed_rollout_lengths = particle_filter.warmup_runtime(
+        [
+            traj1_profile.total_steps,
+            traj2_profile.total_steps,
+            traj3_profile.total_steps,
+        ]
+    )
+    logger.info(
+        "mjx_runtime_warmup_summary particles=%d rollout_lengths=%s phase4_step_warmup=1",
+        particle_filter.N,
+        warmed_rollout_lengths,
+    )
 metrics.finish_stage(planning_stage)
 
 # ==========================================
@@ -284,12 +323,6 @@ metrics.finish_stage(planning_stage)
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
-traj1_profile = describe_linear_trajectory(
-    q_home,
-    q_pre_grasp,
-    max_velocity=1.0,
-    control_dt=control_dt,
-)
 traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, control_dt=control_dt)
 _emit_trajectory_profile("phase_1_approach", "approach", traj1_profile)
 logger.info("phase_start name=approach steps=%d", len(traj1))
@@ -323,12 +356,6 @@ metrics.finish_stage(approach_stage)
 
 # Phase 2: Descend vertically to the object (No PF updates)
 descend_stage = metrics.start_stage("phase_2_descend")
-traj2_profile = describe_linear_trajectory(
-    q_pre_grasp,
-    q_grasp_open,
-    max_velocity=0.5,
-    control_dt=control_dt,
-)
 traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, control_dt=control_dt)
 _emit_trajectory_profile("phase_2_descend", "descend", traj2_profile)
 logger.info("phase_start name=descend steps=%d", len(traj2))
@@ -362,13 +389,6 @@ metrics.finish_stage(descend_stage)
 
 # Phase 3: Close the Gripper (No PF updates)
 grip_stage = metrics.start_stage("phase_3_grip")
-traj3_profile = describe_linear_trajectory(
-    q_grasp_closed,
-    q_grasp_closed,
-    max_velocity=500,
-    control_dt=control_dt,
-    settle_time=0.5,
-)
 traj3 = plan_linear_trajectory(
     q_grasp_closed,
     q_grasp_closed,
@@ -409,13 +429,6 @@ metrics.finish_stage(grip_stage)
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
 lft_stage = metrics.start_stage("phase_4_lift")
 logger.info("phase_start name=lift_and_estimate")
-traj4_profile = describe_linear_trajectory(
-    q_grasp_closed,
-    q_lift_closed,
-    max_velocity=0.5,
-    control_dt=control_dt,
-    settle_time=1.0,
-)
 traj4 = plan_linear_trajectory(
     q_grasp_closed,
     q_lift_closed,
