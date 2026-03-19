@@ -21,6 +21,7 @@ from src.estimation import FrankaMuJoCoEnv
 from src.estimation import MJXParticleFilter
 from src.estimation import ParticleFilter
 from src.planning import FrankaSmartSolver
+from src.planning import describe_linear_trajectory
 from src.planning import plan_linear_trajectory
 from src.utils import DEFAULT_OBJECT_PROPS
 from src.utils import FRANKA_HOME_QPOS
@@ -65,6 +66,39 @@ def _log_substage_duration(
         substage,
         steps,
         duration_seconds * 1000.0,
+    )
+
+
+def _emit_trajectory_profile(
+    phase: str,
+    profile_name: str,
+    profile,
+) -> None:
+    metrics.update_trajectory_profile(
+        phase=phase,
+        total_steps=profile.total_steps,
+        move_steps=profile.move_steps,
+        settle_steps=profile.settle_steps,
+        dt_seconds=profile.control_dt_seconds,
+        settle_time_seconds=profile.settle_time_seconds,
+        control_duration_seconds=profile.control_duration_seconds,
+        max_joint_delta=profile.max_joint_delta,
+        max_velocity=profile.max_velocity,
+    )
+    logger.info(
+        "trajectory_profile phase=%s name=%s total_steps=%d move_steps=%d "
+        "settle_steps=%d control_dt_seconds=%.6f settle_time_seconds=%.6f "
+        "control_duration_seconds=%.6f max_joint_delta=%.6f max_velocity=%.6f",
+        phase,
+        profile_name,
+        profile.total_steps,
+        profile.move_steps,
+        profile.settle_steps,
+        profile.control_dt_seconds,
+        profile.settle_time_seconds,
+        profile.control_duration_seconds,
+        profile.max_joint_delta,
+        profile.max_velocity,
     )
 
 
@@ -120,7 +154,10 @@ viewer = None
 if not headless:
     viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
 real_robot.viewer = viewer
-dt = real_robot.dt
+physics_dt = real_robot.dt
+control_dt = float(os.getenv("SIMBAY_CONTROL_DT", str(max(physics_dt, 0.02))))
+if control_dt <= 0:
+    raise ValueError("SIMBAY_CONTROL_DT must be greater than zero")
 
 obj_pos = DEFAULT_OBJECT_PROPS['pos']
 true_mass = DEFAULT_OBJECT_PROPS['mass']
@@ -148,7 +185,7 @@ if use_mjx:
         int(env_memory_profile["bytes_limit"]),
     )
     logger.info(
-        "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+        "simulation_setup physics_dt=%.6f control_dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
@@ -158,7 +195,8 @@ if use_mjx:
         "jax_default_platform=%s jax_default_device=%s "
         "mjx_device_fallback_applied=%s "
         "mjx_bytes_in_use=%d mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
-        dt,
+        physics_dt,
+        control_dt,
         true_mass,
         num_particles,
         cpu_cores,
@@ -180,7 +218,7 @@ if use_mjx:
     )
 else:
     logger.info(
-        "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
+        "simulation_setup physics_dt=%.6f control_dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mujoco "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
@@ -191,7 +229,8 @@ else:
         "mujoco_data_arena_per_particle_bytes=%d mujoco_data_arena_per_particle=%s "
         "mujoco_native_memory_per_particle_bytes=%d mujoco_native_memory_per_particle=%s "
         "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
-        dt,
+        physics_dt,
+        control_dt,
         true_mass,
         num_particles,
         cpu_cores,
@@ -245,7 +284,14 @@ metrics.finish_stage(planning_stage)
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
-traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
+traj1_profile = describe_linear_trajectory(
+    q_home,
+    q_pre_grasp,
+    max_velocity=1.0,
+    control_dt=control_dt,
+)
+traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, control_dt=control_dt)
+_emit_trajectory_profile("phase_1_approach", "approach", traj1_profile)
 logger.info("phase_start name=approach steps=%d", len(traj1))
 robot_execute_stage = metrics.start_substage("phase_1_approach", "robot_execute")
 for i, qpos in enumerate(traj1):
@@ -277,7 +323,14 @@ metrics.finish_stage(approach_stage)
 
 # Phase 2: Descend vertically to the object (No PF updates)
 descend_stage = metrics.start_stage("phase_2_descend")
-traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
+traj2_profile = describe_linear_trajectory(
+    q_pre_grasp,
+    q_grasp_open,
+    max_velocity=0.5,
+    control_dt=control_dt,
+)
+traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, control_dt=control_dt)
+_emit_trajectory_profile("phase_2_descend", "descend", traj2_profile)
 logger.info("phase_start name=descend steps=%d", len(traj2))
 robot_execute_stage = metrics.start_substage("phase_2_descend", "robot_execute")
 for i, qpos in enumerate(traj2):
@@ -309,7 +362,21 @@ metrics.finish_stage(descend_stage)
 
 # Phase 3: Close the Gripper (No PF updates)
 grip_stage = metrics.start_stage("phase_3_grip")
-traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
+traj3_profile = describe_linear_trajectory(
+    q_grasp_closed,
+    q_grasp_closed,
+    max_velocity=500,
+    control_dt=control_dt,
+    settle_time=0.5,
+)
+traj3 = plan_linear_trajectory(
+    q_grasp_closed,
+    q_grasp_closed,
+    max_velocity=500,
+    control_dt=control_dt,
+    settle_time=0.5,
+) # we close directly and only use the settle_time
+_emit_trajectory_profile("phase_3_grip", "close_gripper", traj3_profile)
 logger.info("phase_start name=close_gripper steps=%d", len(traj3))
 robot_execute_stage = metrics.start_substage("phase_3_grip", "robot_execute")
 for i, qpos in enumerate(traj3):
@@ -342,7 +409,21 @@ metrics.finish_stage(grip_stage)
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
 lft_stage = metrics.start_stage("phase_4_lift")
 logger.info("phase_start name=lift_and_estimate")
-traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0) 
+traj4_profile = describe_linear_trajectory(
+    q_grasp_closed,
+    q_lift_closed,
+    max_velocity=0.5,
+    control_dt=control_dt,
+    settle_time=1.0,
+)
+traj4 = plan_linear_trajectory(
+    q_grasp_closed,
+    q_lift_closed,
+    max_velocity=0.5,
+    control_dt=control_dt,
+    settle_time=1.0,
+) 
+_emit_trajectory_profile("phase_4_lift", "lift_and_estimate", traj4_profile)
 
 # <--- Initialize lists to hold the historical data for the graph --->
 history_particles = []
