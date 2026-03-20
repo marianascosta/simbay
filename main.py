@@ -53,6 +53,21 @@ def _handle_shutdown_signal(signum, _frame) -> None:
         print(message)
 
 
+def _log_substage_duration(
+    phase: str,
+    substage: str,
+    duration_seconds: float,
+    steps: int,
+) -> None:
+    logger.info(
+        "phase_substage_duration phase=%s substage=%s steps=%d duration_ms=%.3f",
+        phase,
+        substage,
+        steps,
+        duration_seconds * 1000.0,
+    )
+
+
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
 signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -70,6 +85,18 @@ metrics.register_stages(
         "phase_3_grip",
         "phase_4_lift",
         "plot_generation",
+    ]
+)
+metrics.register_substages(
+    [
+        ("phase_1_approach", "robot_execute"),
+        ("phase_1_approach", "pf_replay"),
+        ("phase_2_descend", "robot_execute"),
+        ("phase_2_descend", "pf_replay"),
+        ("phase_3_grip", "robot_execute"),
+        ("phase_3_grip", "pf_replay"),
+        ("phase_4_lift", "robot_execute"),
+        ("phase_4_lift", "pf_update"),
     ]
 )
 metrics.start()
@@ -210,6 +237,35 @@ q_pre_grasp = np.append(pre_grasp_q7, OPEN)
 q_grasp_open = np.append(grasp_q7, OPEN)
 q_grasp_closed = np.append(grasp_q7, CLOSED)
 q_lift_closed = np.append(lift_q7, CLOSED)
+traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
+traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
+traj3 = plan_linear_trajectory(
+    q_grasp_closed,
+    q_grasp_closed,
+    max_velocity=500,
+    dt=dt,
+    settle_time=0.5,
+)
+traj4 = plan_linear_trajectory(
+    q_grasp_closed,
+    q_lift_closed,
+    max_velocity=0.5,
+    dt=dt,
+    settle_time=1.0,
+)
+if use_mjx:
+    warmed_rollout_lengths = particle_filter.warmup_runtime(
+        [
+            len(traj1),
+            len(traj2),
+            len(traj3),
+        ]
+    )
+    logger.info(
+        "mjx_runtime_warmup_summary particles=%d rollout_lengths=%s phase4_step_warmup=1",
+        particle_filter.N,
+        warmed_rollout_lengths,
+    )
 metrics.finish_stage(planning_stage)
 
 # ==========================================
@@ -218,19 +274,24 @@ metrics.finish_stage(planning_stage)
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
-traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
 logger.info("phase_start name=approach steps=%d", len(traj1))
+robot_execute_stage = metrics.start_substage("phase_1_approach", "robot_execute")
 for i, qpos in enumerate(traj1):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj1) - 1:
         logger.info("phase_progress name=approach step=%d/%d", i + 1, len(traj1))
+robot_execute_duration = metrics.finish_substage(robot_execute_stage)
+_log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
+pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
 if use_mjx:
     particle_filter.predict_trajectory(traj1)
 else:
     for qpos in traj1:
         particle_filter.predict(qpos)
+pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+_log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
 if use_mjx:
     env_memory_profile = env.memory_profile()
     metrics.update_mjx_memory(
@@ -244,19 +305,24 @@ metrics.finish_stage(approach_stage)
 
 # Phase 2: Descend vertically to the object (No PF updates)
 descend_stage = metrics.start_stage("phase_2_descend")
-traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
 logger.info("phase_start name=descend steps=%d", len(traj2))
+robot_execute_stage = metrics.start_substage("phase_2_descend", "robot_execute")
 for i, qpos in enumerate(traj2):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj2) - 1:
         logger.info("phase_progress name=descend step=%d/%d", i + 1, len(traj2))
+robot_execute_duration = metrics.finish_substage(robot_execute_stage)
+_log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
+pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
 if use_mjx:
     particle_filter.predict_trajectory(traj2)
 else:
     for qpos in traj2:
         particle_filter.predict(qpos)
+pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+_log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
 if use_mjx:
     env_memory_profile = env.memory_profile()
     metrics.update_mjx_memory(
@@ -270,19 +336,24 @@ metrics.finish_stage(descend_stage)
 
 # Phase 3: Close the Gripper (No PF updates)
 grip_stage = metrics.start_stage("phase_3_grip")
-traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5) # we close directly and only use the settle_time
 logger.info("phase_start name=close_gripper steps=%d", len(traj3))
+robot_execute_stage = metrics.start_substage("phase_3_grip", "robot_execute")
 for i, qpos in enumerate(traj3):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj3) - 1:
         logger.info("phase_progress name=close_gripper step=%d/%d", i + 1, len(traj3))
+robot_execute_duration = metrics.finish_substage(robot_execute_stage)
+_log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
+pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
 if use_mjx:
     particle_filter.predict_trajectory(traj3)
 else:
     for qpos in traj3:
         particle_filter.predict(qpos)
+pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+_log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
 if use_mjx:
     env_memory_profile = env.memory_profile()
     metrics.update_mjx_memory(
@@ -297,18 +368,21 @@ metrics.finish_stage(grip_stage)
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
 lft_stage = metrics.start_stage("phase_4_lift")
 logger.info("phase_start name=lift_and_estimate")
-traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0) 
 
 # <--- Initialize lists to hold the historical data for the graph --->
 history_particles = []
 history_estimates = []
 pf_wall_durations = []
 pf_cpu_durations = []
+phase_4_robot_execute_total = 0.0
+phase_4_pf_update_total = 0.0
 
 for step, qpos in enumerate(traj4):
+    robot_execute_start = time.perf_counter()
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
+    phase_4_robot_execute_total += time.perf_counter() - robot_execute_start
 
     step_wall_start = time.perf_counter()
     step_cpu_start = time.process_time()
@@ -338,6 +412,7 @@ for step, qpos in enumerate(traj4):
 
     step_wall_duration = time.perf_counter() - step_wall_start
     step_cpu_duration = time.process_time() - step_cpu_start
+    phase_4_pf_update_total += step_wall_duration
     pf_wall_durations.append(step_wall_duration)
     pf_cpu_durations.append(step_cpu_duration)
 
@@ -415,6 +490,10 @@ for step, qpos in enumerate(traj4):
                 env_memory_profile["native_bytes_total"],
                 format_bytes(env_memory_profile["native_bytes_total"]),
             )
+metrics.set_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total)
+metrics.set_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total)
+_log_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total, len(traj4))
+_log_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total, len(traj4))
 metrics.finish_stage(lft_stage)
 
 avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0

@@ -16,6 +16,13 @@ class StageToken:
     started_at: float
 
 
+@dataclass(frozen=True)
+class SubstageToken:
+    phase: str
+    substage: str
+    started_at: float
+
+
 class _MetricsStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -84,6 +91,7 @@ class SimbayMetrics:
         self._server: _ThreadedHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._known_stages: set[str] = set()
+        self._known_substages: set[tuple[str, str]] = set()
 
     def start(self) -> None:
         if not self.enabled or self._server is not None:
@@ -141,6 +149,24 @@ class SimbayMetrics:
                 {"stage": stage},
             )
 
+    def register_substages(self, substages: Iterable[tuple[str, str]]) -> None:
+        for phase, substage in substages:
+            key = (phase, substage)
+            self._known_substages.add(key)
+            labels = {"phase": phase, "substage": substage}
+            self._store.set_gauge(
+                "simbay_substage_active",
+                0.0,
+                "Whether a simulation substage is currently active.",
+                labels,
+            )
+            self._store.set_gauge(
+                "simbay_substage_duration_seconds",
+                0.0,
+                "Wall-clock duration for each simulation substage.",
+                labels,
+            )
+
     def set_backend(self, backend: str, device: str) -> None:
         self._store.set_gauge(
             "simbay_backend_info",
@@ -184,6 +210,40 @@ class SimbayMetrics:
             {"stage": token.stage},
         )
         self.update_process_rss(token.stage)
+        return duration
+
+    def start_substage(self, phase: str, substage: str) -> SubstageToken:
+        if (phase, substage) not in self._known_substages:
+            self.register_substages([(phase, substage)])
+        self._store.set_gauge(
+            "simbay_substage_active",
+            1.0,
+            "Whether a simulation substage is currently active.",
+            {"phase": phase, "substage": substage},
+        )
+        return SubstageToken(phase=phase, substage=substage, started_at=time.perf_counter())
+
+    def finish_substage(self, token: SubstageToken) -> float:
+        duration = time.perf_counter() - token.started_at
+        self.set_substage_duration(token.phase, token.substage, duration)
+        return duration
+
+    def set_substage_duration(self, phase: str, substage: str, duration: float) -> None:
+        if (phase, substage) not in self._known_substages:
+            self.register_substages([(phase, substage)])
+        labels = {"phase": phase, "substage": substage}
+        self._store.set_gauge(
+            "simbay_substage_active",
+            0.0,
+            "Whether a simulation substage is currently active.",
+            labels,
+        )
+        self._store.set_gauge(
+            "simbay_substage_duration_seconds",
+            duration,
+            "Wall-clock duration for each simulation substage.",
+            labels,
+        )
 
     def update_process_rss(self, stage: str) -> None:
         self._store.set_gauge(

@@ -91,13 +91,36 @@ class MJXBatch:
         return resample
 
     def warmup(self) -> None:
-        self._model, self._data = self._step(
+        warm_model, warm_data = self._step(
             self._model,
             self._data,
             jnp.zeros((self._ctrl_dim,)),
             self._model.body_mass[:, self._body_id],
         )
-        jax.block_until_ready(self._data)
+        indexes = jnp.arange(self._size, dtype=jnp.int32)
+        warm_data, body_mass = self._resample(
+            warm_data,
+            warm_model.body_mass,
+            indexes,
+        )
+        warm_model = warm_model.replace(body_mass=body_mass)
+        jax.block_until_ready((warm_model, warm_data))
+
+    def warmup_rollout(self, steps: int) -> None:
+        if steps <= 0:
+            return
+        controls = jnp.zeros((steps, self._ctrl_dim))
+        masses = jnp.broadcast_to(
+            self._model.body_mass[:, self._body_id],
+            (steps, self._size),
+        )
+        warm_model, warm_data = self._rollout(
+            self._model,
+            self._data,
+            controls,
+            masses,
+        )
+        jax.block_until_ready((warm_model, warm_data))
 
     def step(self, control_input, masses) -> None:
         self._model, self._data = self._step(
