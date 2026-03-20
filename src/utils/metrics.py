@@ -182,68 +182,6 @@ class SimbayMetrics:
             "Configured particle count for the current run.",
         )
 
-    def update_trajectory_profile(
-        self,
-        phase: str,
-        total_steps: int,
-        move_steps: int,
-        settle_steps: int,
-        dt_seconds: float,
-        settle_time_seconds: float,
-        control_duration_seconds: float,
-        max_joint_delta: float,
-        max_velocity: float,
-    ) -> None:
-        labels = {"phase": phase}
-        self._store.set_gauge(
-            "simbay_trajectory_steps_total",
-            total_steps,
-            "Total planned trajectory steps for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_move_steps",
-            move_steps,
-            "Planned motion steps before settle hold for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_settle_steps",
-            settle_steps,
-            "Planned settle-hold steps for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_dt_seconds",
-            dt_seconds,
-            "Trajectory control timestep in seconds for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_settle_time_seconds",
-            settle_time_seconds,
-            "Requested settle-hold time in seconds for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_control_duration_seconds",
-            control_duration_seconds,
-            "Effective motion-only control duration in seconds for a phase.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_max_joint_delta",
-            max_joint_delta,
-            "Maximum absolute joint delta in the planned phase trajectory.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_trajectory_max_velocity",
-            max_velocity,
-            "Configured trajectory max velocity for a phase.",
-            labels,
-        )
-
     def start_stage(self, stage: str) -> StageToken:
         if stage not in self._known_stages:
             self.register_stages([stage])
