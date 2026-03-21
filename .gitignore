@@ -43,6 +43,7 @@ temp/
 *.qvel
 Backups/
 data/
+logs
 
 # --- OS Specific ---
 .DS_Store
