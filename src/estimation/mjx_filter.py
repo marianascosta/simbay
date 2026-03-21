@@ -127,7 +127,7 @@ class MJXParticleFilter:
             self.process_memory_per_particle_estimate,
         )
 
-    def warmup_runtime(self) -> None:
+    def warmup_runtime(self, replay_chunk_sizes: tuple[int, ...] = ()) -> None:
         """Warm up filter-level JIT functions by running one dummy pass."""
         zero_observation = jnp.zeros((3,), dtype=self.particles.dtype)
         likelihoods = self.env.compute_likelihoods_device(zero_observation)
@@ -150,6 +150,8 @@ class MJXParticleFilter:
         jax.block_until_ready(ess)
         jax.block_until_ready(estimate)
         jax.block_until_ready(update_resample)
+        for chunk_size in replay_chunk_sizes:
+            self.env.warmup_replay_chunk(chunk_size)
         self.logger.info("mjx_filter_runtime_warmup_done particles=%d", self.N)
 
     def reset_replay_profile(self) -> None:
@@ -197,6 +199,16 @@ class MJXParticleFilter:
             self.particles,
             control_input,
             synchronize=synchronize,
+            phase=phase,
+        )
+
+    def replay_chunked(self, control_inputs, chunk_size: int, *, phase: str | None = None) -> None:
+        control_array = jnp.asarray(control_inputs)
+        self._predict_call_count += int(control_array.shape[0])
+        self.particles = self.env.replay_chunked_device(
+            self.particles,
+            control_array,
+            chunk_size,
             phase=phase,
         )
 

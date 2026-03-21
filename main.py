@@ -82,6 +82,29 @@ def _create_particle_filter(use_mjx: bool, limits, num_particles: int):
     return env, particle_filter
 
 
+def _parse_replay_chunk_size() -> int:
+    raw_value = os.getenv("SIMBAY_REPLAY_CHUNK_SIZE", "0")
+    chunk_size = int(raw_value)
+    allowed_chunk_sizes = {0, 32, 64}
+    if chunk_size not in allowed_chunk_sizes:
+        raise ValueError(
+            f"SIMBAY_REPLAY_CHUNK_SIZE must be one of {sorted(allowed_chunk_sizes)}, got {chunk_size}"
+        )
+    return chunk_size
+
+
+def _replay_trajectory(particle_filter, phase: str, trajectory: np.ndarray, replay_chunk_size: int) -> None:
+    if isinstance(particle_filter, MJXParticleFilter) and replay_chunk_size > 0:
+        particle_filter.replay_chunked(trajectory, replay_chunk_size, phase=phase)
+        return
+
+    for qpos in trajectory:
+        if isinstance(particle_filter, MJXParticleFilter):
+            particle_filter.predict(qpos, phase=phase)
+        else:
+            particle_filter.predict(qpos)
+
+
 def _run_reference_replay(
     particle_filter,
     trajectories: list[tuple[str, np.ndarray]],
@@ -197,6 +220,7 @@ particle_mass_metrics_every_n_steps = max(
 )
 benchmark_replay_only = _env_enabled("SIMBAY_REPLAY_BENCHMARK_ONLY")
 benchmark_replay_sync = _env_enabled("SIMBAY_REPLAY_BENCHMARK_SYNC", "true")
+replay_chunk_size = _parse_replay_chunk_size()
 
 if use_mjx:
     try:
@@ -244,6 +268,7 @@ if use_mjx:
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
         "benchmark_replay_only=%s benchmark_replay_sync=%s "
+        "replay_chunk_size=%d "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -259,6 +284,7 @@ if use_mjx:
         headless,
         benchmark_replay_only,
         benchmark_replay_sync,
+        replay_chunk_size,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -279,6 +305,7 @@ else:
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mujoco "
         "benchmark_replay_only=%s benchmark_replay_sync=%s "
+        "replay_chunk_size=%d "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -295,6 +322,7 @@ else:
         headless,
         benchmark_replay_only,
         benchmark_replay_sync,
+        replay_chunk_size,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -353,7 +381,8 @@ traj4 = plan_linear_trajectory(
     settle_time=1.0,
 )
 if use_mjx:
-    particle_filter.warmup_runtime()
+    replay_chunk_sizes = (replay_chunk_size,) if replay_chunk_size > 0 else ()
+    particle_filter.warmup_runtime(replay_chunk_sizes=replay_chunk_sizes)
     logger.info("mjx_filter_warmup_complete particles=%d", particle_filter.N)
 metrics.finish_stage(planning_stage)
 
@@ -426,11 +455,7 @@ for i, qpos in enumerate(traj1):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
 pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
-for qpos in traj1:
-    if use_mjx:
-        particle_filter.predict(qpos, phase="phase_1_approach")
-    else:
-        particle_filter.predict(qpos)
+_replay_trajectory(particle_filter, "phase_1_approach", traj1, replay_chunk_size)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
 if use_mjx:
@@ -457,11 +482,7 @@ for i, qpos in enumerate(traj2):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
 pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
-for qpos in traj2:
-    if use_mjx:
-        particle_filter.predict(qpos, phase="phase_2_descend")
-    else:
-        particle_filter.predict(qpos)
+_replay_trajectory(particle_filter, "phase_2_descend", traj2, replay_chunk_size)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
 if use_mjx:
@@ -488,11 +509,7 @@ for i, qpos in enumerate(traj3):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
 pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
-for qpos in traj3:
-    if use_mjx:
-        particle_filter.predict(qpos, phase="phase_3_grip")
-    else:
-        particle_filter.predict(qpos)
+_replay_trajectory(particle_filter, "phase_3_grip", traj3, replay_chunk_size)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
 if use_mjx:

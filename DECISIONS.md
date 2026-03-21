@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-03-21
+
+### Change
+Added a fixed-size chunked MJX replay path for phases 1 to 3 in [main.py](/Users/marianacosta/Documents/fcul/simbay/simbay/main.py), [src/estimation/mjx_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_filter.py), [src/estimation/mjx_particle_filter.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_particle_filter.py), and [src/estimation/mjx_batch.py](/Users/marianacosta/Documents/fcul/simbay/simbay/src/estimation/mjx_batch.py). The existing per-step replay loop remains available as the reference path, while MJX replay can now run in fixed chunks via `SIMBAY_REPLAY_CHUNK_SIZE=32|64`.
+
+### Reason
+Replay profiling showed that phases 1 to 3 were dominated by repeated `MJXBatch.step()` calls and that explicit synchronization cost was negligible. The next useful structural change is therefore to reduce Python-to-JAX step dispatch frequency and move replay toward a fixed-shape `scan`-style execution path without deleting the current correctness baseline.
+
+### Tradeoffs
+The code now maintains two replay paths for MJX: a simple per-step reference path and a chunked path intended for production benchmarking. This increases implementation surface area and requires warmup for the exact chunk size being used, but it keeps validation straightforward and avoids prematurely deleting the known-correct baseline.
+
+### Future Considerations
+Once the chunked path is numerically validated against the reference path, add a dedicated validation harness and benchmark matrix for `reference`, `32`, and `64` chunk sizes. If chunked replay becomes the stable default, move the reference path behind an explicit debug-only flag rather than keeping it in the normal execution branch indefinitely.
+
 ## 2026-03-18
 
 ### Change

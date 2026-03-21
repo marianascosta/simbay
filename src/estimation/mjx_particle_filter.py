@@ -16,10 +16,6 @@ from .base import ParticleEnvironment
 from .mjx_batch import MJXBatch
 
 
-def _enabled_from_env(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
-
-
 class FrankaMJXEnv(ParticleEnvironment):
     """Batched MJX particle environment for mass estimation.
 
@@ -49,10 +45,8 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._batch: MJXBatch | None = None
         self._rng_key = jax.random.PRNGKey(42)
         self._propagate_once = jax.jit(self._build_propagate_once())
-        self._replay_profile_log_every = max(
-            1,
-            int(os.getenv("SIMBAY_REPLAY_PROFILE_LOG_EVERY", "100")),
-        )
+        self._propagate_chunk = jax.jit(self._build_propagate_chunk())
+        self._replay_profile_log_every = 100
         self._shape_signatures: dict[str, tuple[tuple[int, ...], str]] = {}
         self.reset_replay_profile()
 
@@ -85,6 +79,35 @@ class FrankaMJXEnv(ParticleEnvironment):
             return jnp.clip(particles + noise, minimum, maximum)
 
         return propagate
+
+    def _build_propagate_chunk(self):
+        minimum = self.min
+        maximum = self.max
+
+        def propagate_chunk(
+            particles: jax.Array,
+            noise_chunk: jax.Array,
+            step_mask: jax.Array,
+        ) -> jax.Array:
+            def scan_step(current_particles, inputs):
+                noise, active = inputs
+                next_particles = jnp.clip(current_particles + noise, minimum, maximum)
+                next_particles = jax.lax.cond(
+                    active,
+                    lambda _: next_particles,
+                    lambda _: current_particles,
+                    operand=None,
+                )
+                return next_particles, next_particles
+
+            _, propagated_particles = jax.lax.scan(
+                scan_step,
+                particles,
+                (noise_chunk, step_mask),
+            )
+            return propagated_particles
+
+        return propagate_chunk
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         return np.asarray(self.propagate_particles_device(particles, control_input))
@@ -134,6 +157,17 @@ class FrankaMJXEnv(ParticleEnvironment):
     def replay_profile_log_every(self) -> int:
         return self._replay_profile_log_every
 
+    def warmup_replay_chunk(self, chunk_size: int) -> None:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before replay warmup.")
+
+        zero_particles = jnp.zeros((self._num_particles,), dtype=self._batch._model.body_mass.dtype)
+        zero_noise = jnp.zeros((chunk_size, self._num_particles), dtype=zero_particles.dtype)
+        step_mask = jnp.ones((chunk_size,), dtype=bool)
+        propagated_particles = self._propagate_chunk(zero_particles, zero_noise, step_mask)
+        self._batch.warmup_chunk(chunk_size)
+        jax.block_until_ready(propagated_particles)
+
     def propagate_particles_device(
         self,
         particles: np.ndarray | jax.Array,
@@ -171,6 +205,49 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._step_count += 1
         if self._step_count % 500 == 0:
             self.logger.info("mjx_propagate step=%d", self._step_count)
+
+        return jax_particles
+
+    def replay_chunked_device(
+        self,
+        particles: np.ndarray | jax.Array,
+        control_inputs: np.ndarray,
+        chunk_size: int,
+        *,
+        phase: str | None = None,
+    ) -> jax.Array:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before chunked replay.")
+
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+        jax_particles = jnp.asarray(particles)
+        controls = np.asarray(control_inputs)
+        total_steps = int(controls.shape[0])
+        if total_steps == 0:
+            return jax_particles
+
+        self._audit_replay_signature("control_chunk", controls[: min(total_steps, chunk_size)], phase)
+        pad_steps = (-total_steps) % chunk_size
+        if pad_steps:
+            controls = np.pad(controls, ((0, pad_steps), (0, 0)), mode="edge")
+
+        for chunk_start in range(0, controls.shape[0], chunk_size):
+            chunk_end = min(chunk_start + chunk_size, total_steps)
+            active_steps = chunk_end - chunk_start
+            control_chunk = jnp.asarray(controls[chunk_start : chunk_start + chunk_size])
+            step_mask = jnp.arange(chunk_size) < active_steps
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            noise_chunk = jax.random.normal(
+                subkey,
+                shape=(chunk_size, self._num_particles),
+                dtype=jax_particles.dtype,
+            ) * self.std_dev
+            noise_chunk = jnp.where(step_mask[:, None], noise_chunk, 0.0)
+            masses_chunk = self._propagate_chunk(jax_particles, noise_chunk, step_mask)
+            self._batch.step_chunk(control_chunk, masses_chunk, step_mask, phase=phase)
+            jax_particles = masses_chunk[-1]
 
         return jax_particles
 
