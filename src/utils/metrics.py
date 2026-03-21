@@ -313,6 +313,15 @@ class SimbayMetrics:
             "Approximate CPU core usage during the latest lift/update step.",
         )
 
+    def update_particle_mass_metrics(self, particles: Iterable[float]) -> None:
+        for idx, mass in enumerate(particles):
+            self._store.set_gauge(
+                "simbay_particle_mass_kg",
+                float(mass),
+                "Latest mass value for each particle.",
+                {"particle": str(idx)},
+            )
+
     def set_prediction_ready(self, total_wall_seconds: float, final_error_pct: float) -> None:
         self._store.set_gauge(
             "simbay_prediction_ready_seconds",

@@ -104,6 +104,14 @@ setup_stage = metrics.start_stage("setup")
 logger = setup_logging()
 headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
 use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
+export_particle_mass_metrics = os.getenv(
+    "SIMBAY_EXPORT_PARTICLE_MASS_METRICS",
+    "false",
+).lower() in {"1", "true", "yes", "on"}
+particle_mass_metrics_every_n_steps = max(
+    1,
+    int(os.getenv("SIMBAY_PARTICLE_MASS_METRICS_EVERY_N_STEPS", "10")),
+)
 
 if use_mjx:
     try:
@@ -385,9 +393,16 @@ for step, qpos in enumerate(traj4):
 
     # <--- Save the state of the particles at this exact timestep --->
     if use_mjx:
-        history_particles.append(particle_filter.particles_host().copy())
+        current_particles = particle_filter.particles_host()
     else:
-        history_particles.append(particle_filter.particles.copy())
+        current_particles = particle_filter.particles.copy()
+    history_particles.append(current_particles.copy())
+    if (
+        use_mjx
+        and export_particle_mass_metrics
+        and (step % particle_mass_metrics_every_n_steps == 0)
+    ):
+        metrics.update_particle_mass_metrics(current_particles)
     current_estimate = float(particle_filter.estimate())
     history_estimates.append(current_estimate)
 
