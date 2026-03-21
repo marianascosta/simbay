@@ -254,18 +254,7 @@ traj4 = plan_linear_trajectory(
     settle_time=1.0,
 )
 if use_mjx:
-    warmed_rollout_lengths = particle_filter.warmup_runtime(
-        [
-            len(traj1),
-            len(traj2),
-            len(traj3),
-        ]
-    )
-    logger.info(
-        "mjx_runtime_warmup_summary particles=%d rollout_lengths=%s phase4_step_warmup=1",
-        particle_filter.N,
-        warmed_rollout_lengths,
-    )
+    logger.info("mjx_runtime_warmup_summary particles=%d phase4_step_warmup=1", particle_filter.N)
 metrics.finish_stage(planning_stage)
 
 # ==========================================

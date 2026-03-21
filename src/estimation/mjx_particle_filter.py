@@ -1,6 +1,5 @@
 import logging
 import os
-from collections.abc import Iterable
 
 import jax
 import jax.numpy as jnp
@@ -45,7 +44,6 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._batch: MJXBatch | None = None
         self._rng_key = jax.random.PRNGKey(42)
         self._propagate_once = jax.jit(self._build_propagate_once())
-        self._propagate_many = jax.jit(self._build_propagate_many())
 
     @property
     def num_particles(self) -> int:
@@ -73,20 +71,6 @@ class FrankaMJXEnv(ParticleEnvironment):
 
         def propagate(particles: jax.Array, noise: jax.Array) -> jax.Array:
             return jnp.clip(particles + noise, minimum, maximum)
-
-        return propagate
-
-    def _build_propagate_many(self):
-        minimum = self.min
-        maximum = self.max
-
-        def propagate(particles: jax.Array, noise_steps: jax.Array) -> tuple[jax.Array, jax.Array]:
-            def scan_step(carry: jax.Array, noise: jax.Array):
-                next_particles = jnp.clip(carry + noise, minimum, maximum)
-                return next_particles, next_particles
-
-            final_particles, trajectory = jax.lax.scan(scan_step, particles, noise_steps)
-            return final_particles, trajectory
 
         return propagate
 
@@ -128,15 +112,14 @@ class FrankaMJXEnv(ParticleEnvironment):
             subkey,
             shape=(controls.shape[0], self._num_particles),
         ) * self.std_dev
-        final_particles, particle_trajectory = self._propagate_many(
-            jnp.asarray(particles),
-            noise_steps,
-        )
-        self._batch.rollout(controls, particle_trajectory)
-        self._step_count += int(controls.shape[0])
-        if self._step_count and self._step_count % 500 == 0:
-            self.logger.info("mjx_rollout_complete step=%d", self._step_count)
-        return final_particles
+        current = jnp.asarray(particles)
+        for i in range(controls.shape[0]):
+            current = jnp.clip(current + noise_steps[i], self.min, self.max)
+            self._batch.step(controls[i], current)
+            self._step_count += 1
+            if self._step_count % 500 == 0:
+                self.logger.info("mjx_rollout_step step=%d", self._step_count)
+        return current
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         return np.asarray(self.compute_likelihoods_device(observation))
@@ -177,16 +160,3 @@ class FrankaMJXEnv(ParticleEnvironment):
             "peak_bytes_in_use": 0,
             "bytes_limit": 0,
         }
-
-    def warmup_runtime(self, rollout_lengths: Iterable[int]) -> list[int]:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before warmup.")
-        normalized_lengths = sorted({int(length) for length in rollout_lengths if int(length) > 0})
-        for length in normalized_lengths:
-            self._batch.warmup_rollout(length)
-        self.logger.info(
-            "mjx_runtime_rollout_warmup_done particles=%d rollout_lengths=%s",
-            self._num_particles,
-            normalized_lengths,
-        )
-        return normalized_lengths

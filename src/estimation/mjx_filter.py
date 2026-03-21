@@ -126,36 +126,6 @@ class MJXParticleFilter:
             self.process_memory_per_particle_estimate,
         )
 
-    def warmup_runtime(self, rollout_lengths: list[int]) -> list[int]:
-        warmed_rollout_lengths = self.env.warmup_runtime(rollout_lengths)
-        zero_observation = jnp.zeros((3,), dtype=self.particles.dtype)
-        likelihoods = self.env.compute_likelihoods_device(zero_observation)
-        weights = self._update_jit(self.weights, likelihoods)
-        ess = self._ess_jit(weights)
-        estimate = self._estimate_jit(self.particles, weights)
-
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
-        update_resample = self._update_resample_jit(
-            self.weights,
-            self.particles,
-            likelihoods,
-            offset,
-        )
-        indexes = jnp.arange(self.N, dtype=jnp.int32)
-        self.env.resample_states_device(indexes)
-
-        jax.block_until_ready(weights)
-        jax.block_until_ready(ess)
-        jax.block_until_ready(estimate)
-        jax.block_until_ready(update_resample)
-        self.logger.info(
-            "mjx_filter_runtime_warmup_done particles=%d rollout_lengths=%s",
-            self.N,
-            warmed_rollout_lengths,
-        )
-        return warmed_rollout_lengths
-
     def predict(self, control_input) -> None:
         self.particles = self.env.propagate_particles_device(self.particles, control_input)
 
