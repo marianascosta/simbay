@@ -68,6 +68,115 @@ def _log_substage_duration(
     )
 
 
+def _replay_trajectory(
+    *,
+    phase: str,
+    trajectory: np.ndarray,
+    particle_filter,
+    use_mjx: bool,
+    env,
+    logger,
+    metrics,
+    synchronize_predict: bool,
+    sync_every_n_steps: int,
+    log_replay_steps: bool,
+    cumulative_replay_steps: int,
+) -> tuple[float, int]:
+    replay_start = time.perf_counter()
+    replay_steps_total = len(trajectory)
+
+    for step_index, qpos in enumerate(trajectory):
+        cumulative_replay_steps += 1
+        should_sync = synchronize_predict or (
+            sync_every_n_steps > 0 and cumulative_replay_steps % sync_every_n_steps == 0
+        )
+        step_cpu_start = time.process_time()
+
+        if use_mjx and (log_replay_steps or synchronize_predict):
+            predict_stats = particle_filter.predict_timed(
+                qpos,
+                synchronize=should_sync,
+            )
+            predict_wall_seconds = float(predict_stats["predict_wall_seconds"])
+            block_until_ready_seconds = float(predict_stats["block_until_ready_seconds"])
+            mjx_bytes_in_use = int(predict_stats["mjx_bytes_in_use"])
+            mjx_peak_bytes_in_use = int(predict_stats["mjx_peak_bytes_in_use"])
+            mjx_bytes_limit = int(predict_stats["mjx_bytes_limit"])
+            if log_replay_steps:
+                logger.info(
+                    "replay_predict_step phase=%s replay_step_index=%d replay_steps_total=%d "
+                    "cumulative_replay_steps=%d predict_wall_ms=%.3f "
+                    "block_until_ready_ms=%.3f synchronized=%s mjx_bytes_in_use=%d "
+                    "mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
+                    phase,
+                    step_index,
+                    replay_steps_total,
+                    cumulative_replay_steps,
+                    predict_wall_seconds * 1000.0,
+                    block_until_ready_seconds * 1000.0,
+                    should_sync,
+                    mjx_bytes_in_use,
+                    mjx_peak_bytes_in_use,
+                    mjx_bytes_limit,
+                )
+        else:
+            step_wall_start = time.perf_counter()
+            particle_filter.predict(qpos)
+            predict_wall_seconds = time.perf_counter() - step_wall_start
+            block_until_ready_seconds = 0.0
+
+            if use_mjx and should_sync:
+                block_wall_start = time.perf_counter()
+                jax.block_until_ready(particle_filter.particles)
+                block_until_ready_seconds = time.perf_counter() - block_wall_start
+
+            if use_mjx:
+                env_memory_profile = env.memory_profile()
+                mjx_bytes_in_use = int(env_memory_profile["bytes_in_use"])
+                mjx_peak_bytes_in_use = int(env_memory_profile["peak_bytes_in_use"])
+                mjx_bytes_limit = int(env_memory_profile["bytes_limit"])
+            else:
+                mjx_bytes_in_use = 0
+                mjx_peak_bytes_in_use = 0
+                mjx_bytes_limit = 0
+
+            if log_replay_steps:
+                logger.info(
+                    "replay_predict_step phase=%s replay_step_index=%d replay_steps_total=%d "
+                    "cumulative_replay_steps=%d predict_wall_ms=%.3f "
+                    "block_until_ready_ms=%.3f synchronized=%s mjx_bytes_in_use=%d "
+                    "mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
+                    phase,
+                    step_index,
+                    replay_steps_total,
+                    cumulative_replay_steps,
+                    predict_wall_seconds * 1000.0,
+                    block_until_ready_seconds * 1000.0,
+                    should_sync,
+                    mjx_bytes_in_use,
+                    mjx_peak_bytes_in_use,
+                    mjx_bytes_limit,
+                )
+
+        step_cpu_seconds = time.process_time() - step_cpu_start
+        step_wall_seconds = predict_wall_seconds + block_until_ready_seconds
+        step_rate_hz = 1.0 / step_wall_seconds if step_wall_seconds > 0 else 0.0
+        cpu_equivalent_cores = (
+            step_cpu_seconds / step_wall_seconds if step_wall_seconds > 0 else 0.0
+        )
+        metrics.update_replay_state(
+            phase=phase,
+            wall_seconds=step_wall_seconds,
+            sync_seconds=block_until_ready_seconds,
+            step_rate_hz=step_rate_hz,
+            cpu_equivalent_cores=cpu_equivalent_cores,
+            mjx_bytes_in_use=mjx_bytes_in_use,
+        )
+
+    replay_duration = time.perf_counter() - replay_start
+    return replay_duration, cumulative_replay_steps
+
+
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
 signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -111,6 +220,22 @@ export_particle_mass_metrics = os.getenv(
 particle_mass_metrics_every_n_steps = max(
     1,
     int(os.getenv("SIMBAY_PARTICLE_MASS_METRICS_EVERY_N_STEPS", "10")),
+)
+log_replay_steps = os.getenv("SIMBAY_LOG_REPLAY_STEPS", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+replay_sync_timing = os.getenv("SIMBAY_REPLAY_SYNC_TIMING", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+replay_sync_every_n_steps = max(
+    0,
+    int(os.getenv("SIMBAY_REPLAY_SYNC_EVERY_N_STEPS", "0")),
 )
 
 if use_mjx:
@@ -163,6 +288,7 @@ if use_mjx:
     logger.info(
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
+        "log_replay_steps=%s replay_sync_timing=%s replay_sync_every_n_steps=%d "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -176,6 +302,9 @@ if use_mjx:
         num_particles,
         cpu_cores,
         headless,
+        log_replay_steps,
+        replay_sync_timing,
+        replay_sync_every_n_steps,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -195,6 +324,7 @@ else:
     logger.info(
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mujoco "
+        "log_replay_steps=%s replay_sync_timing=%s replay_sync_every_n_steps=%d "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -209,6 +339,9 @@ else:
         num_particles,
         cpu_cores,
         headless,
+        log_replay_steps,
+        replay_sync_timing,
+        replay_sync_every_n_steps,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -274,6 +407,7 @@ metrics.finish_stage(planning_stage)
 # ==========================================
 # 3. EXECUTION
 # ==========================================
+replay_cumulative_steps = 0
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
@@ -287,10 +421,21 @@ for i, qpos in enumerate(traj1):
         logger.info("phase_progress name=approach step=%d/%d", i + 1, len(traj1))
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
-pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
-for qpos in traj1:
-    particle_filter.predict(qpos)
-pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+metrics.start_substage("phase_1_approach", "pf_replay")
+pf_replay_duration, replay_cumulative_steps = _replay_trajectory(
+    phase="phase_1_approach",
+    trajectory=traj1,
+    particle_filter=particle_filter,
+    use_mjx=use_mjx,
+    env=env,
+    logger=logger,
+    metrics=metrics,
+    synchronize_predict=replay_sync_timing,
+    sync_every_n_steps=replay_sync_every_n_steps,
+    log_replay_steps=log_replay_steps,
+    cumulative_replay_steps=replay_cumulative_steps,
+)
+metrics.set_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration)
 _log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
 if use_mjx:
     env_memory_profile = env.memory_profile()
@@ -315,10 +460,21 @@ for i, qpos in enumerate(traj2):
         logger.info("phase_progress name=descend step=%d/%d", i + 1, len(traj2))
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
-pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
-for qpos in traj2:
-    particle_filter.predict(qpos)
-pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+metrics.start_substage("phase_2_descend", "pf_replay")
+pf_replay_duration, replay_cumulative_steps = _replay_trajectory(
+    phase="phase_2_descend",
+    trajectory=traj2,
+    particle_filter=particle_filter,
+    use_mjx=use_mjx,
+    env=env,
+    logger=logger,
+    metrics=metrics,
+    synchronize_predict=replay_sync_timing,
+    sync_every_n_steps=replay_sync_every_n_steps,
+    log_replay_steps=log_replay_steps,
+    cumulative_replay_steps=replay_cumulative_steps,
+)
+metrics.set_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration)
 _log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
 if use_mjx:
     env_memory_profile = env.memory_profile()
@@ -343,10 +499,21 @@ for i, qpos in enumerate(traj3):
         logger.info("phase_progress name=close_gripper step=%d/%d", i + 1, len(traj3))
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
-pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
-for qpos in traj3:
-    particle_filter.predict(qpos)
-pf_replay_duration = metrics.finish_substage(pf_replay_stage)
+metrics.start_substage("phase_3_grip", "pf_replay")
+pf_replay_duration, replay_cumulative_steps = _replay_trajectory(
+    phase="phase_3_grip",
+    trajectory=traj3,
+    particle_filter=particle_filter,
+    use_mjx=use_mjx,
+    env=env,
+    logger=logger,
+    metrics=metrics,
+    synchronize_predict=replay_sync_timing,
+    sync_every_n_steps=replay_sync_every_n_steps,
+    log_replay_steps=log_replay_steps,
+    cumulative_replay_steps=replay_cumulative_steps,
+)
+metrics.set_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration)
 _log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
 if use_mjx:
     env_memory_profile = env.memory_profile()
