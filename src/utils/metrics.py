@@ -313,47 +313,6 @@ class SimbayMetrics:
             "Approximate CPU core usage during the latest lift/update step.",
         )
 
-    def update_replay_state(
-        self,
-        phase: str,
-        wall_seconds: float,
-        sync_seconds: float,
-        step_rate_hz: float,
-        cpu_equivalent_cores: float,
-        mjx_bytes_in_use: int,
-    ) -> None:
-        labels = {"phase": phase}
-        self._store.set_gauge(
-            "simbay_replay_step_wall_seconds",
-            wall_seconds,
-            "Wall-clock duration of the latest replay predict step.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_replay_step_sync_seconds",
-            sync_seconds,
-            "Synchronization drain time for the latest replay predict step.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_replay_step_rate_hz",
-            step_rate_hz,
-            "Replay predict step rate derived from wall-clock duration.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_replay_cpu_equivalent_cores",
-            cpu_equivalent_cores,
-            "Approximate CPU core usage during the latest replay predict step.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_replay_mjx_bytes_in_use",
-            mjx_bytes_in_use,
-            "Active MJX allocator bytes during the latest replay predict step.",
-            labels,
-        )
-
     def update_particle_mass_metrics(self, particles: Iterable[float]) -> None:
         for idx, mass in enumerate(particles):
             self._store.set_gauge(

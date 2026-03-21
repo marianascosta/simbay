@@ -1,5 +1,4 @@
 import logging
-import time
 
 import jax
 import jax.numpy as jnp
@@ -154,26 +153,6 @@ class MJXParticleFilter:
 
     def predict(self, control_input) -> None:
         self.particles = self.env.propagate_particles_device(self.particles, control_input)
-
-    def predict_timed(self, control_input, synchronize: bool = False) -> dict[str, float | int]:
-        predict_wall_start = time.perf_counter()
-        self.particles = self.env.propagate_particles_device(self.particles, control_input)
-        predict_wall_seconds = time.perf_counter() - predict_wall_start
-
-        block_wall_seconds = 0.0
-        if synchronize:
-            block_wall_start = time.perf_counter()
-            jax.block_until_ready(self.particles)
-            block_wall_seconds = time.perf_counter() - block_wall_start
-
-        env_memory_profile = self.env.memory_profile()
-        return {
-            "predict_wall_seconds": predict_wall_seconds,
-            "block_until_ready_seconds": block_wall_seconds,
-            "mjx_bytes_in_use": int(env_memory_profile["bytes_in_use"]),
-            "mjx_peak_bytes_in_use": int(env_memory_profile["peak_bytes_in_use"]),
-            "mjx_bytes_limit": int(env_memory_profile["bytes_limit"]),
-        }
 
     def update(self, observation) -> None:
         likelihoods = self.env.compute_likelihoods_device(observation)
