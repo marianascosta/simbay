@@ -1,3 +1,5 @@
+import logging
+
 import jax
 import jax.numpy as jnp
 from mujoco import mjx
@@ -19,10 +21,13 @@ class MJXBatch:
     """Manage a batched MJX model/data pair for particle simulation."""
 
     def __init__(self, mj_model, mj_data, masses, body_id: int):
+        self.logger = logging.getLogger("simbay.mjx_batch")
         self._body_id = body_id
         self._size = int(len(masses))
         self._device = _resolve_mjx_device()
         self._default_device = jax.devices()[0]
+        self._step_call_count = 0
+        self._step_signature: tuple[tuple[int, ...], str, tuple[int, ...], str] | None = None
 
         mjx_model = mjx.put_model(mj_model, device=self._device)
         mjx_data = mjx.put_data(mj_model, mj_data, device=self._device)
@@ -86,13 +91,43 @@ class MJXBatch:
         warm_model = warm_model.replace(body_mass=body_mass)
         jax.block_until_ready((warm_model, warm_data))
 
-    def step(self, control_input, masses) -> None:
+    @property
+    def step_call_count(self) -> int:
+        return self._step_call_count
+
+    def _audit_step_signature(self, control_input, masses, phase: str | None) -> None:
+        control = jnp.asarray(control_input)
+        particle_masses = jnp.asarray(masses)
+        signature = (
+            tuple(control.shape),
+            str(control.dtype),
+            tuple(particle_masses.shape),
+            str(particle_masses.dtype),
+        )
+        if self._step_signature is None:
+            self._step_signature = signature
+            return
+        if self._step_signature != signature:
+            self.logger.warning(
+                "mjx_step_signature_changed phase=%s old=%s new=%s",
+                phase or "unknown",
+                self._step_signature,
+                signature,
+            )
+            self._step_signature = signature
+
+    def step(self, control_input, masses, phase: str | None = None) -> None:
+        self._step_call_count += 1
+        self._audit_step_signature(control_input, masses, phase)
         self._model, self._data = self._step(
             self._model,
             self._data,
             control_input,
             masses,
         )
+
+    def block_until_ready(self) -> None:
+        jax.block_until_ready((self._model.body_mass, self._data.qpos, self._data.sensordata))
 
     def sensor_slice(self, start: int, width: int):
         return self._data.sensordata[:, start : start + width]

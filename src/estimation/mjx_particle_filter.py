@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 
 import jax
 import jax.numpy as jnp
@@ -13,6 +14,10 @@ from src.utils.mjx_utils import prepare_model_for_mjx
 
 from .base import ParticleEnvironment
 from .mjx_batch import MJXBatch
+
+
+def _enabled_from_env(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
 
 
 class FrankaMJXEnv(ParticleEnvironment):
@@ -44,6 +49,12 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._batch: MJXBatch | None = None
         self._rng_key = jax.random.PRNGKey(42)
         self._propagate_once = jax.jit(self._build_propagate_once())
+        self._replay_profile_log_every = max(
+            1,
+            int(os.getenv("SIMBAY_REPLAY_PROFILE_LOG_EVERY", "100")),
+        )
+        self._shape_signatures: dict[str, tuple[tuple[int, ...], str]] = {}
+        self.reset_replay_profile()
 
     @property
     def num_particles(self) -> int:
@@ -62,6 +73,7 @@ class FrankaMJXEnv(ParticleEnvironment):
         self.logger.info("mjx_jit_warmup_done")
 
         self._step_count = 0
+        self.reset_replay_profile()
 
         return jax.device_put(masses, self._batch.device)
 
@@ -77,18 +89,84 @@ class FrankaMJXEnv(ParticleEnvironment):
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         return np.asarray(self.propagate_particles_device(particles, control_input))
 
+    def reset_replay_profile(self) -> None:
+        self._replay_profile = {
+            "propagate_call_count": 0,
+            "rng_wall_seconds": 0.0,
+            "propagate_wall_seconds": 0.0,
+            "batch_step_wall_seconds": 0.0,
+            "block_until_ready_seconds": 0.0,
+        }
+
+    def _audit_replay_signature(self, name: str, array, phase: str | None) -> None:
+        jax_array = jnp.asarray(array)
+        signature = (tuple(jax_array.shape), str(jax_array.dtype))
+        previous = self._shape_signatures.get(name)
+        if previous is None:
+            self._shape_signatures[name] = signature
+            return
+        if previous != signature:
+            self.logger.warning(
+                "mjx_replay_signature_changed phase=%s name=%s old=%s new=%s",
+                phase or "unknown",
+                name,
+                previous,
+                signature,
+            )
+            self._shape_signatures[name] = signature
+
+    def replay_profile_snapshot(self) -> dict[str, float | int]:
+        memory_profile = self.memory_profile()
+        batch_step_call_count = self._batch.step_call_count if self._batch is not None else 0
+        return {
+            "propagate_call_count": int(self._replay_profile["propagate_call_count"]),
+            "batch_step_call_count": int(batch_step_call_count),
+            "rng_wall_seconds": float(self._replay_profile["rng_wall_seconds"]),
+            "propagate_wall_seconds": float(self._replay_profile["propagate_wall_seconds"]),
+            "batch_step_wall_seconds": float(self._replay_profile["batch_step_wall_seconds"]),
+            "block_until_ready_seconds": float(self._replay_profile["block_until_ready_seconds"]),
+            "mjx_bytes_in_use": int(memory_profile["bytes_in_use"]),
+            "mjx_peak_bytes_in_use": int(memory_profile["peak_bytes_in_use"]),
+            "mjx_bytes_limit": int(memory_profile["bytes_limit"]),
+        }
+
+    @property
+    def replay_profile_log_every(self) -> int:
+        return self._replay_profile_log_every
+
     def propagate_particles_device(
         self,
         particles: np.ndarray | jax.Array,
         control_input: np.ndarray,
+        *,
+        synchronize: bool = False,
+        phase: str | None = None,
     ) -> jax.Array:
         if self._batch is None:
             raise RuntimeError("MJX batch must be initialized before propagation.")
 
+        self._replay_profile["propagate_call_count"] += 1
+        self._audit_replay_signature("particles", particles, phase)
+        self._audit_replay_signature("control_input", control_input, phase)
+
+        rng_start = time.perf_counter()
         self._rng_key, subkey = jax.random.split(self._rng_key)
         noise = jax.random.normal(subkey, shape=(self._num_particles,)) * self.std_dev
+        self._replay_profile["rng_wall_seconds"] += time.perf_counter() - rng_start
+
+        propagate_start = time.perf_counter()
         jax_particles = self._propagate_once(jnp.asarray(particles), noise)
-        self._batch.step(control_input, jax_particles)
+        self._replay_profile["propagate_wall_seconds"] += time.perf_counter() - propagate_start
+
+        batch_step_start = time.perf_counter()
+        self._batch.step(control_input, jax_particles, phase=phase)
+        self._replay_profile["batch_step_wall_seconds"] += time.perf_counter() - batch_step_start
+
+        if synchronize:
+            block_start = time.perf_counter()
+            self._batch.block_until_ready()
+            jax.block_until_ready(jax_particles)
+            self._replay_profile["block_until_ready_seconds"] += time.perf_counter() - block_start
 
         self._step_count += 1
         if self._step_count % 500 == 0:

@@ -68,6 +68,89 @@ def _log_substage_duration(
     )
 
 
+def _env_enabled(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
+
+
+def _create_particle_filter(use_mjx: bool, limits, num_particles: int):
+    if use_mjx:
+        env = FrankaMJXEnv(limits, num_particles)
+        particle_filter = MJXParticleFilter(env)
+    else:
+        env = FrankaMuJoCoEnv(limits, num_particles)
+        particle_filter = ParticleFilter(env)
+    return env, particle_filter
+
+
+def _run_reference_replay(
+    particle_filter,
+    trajectories: list[tuple[str, np.ndarray]],
+    *,
+    synchronize: bool,
+) -> dict[str, dict[str, float | int]]:
+    results: dict[str, dict[str, float | int]] = {}
+    total_steps = 0
+    total_wall_seconds = 0.0
+
+    if hasattr(particle_filter, "reset_replay_profile"):
+        particle_filter.reset_replay_profile()
+
+    for phase, trajectory in trajectories:
+        phase_start = time.perf_counter()
+        for step_index, qpos in enumerate(trajectory):
+            if isinstance(particle_filter, MJXParticleFilter):
+                particle_filter.predict(qpos, synchronize=synchronize, phase=phase)
+                particle_filter.log_replay_profile_summary(phase, step_index, len(trajectory))
+            else:
+                particle_filter.predict(qpos)
+        phase_wall_seconds = time.perf_counter() - phase_start
+        phase_steps = len(trajectory)
+        total_steps += phase_steps
+        total_wall_seconds += phase_wall_seconds
+        results[phase] = {
+            "steps": phase_steps,
+            "wall_seconds": phase_wall_seconds,
+            "ms_per_step": (phase_wall_seconds / phase_steps) * 1000.0 if phase_steps else 0.0,
+        }
+
+    results["total"] = {
+        "steps": total_steps,
+        "wall_seconds": total_wall_seconds,
+        "ms_per_step": (total_wall_seconds / total_steps) * 1000.0 if total_steps else 0.0,
+    }
+    return results
+
+
+def _log_replay_benchmark_summary(mode: str, summary: dict[str, dict[str, float | int]], snapshot) -> None:
+    for phase in ("phase_1_approach", "phase_2_descend", "phase_3_grip", "total"):
+        phase_summary = summary[phase]
+        logger.info(
+            "replay_reference_benchmark mode=%s phase=%s steps=%d wall_ms=%.3f ms_per_step=%.3f",
+            mode,
+            phase,
+            int(phase_summary["steps"]),
+            float(phase_summary["wall_seconds"]) * 1000.0,
+            float(phase_summary["ms_per_step"]),
+        )
+    if snapshot is not None:
+        logger.info(
+            "replay_reference_profile mode=%s predict_calls=%d propagate_calls=%d batch_step_calls=%d "
+            "rng_wall_ms=%.3f propagate_wall_ms=%.3f batch_step_wall_ms=%.3f block_wall_ms=%.3f "
+            "mjx_bytes_in_use=%d mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
+            mode,
+            int(snapshot["predict_call_count"]),
+            int(snapshot["propagate_call_count"]),
+            int(snapshot["batch_step_call_count"]),
+            float(snapshot["rng_wall_seconds"]) * 1000.0,
+            float(snapshot["propagate_wall_seconds"]) * 1000.0,
+            float(snapshot["batch_step_wall_seconds"]) * 1000.0,
+            float(snapshot["block_until_ready_seconds"]) * 1000.0,
+            int(snapshot["mjx_bytes_in_use"]),
+            int(snapshot["mjx_peak_bytes_in_use"]),
+            int(snapshot["mjx_bytes_limit"]),
+        )
+
+
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
 signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -112,6 +195,8 @@ particle_mass_metrics_every_n_steps = max(
     1,
     int(os.getenv("SIMBAY_PARTICLE_MASS_METRICS_EVERY_N_STEPS", "10")),
 )
+benchmark_replay_only = _env_enabled("SIMBAY_REPLAY_BENCHMARK_ONLY")
+benchmark_replay_sync = _env_enabled("SIMBAY_REPLAY_BENCHMARK_SYNC", "true")
 
 if use_mjx:
     try:
@@ -136,12 +221,7 @@ true_mass = DEFAULT_OBJECT_PROPS['mass']
 # Initiate Particle Filter
 num_particles = int(os.getenv("SIMBAY_PARTICLES", "100"))
 limits = ((0.0, 3.0))
-if use_mjx:
-    env = FrankaMJXEnv(limits, num_particles)
-    particle_filter = MJXParticleFilter(env)
-else:
-    env = FrankaMuJoCoEnv(limits, num_particles)
-    particle_filter = ParticleFilter(env)
+env, particle_filter = _create_particle_filter(use_mjx, limits, num_particles)
 if export_particle_mass_metrics:
     if use_mjx:
         metrics.update_particle_mass_metrics(particle_filter.particles_host())
@@ -163,6 +243,7 @@ if use_mjx:
     logger.info(
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
+        "benchmark_replay_only=%s benchmark_replay_sync=%s "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -176,6 +257,8 @@ if use_mjx:
         num_particles,
         cpu_cores,
         headless,
+        benchmark_replay_only,
+        benchmark_replay_sync,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -195,6 +278,7 @@ else:
     logger.info(
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mujoco "
+        "benchmark_replay_only=%s benchmark_replay_sync=%s "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -209,6 +293,8 @@ else:
         num_particles,
         cpu_cores,
         headless,
+        benchmark_replay_only,
+        benchmark_replay_sync,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -271,6 +357,58 @@ if use_mjx:
     logger.info("mjx_filter_warmup_complete particles=%d", particle_filter.N)
 metrics.finish_stage(planning_stage)
 
+if benchmark_replay_only:
+    replay_trajectories = [
+        ("phase_1_approach", traj1),
+        ("phase_2_descend", traj2),
+        ("phase_3_grip", traj3),
+    ]
+
+    if not use_mjx:
+        logger.warning("replay_reference_benchmark unsupported backend=mujoco")
+    else:
+        cold_env, cold_filter = _create_particle_filter(use_mjx, limits, num_particles)
+        cold_filter.warmup_runtime()
+        cold_summary = _run_reference_replay(
+            cold_filter,
+            replay_trajectories,
+            synchronize=benchmark_replay_sync,
+        )
+        _log_replay_benchmark_summary(
+            "cold",
+            cold_summary,
+            cold_filter.replay_profile_snapshot(),
+        )
+
+        steady_env, steady_filter = _create_particle_filter(use_mjx, limits, num_particles)
+        steady_filter.warmup_runtime()
+        steady_summary = _run_reference_replay(
+            steady_filter,
+            replay_trajectories,
+            synchronize=benchmark_replay_sync,
+        )
+        _log_replay_benchmark_summary(
+            "steady",
+            steady_summary,
+            steady_filter.replay_profile_snapshot(),
+        )
+
+        compile_overhead_seconds = (
+            float(cold_summary["total"]["wall_seconds"]) - float(steady_summary["total"]["wall_seconds"])
+        )
+        logger.info(
+            "replay_reference_benchmark_compare cold_wall_ms=%.3f steady_wall_ms=%.3f "
+            "compile_overhead_ms=%.3f sync=%s",
+            float(cold_summary["total"]["wall_seconds"]) * 1000.0,
+            float(steady_summary["total"]["wall_seconds"]) * 1000.0,
+            compile_overhead_seconds * 1000.0,
+            benchmark_replay_sync,
+        )
+        del cold_env, steady_env
+
+    shutdown_metrics(metrics)
+    raise SystemExit(0)
+
 # ==========================================
 # 3. EXECUTION
 # ==========================================
@@ -289,7 +427,10 @@ robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
 pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
 for qpos in traj1:
-    particle_filter.predict(qpos)
+    if use_mjx:
+        particle_filter.predict(qpos, phase="phase_1_approach")
+    else:
+        particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
 if use_mjx:
@@ -317,7 +458,10 @@ robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
 pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
 for qpos in traj2:
-    particle_filter.predict(qpos)
+    if use_mjx:
+        particle_filter.predict(qpos, phase="phase_2_descend")
+    else:
+        particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
 if use_mjx:
@@ -345,7 +489,10 @@ robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
 pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
 for qpos in traj3:
-    particle_filter.predict(qpos)
+    if use_mjx:
+        particle_filter.predict(qpos, phase="phase_3_grip")
+    else:
+        particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
 if use_mjx:

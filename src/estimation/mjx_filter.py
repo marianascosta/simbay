@@ -101,6 +101,7 @@ class MJXParticleFilter:
         self.weights = jnp.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
         self._rng_key = jax.random.PRNGKey(7)
         self._ess = float(self.N)
+        self._predict_call_count = 0
 
         state_bytes_total = int(self.particles.size * self.particles.dtype.itemsize)
         state_bytes_total += int(self.weights.size * self.weights.dtype.itemsize)
@@ -151,8 +152,53 @@ class MJXParticleFilter:
         jax.block_until_ready(update_resample)
         self.logger.info("mjx_filter_runtime_warmup_done particles=%d", self.N)
 
-    def predict(self, control_input) -> None:
-        self.particles = self.env.propagate_particles_device(self.particles, control_input)
+    def reset_replay_profile(self) -> None:
+        self._predict_call_count = 0
+        self.env.reset_replay_profile()
+
+    def replay_profile_snapshot(self) -> dict[str, float | int]:
+        snapshot = self.env.replay_profile_snapshot()
+        snapshot["predict_call_count"] = self._predict_call_count
+        return snapshot
+
+    def log_replay_profile_summary(self, phase: str, step_index: int, steps_total: int) -> None:
+        snapshot = self.replay_profile_snapshot()
+        predict_calls = int(snapshot["predict_call_count"])
+        if predict_calls == 0 or (step_index + 1) % self.env.replay_profile_log_every != 0:
+            return
+
+        avg_rng_ms = (float(snapshot["rng_wall_seconds"]) / predict_calls) * 1000.0
+        avg_propagate_ms = (float(snapshot["propagate_wall_seconds"]) / predict_calls) * 1000.0
+        avg_batch_step_ms = (float(snapshot["batch_step_wall_seconds"]) / predict_calls) * 1000.0
+        avg_block_ms = (float(snapshot["block_until_ready_seconds"]) / predict_calls) * 1000.0
+        self.logger.info(
+            "replay_profile_summary phase=%s step=%d/%d predict_calls=%d "
+            "propagate_calls=%d batch_step_calls=%d avg_rng_ms=%.3f "
+            "avg_propagate_ms=%.3f avg_batch_step_ms=%.3f avg_block_ms=%.3f "
+            "mjx_bytes_in_use=%d mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
+            phase,
+            step_index + 1,
+            steps_total,
+            predict_calls,
+            int(snapshot["propagate_call_count"]),
+            int(snapshot["batch_step_call_count"]),
+            avg_rng_ms,
+            avg_propagate_ms,
+            avg_batch_step_ms,
+            avg_block_ms,
+            int(snapshot["mjx_bytes_in_use"]),
+            int(snapshot["mjx_peak_bytes_in_use"]),
+            int(snapshot["mjx_bytes_limit"]),
+        )
+
+    def predict(self, control_input, *, synchronize: bool = False, phase: str | None = None) -> None:
+        self._predict_call_count += 1
+        self.particles = self.env.propagate_particles_device(
+            self.particles,
+            control_input,
+            synchronize=synchronize,
+            phase=phase,
+        )
 
     def update(self, observation) -> None:
         likelihoods = self.env.compute_likelihoods_device(observation)
