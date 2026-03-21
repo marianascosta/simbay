@@ -142,6 +142,11 @@ if use_mjx:
 else:
     env = FrankaMuJoCoEnv(limits, num_particles)
     particle_filter = ParticleFilter(env)
+if export_particle_mass_metrics:
+    if use_mjx:
+        metrics.update_particle_mass_metrics(particle_filter.particles_host())
+    else:
+        metrics.update_particle_mass_metrics(particle_filter.particles.copy())
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
