@@ -96,31 +96,6 @@ class FrankaMJXEnv(ParticleEnvironment):
 
         return jax_particles
 
-    def rollout_predict_only_device(
-        self,
-        particles: np.ndarray | jax.Array,
-        trajectory: np.ndarray,
-    ) -> jax.Array:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before propagation.")
-        controls = jnp.asarray(trajectory)
-        if controls.size == 0:
-            return jnp.asarray(particles)
-
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        noise_steps = jax.random.normal(
-            subkey,
-            shape=(controls.shape[0], self._num_particles),
-        ) * self.std_dev
-        current = jnp.asarray(particles)
-        for i in range(controls.shape[0]):
-            current = jnp.clip(current + noise_steps[i], self.min, self.max)
-            self._batch.step(controls[i], current)
-            self._step_count += 1
-            if self._step_count % 500 == 0:
-                self.logger.info("mjx_rollout_step step=%d", self._step_count)
-        return current
-
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         return np.asarray(self.compute_likelihoods_device(observation))
 

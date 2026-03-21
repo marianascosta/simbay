@@ -34,7 +34,6 @@ class MJXBatch:
         self._data = jax.tree.map(lambda x: jnp.stack([x] * self._size), mjx_data)
         self._ctrl_dim = int(self._data.ctrl.shape[-1])
         self._step = jax.jit(self._build_step_fn())
-        self._rollout = jax.jit(self._build_rollout_fn())
         self._resample = jax.jit(self._build_resample_fn())
 
     @property
@@ -62,25 +61,6 @@ class MJXBatch:
 
         return apply
 
-    def _build_rollout_fn(self):
-        step_fn = self._build_step_fn()
-
-        def rollout(model, data, control_inputs, mass_trajectory):
-            def scan_step(carry, inputs):
-                scan_model, scan_data = carry
-                control_input, masses = inputs
-                next_model, next_data = step_fn(scan_model, scan_data, control_input, masses)
-                return (next_model, next_data), ()
-
-            (final_model, final_data), _ = jax.lax.scan(
-                scan_step,
-                (model, data),
-                (control_inputs, mass_trajectory),
-            )
-            return final_model, final_data
-
-        return rollout
-
     def _build_resample_fn(self):
         def resample(data, body_mass, indexes):
             return (
@@ -106,36 +86,12 @@ class MJXBatch:
         warm_model = warm_model.replace(body_mass=body_mass)
         jax.block_until_ready((warm_model, warm_data))
 
-    def warmup_rollout(self, steps: int) -> None:
-        if steps <= 0:
-            return
-        controls = jnp.zeros((steps, self._ctrl_dim))
-        masses = jnp.broadcast_to(
-            self._model.body_mass[:, self._body_id],
-            (steps, self._size),
-        )
-        warm_model, warm_data = self._rollout(
-            self._model,
-            self._data,
-            controls,
-            masses,
-        )
-        jax.block_until_ready((warm_model, warm_data))
-
     def step(self, control_input, masses) -> None:
         self._model, self._data = self._step(
             self._model,
             self._data,
             control_input,
             masses,
-        )
-
-    def rollout(self, control_inputs, mass_trajectory) -> None:
-        self._model, self._data = self._rollout(
-            self._model,
-            self._data,
-            jnp.asarray(control_inputs),
-            jnp.asarray(mass_trajectory),
         )
 
     def sensor_slice(self, start: int, width: int):

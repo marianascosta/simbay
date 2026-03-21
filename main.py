@@ -254,7 +254,8 @@ traj4 = plan_linear_trajectory(
     settle_time=1.0,
 )
 if use_mjx:
-    logger.info("mjx_runtime_warmup_summary particles=%d phase4_step_warmup=1", particle_filter.N)
+    particle_filter.warmup_runtime()
+    logger.info("mjx_filter_warmup_complete particles=%d", particle_filter.N)
 metrics.finish_stage(planning_stage)
 
 # ==========================================
@@ -274,11 +275,8 @@ for i, qpos in enumerate(traj1):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
 pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
-if use_mjx:
-    particle_filter.predict_trajectory(traj1)
-else:
-    for qpos in traj1:
-        particle_filter.predict(qpos)
+for qpos in traj1:
+    particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
 if use_mjx:
@@ -305,11 +303,8 @@ for i, qpos in enumerate(traj2):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
 pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
-if use_mjx:
-    particle_filter.predict_trajectory(traj2)
-else:
-    for qpos in traj2:
-        particle_filter.predict(qpos)
+for qpos in traj2:
+    particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
 if use_mjx:
@@ -336,11 +331,8 @@ for i, qpos in enumerate(traj3):
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
 pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
-if use_mjx:
-    particle_filter.predict_trajectory(traj3)
-else:
-    for qpos in traj3:
-        particle_filter.predict(qpos)
+for qpos in traj3:
+    particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
 _log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
 if use_mjx:
