@@ -12,6 +12,7 @@ services:
       SIMBAY_METRICS_PORT: "8000"
       SIMBAY_EXPORT_PARTICLE_MASS_METRICS: "1"
       SIMBAY_PARTICLE_MASS_METRICS_EVERY_N_STEPS: "10"
+      SIMBAY_PARTICLES: "100"
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
