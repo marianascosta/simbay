@@ -3,11 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: cuda
     container_name: simbay
     environment:
       MPLBACKEND: Agg
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
+      SIMBAY_BACKEND: warp
       SIMBAY_METRICS_ENABLED: "1"
       SIMBAY_METRICS_PORT: "8000"
     mem_limit: 10g
