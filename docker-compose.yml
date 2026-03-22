@@ -8,9 +8,17 @@ services:
       MPLBACKEND: Agg
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
+      SIMBAY_REQUIRE_GPU: "1"
       SIMBAY_METRICS_ENABLED: "1"
       SIMBAY_METRICS_PORT: "8000"
+      SIMBAY_EXPORT_PARTICLE_MASS_METRICS: "1"
+      SIMBAY_PARTICLE_MASS_METRICS_EVERY_N_STEPS: "10"
+      SIMBAY_PARTICLES: "100"
+      SIMBAY_REPLAY_CHUNK_SIZE: "64"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     mem_limit: 10g
+    gpus: all
     volumes:
       - ./logs:/app/logs
       - ./temp:/app/temp

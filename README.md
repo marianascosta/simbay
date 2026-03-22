@@ -47,3 +47,16 @@ This starts the app metrics endpoint, Prometheus, Grafana, and `node-exporter`
 in one workflow. Omit `--profile gpu` if you do not want `dcgm-exporter`.
 
 See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the Compose-based setup and validation queries.
+
+## GPU Container Smoke Test
+
+The Compose-managed `simbay` service is configured to require an NVIDIA GPU and
+the Docker image installs the CUDA-enabled JAX runtime. Use the smoke target to
+verify the container does not silently fall back to CPU:
+
+```sh
+make docker-smoke-gpu
+```
+
+This runs a setup-only smoke path with `SIMBAY_REQUIRE_GPU=1`, so the command
+exits non-zero unless MJX initializes on `execution_platform=gpu`.
