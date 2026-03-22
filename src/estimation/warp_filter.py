@@ -86,6 +86,7 @@ class WarpParticleFilter:
         self.weights = np.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
         self._rng = np.random.default_rng(7)
         self._ess = float(self.N)
+        self._step_index = 0
 
         state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
         self.state_bytes_total = state_bytes_total
@@ -139,6 +140,7 @@ class WarpParticleFilter:
         likelihoods = self.env.compute_likelihoods(self.particles, observation)
         self.weights = _normalize_weights(self.weights, likelihoods)
         self._ess = _effective_sample_size(self.weights)
+        self._step_index += 1
 
     def resample(self) -> None:
         if self._ess >= self.N / 2:
@@ -172,6 +174,41 @@ class WarpParticleFilter:
         )
         if did_resample:
             self.env.resample_states(indexes)
+        should_log_diag = self._step_index < 5 or self._step_index % 100 == 0
+        if should_log_diag:
+            diagnostics = self.env.last_measurement_diagnostics()
+            self.logger.info(
+                "warp_measurement_diagnostics step=%d resampled=%s "
+                "mass_min=%.6f mass_max=%.6f mass_mean=%.6f "
+                "obs=(%.6f,%.6f,%.6f) obs_norm=%.6f "
+                "sim_force_norm_min=%.6f sim_force_norm_max=%.6f sim_force_norm_mean=%.6f "
+                "sim_force_axis_std=(%.6f,%.6f,%.6f) "
+                "diff_norm_min=%.6f diff_norm_max=%.6f diff_norm_mean=%.6f "
+                "likelihood_min=%.6e likelihood_max=%.6e likelihood_mean=%.6e likelihood_std=%.6e",
+                self._step_index,
+                did_resample,
+                float(np.min(self.particles)),
+                float(np.max(self.particles)),
+                float(np.mean(self.particles)),
+                diagnostics.get("obs_fx", 0.0),
+                diagnostics.get("obs_fy", 0.0),
+                diagnostics.get("obs_fz", 0.0),
+                diagnostics.get("obs_norm", 0.0),
+                diagnostics.get("sim_force_norm_min", 0.0),
+                diagnostics.get("sim_force_norm_max", 0.0),
+                diagnostics.get("sim_force_norm_mean", 0.0),
+                diagnostics.get("sim_force_axis_std_x", 0.0),
+                diagnostics.get("sim_force_axis_std_y", 0.0),
+                diagnostics.get("sim_force_axis_std_z", 0.0),
+                diagnostics.get("diff_norm_min", 0.0),
+                diagnostics.get("diff_norm_max", 0.0),
+                diagnostics.get("diff_norm_mean", 0.0),
+                diagnostics.get("likelihood_min", 0.0),
+                diagnostics.get("likelihood_max", 0.0),
+                diagnostics.get("likelihood_mean", 0.0),
+                diagnostics.get("likelihood_std", 0.0),
+            )
+        self._step_index += 1
         return {
             "ess": float(self._ess),
             "resampled": did_resample,

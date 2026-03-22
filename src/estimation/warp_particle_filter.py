@@ -22,6 +22,8 @@ from .warp_batch import WarpBatch
 class FrankaWarpEnv(ParticleEnvironment):
     """Batched MJWarp particle environment for mass estimation."""
 
+    _MEASUREMENT_VARIANCE = 25.0
+
     def __init__(
         self,
         limits: tuple[float, float],
@@ -57,6 +59,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._rng = np.random.default_rng(42)
         self._masses = np.empty((0,), dtype=np.float32)
         self._step_count = 0
+        self._last_measurement_diagnostics: dict[str, float] = {}
 
     @property
     def num_particles(self) -> int:
@@ -127,9 +130,39 @@ class FrankaWarpEnv(ParticleEnvironment):
         if self._batch is None:
             raise RuntimeError("Warp batch must be initialized before likelihood evaluation.")
         sim_forces = self._batch.sensor_slice(self.force_adr, 3)
-        diff = np.asarray(observation, dtype=np.float32) - sim_forces
+        observation_np = np.asarray(observation, dtype=np.float32)
+        diff = observation_np - sim_forces
         dist_sq = np.sum(diff**2, axis=1)
-        return np.exp(-0.5 * dist_sq / 1.0)
+        scaled_log_likelihoods = -0.5 * dist_sq / self._MEASUREMENT_VARIANCE
+        scaled_log_likelihoods = scaled_log_likelihoods - np.max(scaled_log_likelihoods)
+        likelihoods = np.exp(scaled_log_likelihoods)
+
+        force_norms = np.linalg.norm(sim_forces, axis=1)
+        diff_norms = np.linalg.norm(diff, axis=1)
+        self._last_measurement_diagnostics = {
+            "obs_fx": float(observation_np[0]),
+            "obs_fy": float(observation_np[1]),
+            "obs_fz": float(observation_np[2]),
+            "obs_norm": float(np.linalg.norm(observation_np)),
+            "sim_force_norm_min": float(np.min(force_norms)),
+            "sim_force_norm_max": float(np.max(force_norms)),
+            "sim_force_norm_mean": float(np.mean(force_norms)),
+            "sim_force_axis_std_x": float(np.std(sim_forces[:, 0])),
+            "sim_force_axis_std_y": float(np.std(sim_forces[:, 1])),
+            "sim_force_axis_std_z": float(np.std(sim_forces[:, 2])),
+            "diff_norm_min": float(np.min(diff_norms)),
+            "diff_norm_max": float(np.max(diff_norms)),
+            "diff_norm_mean": float(np.mean(diff_norms)),
+            "likelihood_min": float(np.min(likelihoods)),
+            "likelihood_max": float(np.max(likelihoods)),
+            "likelihood_mean": float(np.mean(likelihoods)),
+            "likelihood_std": float(np.std(likelihoods)),
+        }
+
+        return likelihoods
+
+    def last_measurement_diagnostics(self) -> dict[str, float]:
+        return self._last_measurement_diagnostics.copy()
 
     def resample_states(self, indexes: np.ndarray) -> None:
         if self._batch is None:

@@ -7,11 +7,14 @@ services:
     container_name: simbay
     environment:
       MPLBACKEND: Agg
+      SIMBAY_PARTICLES: "100"
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
       SIMBAY_BACKEND: warp
+      SIMBAY_DOCKER_TARGET: "cuda"
       SIMBAY_METRICS_ENABLED: "1"
       SIMBAY_METRICS_PORT: "8000"
+      
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
