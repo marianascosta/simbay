@@ -826,24 +826,6 @@ rocm = ["jax-rocm60-plugin (==0.5.0)", "jaxlib (==0.5.0)"]
 tpu = ["jaxlib (==0.5.0)", "libtpu (==0.0.8)", "libtpu-nightly (==0.1.dev20241010+nightly.cleanup)", "requests"]
 
 [[package]]
-name = "jax-metal"
-version = "0.1.1"
-description = "JAX acceleration for Mac GPUs."
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "jax_metal-0.1.1-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:d918a78443cb808c9491a24a5c2a94cc4eabfd0461d5bcda29a8f332dfbe9b7e"},
-    {file = "jax_metal-0.1.1-py3-none-macosx_13_0_arm64.whl", hash = "sha256:f1dbfecb298cdd3ba6da3ad6dc9a2adb63d71741f8b8ece28c296b32d608b6c8"},
-]
-
-[package.dependencies]
-jax = ">=0.4.34"
-jaxlib = ">=0.4.34"
-six = ">=1.15.0"
-wheel = ">=0.35,<1.0"
-
-[[package]]
 name = "jaxlib"
 version = "0.5.0"
 description = "XLA library for JAX"
@@ -1317,6 +1299,31 @@ trimesh = "*"
 
 [package.extras]
 warp = ["warp-lang (==1.11.1)"]
+
+[[package]]
+name = "mujoco-warp"
+version = "3.6.0"
+description = "MuJoCo Warp (MJWarp)"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "extra == \"warp\""
+files = [
+    {file = "mujoco_warp-3.6.0-py3-none-any.whl", hash = "sha256:371a405b186332cbfaa9630aabf35967405ef847cb7ea7c018ec67426a2ea160"},
+    {file = "mujoco_warp-3.6.0.tar.gz", hash = "sha256:3c4111a4e13dc61268ddac52593ac5032c05a7d80f0c5e3c98bf5881e32b5d06"},
+]
+
+[package.dependencies]
+absl-py = "*"
+etils = {version = "*", extras = ["epath"]}
+mujoco = ">=3.5.0"
+numpy = "*"
+warp-lang = ">=1.12"
+
+[package.extras]
+cpu = ["jax"]
+cuda = ["jax[cuda12]"]
+dev = ["lsprotocol (>=2023.0.1,<2024.0.0)", "mujoco (>=3.5.0.dev0)", "pre-commit", "pygls (>=1.0.0,<2.0.0)", "pytest", "pytest-xdist", "ruff", "warp-lang (>=1.11.0.dev0)"]
 
 [[package]]
 name = "nh3"
@@ -1968,6 +1975,31 @@ files = [
 ]
 
 [[package]]
+name = "warp-lang"
+version = "1.12.0"
+description = "A Python framework for high-performance simulation and graphics programming"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"warp\""
+files = [
+    {file = "warp_lang-1.12.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c78c3701d5cad86c30ef5017410d294ec46a396bb0d502ee1c98743494f3a62f"},
+    {file = "warp_lang-1.12.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:a1436f60a1881cd94f787e751a83fc0987626be2d3e2b4e74c64a6947c6d1266"},
+    {file = "warp_lang-1.12.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:a2d6decba693aba5b828573c4414fd6a3f4c4a934db9c322736ef2b3fa99fe76"},
+    {file = "warp_lang-1.12.0-py3-none-win_amd64.whl", hash = "sha256:697248edd2f1e2952f50e3db33b214af76173641a8894aacc467bed6dc247f8a"},
+]
+
+[package.dependencies]
+numpy = "*"
+
+[package.extras]
+benchmark = ["usd-core (>=25.5) ; platform_machine != \"aarch64\" and python_version < \"3.14\"", "usd-exchange (>=2.2) ; python_version >= \"3.10\" and python_version < \"3.13\" and platform_machine == \"aarch64\""]
+dev = ["coverage[toml]", "nvtx", "warp-lang[docs]", "warp-lang[examples]"]
+docs = ["myst_parser", "nvidia-sphinx-theme ; python_version >= \"3.9\"", "pre-commit", "sphinx-copybutton"]
+examples = ["blosc (>=1.11.1)", "matplotlib (>=3.7.5)", "pillow (>=10.4.0)", "psutil (>=7.1.0)", "pyglet (>=2.1.9)", "usd-core (>=25.5) ; platform_machine != \"aarch64\" and python_version < \"3.14\"", "usd-exchange (>=2.2) ; python_version >= \"3.10\" and python_version < \"3.13\" and platform_machine == \"aarch64\""]
+torch-cu12 = ["torch (>=2.7.0) ; python_version >= \"3.9\"", "warp-lang[examples]"]
+
+[[package]]
 name = "websocket-client"
 version = "1.9.0"
 description = "WebSocket client for Python with low level API options"
@@ -1983,24 +2015,6 @@ files = [
 docs = ["Sphinx (>=6.0)", "myst-parser (>=2.0.0)", "sphinx_rtd_theme (>=1.1.0)"]
 optional = ["python-socks", "wsaccel"]
 test = ["pytest", "websockets"]
-
-[[package]]
-name = "wheel"
-version = "0.46.3"
-description = "Command line tool for manipulating wheel files"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "wheel-0.46.3-py3-none-any.whl", hash = "sha256:4b399d56c9d9338230118d705d9737a2a468ccca63d5e813e2a4fc7815d8bc4d"},
-    {file = "wheel-0.46.3.tar.gz", hash = "sha256:e3e79874b07d776c40bd6033f8ddf76a7dad46a7b8aa1b2787a83083519a1803"},
-]
-
-[package.dependencies]
-packaging = ">=24.0"
-
-[package.extras]
-test = ["pytest (>=6.0.0)", "setuptools (>=77)"]
 
 [[package]]
 name = "zipp"
@@ -2022,7 +2036,10 @@ enabler = ["pytest-enabler (>=2.2)"]
 test = ["big-O", "jaraco.functools", "jaraco.itertools", "jaraco.test", "more_itertools", "pytest (>=6,!=8.1.*)", "pytest-ignore-flaky"]
 type = ["pytest-mypy"]
 
+[extras]
+warp = ["mujoco-warp", "warp-lang"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "d54575a2b5ebd8502e56359093bd8af773b899984149798e2e2997b02e63ee2f"
+content-hash = "6d28eafda62c3bd621f3f701aac3bce8825ac78959083b35b89ee3d4a83e1fbc"

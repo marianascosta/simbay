@@ -1,7 +1,4 @@
 import mujoco
-import jax
-import jax.numpy as jnp
-from mujoco import mjx
 
 
 def prepare_model_for_mjx(mj_model):
@@ -40,6 +37,9 @@ def batch_mjx_model(mjx_model, masses, body_id, n):
     Returns:
         A batched MJX model pytree with a leading dimension of *n*.
     """
+    import jax
+    import jax.numpy as jnp
+
     batched = jax.tree.map(lambda x: jnp.stack([x] * n), mjx_model)
     new_body_mass = batched.body_mass.at[:, body_id].set(masses)
     return batched.replace(body_mass=new_body_mass)
@@ -47,4 +47,7 @@ def batch_mjx_model(mjx_model, masses, body_id, n):
 
 def batch_mjx_data(mjx_data, n):
     """Stack N copies of MJX data into a batched pytree."""
+    import jax
+    import jax.numpy as jnp
+
     return jax.tree.map(lambda x: jnp.stack([x] * n), mjx_data)
