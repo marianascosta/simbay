@@ -65,6 +65,7 @@ class WarpBatch:
             (self._size, 1),
         ).astype(np.float32)
         base_mass_np[:, body_id] = np.asarray(masses, dtype=np.float32)
+        self._body_mass_np = base_mass_np.copy()
         self._model.body_mass = wp.from_numpy(base_mass_np, dtype=wp.float32)
         mjw.set_const(self._model, self._data)
 
@@ -92,10 +93,8 @@ class WarpBatch:
         logger.info("warp_batch_rollout_warmup_done steps=%d", steps)
 
     def step(self, control_input: np.ndarray, masses: np.ndarray) -> None:
-        mass_np = self._model.body_mass.numpy()
-        mass_np[:, self._body_id] = np.asarray(masses, dtype=np.float32)
-        _assign_warp_array(self._model.body_mass, mass_np)
-        mjw.set_const(self._model, self._data)
+        self._body_mass_np[:, self._body_id] = np.asarray(masses, dtype=np.float32)
+        _assign_warp_array(self._model.body_mass, self._body_mass_np)
 
         ctrl_np = np.broadcast_to(
             np.asarray(control_input, dtype=np.float32),
@@ -125,8 +124,8 @@ class WarpBatch:
             np_array = array.numpy()
             _assign_warp_array(array, np_array[indexes_np])
 
-        mass_np = self._model.body_mass.numpy()
-        _assign_warp_array(self._model.body_mass, mass_np[indexes_np])
+        self._body_mass_np = self._body_mass_np[indexes_np]
+        _assign_warp_array(self._model.body_mass, self._body_mass_np)
         mjw.set_const(self._model, self._data)
 
     def memory_profile(self) -> dict[str, int | str | bool]:
