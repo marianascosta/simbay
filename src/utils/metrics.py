@@ -528,6 +528,8 @@ class SimbayMetrics:
         *,
         invalid_sensor_events: int,
         invalid_state_events: int,
+        first_invalid_sensor_step: int,
+        first_invalid_state_step: int,
         sim_force_nonfinite_count: int,
         diff_nonfinite_count: int,
         likelihood_nonfinite_count: int,
@@ -545,6 +547,16 @@ class SimbayMetrics:
             "simbay_invalid_state_events_total",
             invalid_state_events,
             "Cumulative count of Warp state snapshots with non-finite entries.",
+        )
+        self._store.set_gauge(
+            "simbay_first_invalid_sensor_step",
+            first_invalid_sensor_step,
+            "First Warp filter step index that produced a non-finite sensor-derived value, or -1 if none.",
+        )
+        self._store.set_gauge(
+            "simbay_first_invalid_state_step",
+            first_invalid_state_step,
+            "First Warp filter step index that produced a non-finite backend state value, or -1 if none.",
         )
         self._store.set_gauge(
             "simbay_sim_force_nonfinite_count",
@@ -588,7 +600,10 @@ class SimbayMetrics:
         contact_count_mean: float,
         contact_count_max: float,
         active_contact_particle_ratio: float,
+        contact_metric_available: bool,
+        contact_force_mismatch: bool,
         valid_force_particle_ratio: float,
+        sim_force_signal_particle_ratio: float,
     ) -> None:
         self._store.set_gauge(
             "simbay_contact_count_mean",
@@ -606,9 +621,24 @@ class SimbayMetrics:
             "Fraction of Warp particles with at least one active contact.",
         )
         self._store.set_gauge(
+            "simbay_contact_metric_available",
+            1.0 if contact_metric_available else 0.0,
+            "Whether Warp exposed a contact-count array for the latest likelihood evaluation.",
+        )
+        self._store.set_gauge(
+            "simbay_contact_force_mismatch",
+            1.0 if contact_force_mismatch else 0.0,
+            "Whether the latest likelihood evaluation had non-zero force signal but zero reported contacts.",
+        )
+        self._store.set_gauge(
             "simbay_valid_force_particle_ratio",
             valid_force_particle_ratio,
             "Fraction of particles with finite force vectors in the latest likelihood evaluation.",
+        )
+        self._store.set_gauge(
+            "simbay_force_signal_particle_ratio",
+            sim_force_signal_particle_ratio,
+            "Fraction of particles with non-trivial simulated force norm in the latest likelihood evaluation.",
         )
 
     def update_weight_health(

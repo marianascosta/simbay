@@ -626,6 +626,8 @@ for step, qpos in enumerate(traj4):
         metrics.update_invalid_state_counts(
             invalid_sensor_events=int(diagnostics.get("invalid_sensor_events", 0.0)),
             invalid_state_events=int(diagnostics.get("invalid_state_events", 0.0)),
+            first_invalid_sensor_step=int(diagnostics.get("first_invalid_sensor_step", -1.0)),
+            first_invalid_state_step=int(diagnostics.get("first_invalid_state_step", -1.0)),
             sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
             diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
             likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
@@ -640,8 +642,13 @@ for step, qpos in enumerate(traj4):
             active_contact_particle_ratio=float(
                 diagnostics.get("active_contact_particle_ratio", 0.0)
             ),
+            contact_metric_available=bool(diagnostics.get("contact_metric_available", 0.0)),
+            contact_force_mismatch=bool(diagnostics.get("contact_force_mismatch", 0.0)),
             valid_force_particle_ratio=float(
                 diagnostics.get("valid_force_particle_ratio", 0.0)
+            ),
+            sim_force_signal_particle_ratio=float(
+                diagnostics.get("sim_force_signal_particle_ratio", 0.0)
             ),
         )
     should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0

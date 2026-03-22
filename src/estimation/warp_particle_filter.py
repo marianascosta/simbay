@@ -22,7 +22,7 @@ from .warp_batch import WarpBatch
 class FrankaWarpEnv(ParticleEnvironment):
     """Batched MJWarp particle environment for mass estimation."""
 
-    _MEASUREMENT_VARIANCE = 25.0
+    _MEASUREMENT_VARIANCE = 1.0
 
     def __init__(
         self,
@@ -64,6 +64,8 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._invalid_state_events = 0
         self._sensor_invalid_active = False
         self._state_invalid_active = False
+        self._first_invalid_sensor_step: int | None = None
+        self._first_invalid_state_step: int | None = None
 
     @property
     def num_particles(self) -> int:
@@ -137,14 +139,11 @@ class FrankaWarpEnv(ParticleEnvironment):
         observation_np = np.asarray(observation, dtype=np.float32)
         diff = observation_np - sim_forces
         dist_sq = np.sum(diff**2, axis=1)
-        scaled_log_likelihoods = -0.5 * dist_sq / self._MEASUREMENT_VARIANCE
-        scaled_log_likelihoods = scaled_log_likelihoods - np.max(scaled_log_likelihoods)
-        likelihoods = np.exp(scaled_log_likelihoods)
+        likelihoods = np.exp(-0.5 * dist_sq / self._MEASUREMENT_VARIANCE)
         sim_force_finite = np.isfinite(sim_forces)
         diff_finite = np.isfinite(diff)
         likelihood_finite = np.isfinite(likelihoods)
         valid_force_particle = np.isfinite(sim_forces).all(axis=1)
-        safe_force_norms = np.linalg.norm(np.nan_to_num(sim_forces, nan=0.0), axis=1)
         sim_force_nonfinite_count = int(sim_forces.size - np.count_nonzero(sim_force_finite))
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
         likelihood_nonfinite_count = int(
@@ -155,9 +154,13 @@ class FrankaWarpEnv(ParticleEnvironment):
             or diff_nonfinite_count > 0
             or likelihood_nonfinite_count > 0
         )
-        if sensor_invalid_now and not self._sensor_invalid_active:
+        sensor_invalid_transition = sensor_invalid_now and not self._sensor_invalid_active
+        if sensor_invalid_transition:
             self._invalid_sensor_events += 1
+            if self._first_invalid_sensor_step is None:
+                self._first_invalid_sensor_step = self._step_count
         self._sensor_invalid_active = sensor_invalid_now
+        state_invalid_now = False
         state_nonfinite_counts = {
             "qpos_nonfinite_count": 0,
             "qvel_nonfinite_count": 0,
@@ -167,16 +170,57 @@ class FrankaWarpEnv(ParticleEnvironment):
         if self._batch is not None:
             state_nonfinite_counts = self._batch.state_nonfinite_counts()
             state_invalid_now = any(value > 0 for value in state_nonfinite_counts.values())
-            if state_invalid_now and not self._state_invalid_active:
+            state_invalid_transition = state_invalid_now and not self._state_invalid_active
+            if state_invalid_transition:
                 self._invalid_state_events += 1
+                if self._first_invalid_state_step is None:
+                    self._first_invalid_state_step = self._step_count
             self._state_invalid_active = state_invalid_now
-        contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
-        contact_proxy = contact_counts.astype(np.float32)
-        if contact_counts.size and int(np.max(contact_counts)) == 0:
-            contact_proxy = (safe_force_norms > 1e-3).astype(np.float32)
+        else:
+            state_invalid_transition = False
+        contact_counts = (
+            self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
+        )
 
         force_norms = np.linalg.norm(sim_forces, axis=1)
         diff_norms = np.linalg.norm(diff, axis=1)
+        sim_force_signal_particle_ratio = (
+            float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
+        )
+        contact_metric_available = float(contact_counts.size > 0)
+        contact_force_mismatch = float(
+            contact_counts.size > 0
+            and float(np.max(contact_counts)) == 0.0
+            and sim_force_signal_particle_ratio > 0.0
+        )
+
+        if sensor_invalid_transition:
+            self.logger.warning(
+                "warp_invalid_sensor_state step=%d obs=(%.6f,%.6f,%.6f) "
+                "mass_min=%.6f mass_max=%.6f mass_mean=%.6f "
+                "sim_force_nonfinite=%d diff_nonfinite=%d likelihood_nonfinite=%d",
+                self._step_count,
+                float(observation_np[0]),
+                float(observation_np[1]),
+                float(observation_np[2]),
+                float(np.min(self._masses)) if self._masses.size else 0.0,
+                float(np.max(self._masses)) if self._masses.size else 0.0,
+                float(np.mean(self._masses)) if self._masses.size else 0.0,
+                sim_force_nonfinite_count,
+                diff_nonfinite_count,
+                likelihood_nonfinite_count,
+            )
+        if state_invalid_transition:
+            self.logger.warning(
+                "warp_invalid_backend_state step=%d qpos_nonfinite=%d qvel_nonfinite=%d "
+                "sensordata_nonfinite=%d ctrl_nonfinite=%d",
+                self._step_count,
+                state_nonfinite_counts["qpos_nonfinite_count"],
+                state_nonfinite_counts["qvel_nonfinite_count"],
+                state_nonfinite_counts["sensordata_nonfinite_count"],
+                state_nonfinite_counts["ctrl_nonfinite_count"],
+            )
+
         self._last_measurement_diagnostics = {
             "obs_fx": float(observation_np[0]),
             "obs_fy": float(observation_np[1]),
@@ -199,16 +243,29 @@ class FrankaWarpEnv(ParticleEnvironment):
             "valid_force_particle_ratio": (
                 float(np.mean(valid_force_particle)) if valid_force_particle.size else 0.0
             ),
-            "contact_count_mean": float(np.mean(contact_proxy)) if contact_proxy.size else 0.0,
-            "contact_count_max": float(np.max(contact_proxy)) if contact_proxy.size else 0.0,
+            "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
+            "contact_count_mean": float(np.mean(contact_counts)) if contact_counts.size else 0.0,
+            "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,
             "active_contact_particle_ratio": (
-                float(np.mean(contact_proxy > 0)) if contact_proxy.size else 0.0
+                float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0
             ),
+            "contact_metric_available": contact_metric_available,
+            "contact_force_mismatch": contact_force_mismatch,
             "sim_force_nonfinite_count": float(sim_force_nonfinite_count),
             "diff_nonfinite_count": float(diff_nonfinite_count),
             "likelihood_nonfinite_count": float(likelihood_nonfinite_count),
             "invalid_sensor_events": float(self._invalid_sensor_events),
             "invalid_state_events": float(self._invalid_state_events),
+            "first_invalid_sensor_step": float(
+                self._first_invalid_sensor_step
+                if self._first_invalid_sensor_step is not None
+                else -1
+            ),
+            "first_invalid_state_step": float(
+                self._first_invalid_state_step
+                if self._first_invalid_state_step is not None
+                else -1
+            ),
             "qpos_nonfinite_count": float(state_nonfinite_counts["qpos_nonfinite_count"]),
             "qvel_nonfinite_count": float(state_nonfinite_counts["qvel_nonfinite_count"]),
             "sensordata_nonfinite_count": float(

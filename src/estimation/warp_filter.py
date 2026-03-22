@@ -191,6 +191,25 @@ class WarpParticleFilter:
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
             self.weights
         )
+        if collapsed_to_uniform and (
+            diagnostics.get("invalid_sensor_events", 0.0) > 0.0
+            or diagnostics.get("invalid_state_events", 0.0) > 0.0
+            or diagnostics.get("likelihood_finite_ratio", 1.0) < 1.0
+        ):
+            self.logger.warning(
+                "warp_weight_update_uninformative step=%d ess=%.2f "
+                "likelihood_finite_ratio=%.6f sim_force_nonfinite=%d "
+                "diff_nonfinite=%d likelihood_nonfinite=%d "
+                "first_invalid_sensor_step=%d first_invalid_state_step=%d",
+                self._step_index,
+                float(self._ess),
+                diagnostics.get("likelihood_finite_ratio", 1.0),
+                int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
+                int(diagnostics.get("diff_nonfinite_count", 0.0)),
+                int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
+                int(diagnostics.get("first_invalid_sensor_step", -1.0)),
+                int(diagnostics.get("first_invalid_state_step", -1.0)),
+            )
         should_log_diag = self._step_index < 5 or self._step_index % 100 == 0
         if should_log_diag:
             self.logger.info(
