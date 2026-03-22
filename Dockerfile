@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ARG JAX_VERSION=0.5.0
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -16,6 +18,7 @@ RUN pip install poetry
 
 COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --no-interaction --no-ansi
+RUN pip install "jax[cuda12]==${JAX_VERSION}"
 
 COPY assets ./assets
 COPY src ./src

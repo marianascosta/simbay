@@ -1,4 +1,4 @@
-.PHONY: install shell run run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test
+.PHONY: install shell run run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test docker-smoke-gpu
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -23,11 +23,14 @@ check:
 make-smoke-test:
 	SIMBAY_HEADLESS=1 SIMBAY_USE_MJX=1 SIMBAY_PARTICLES=1 python main.py
 
+docker-smoke-gpu:
+	docker compose run --build --rm -e SIMBAY_HEADLESS=1 -e SIMBAY_USE_MJX=1 -e SIMBAY_REQUIRE_GPU=1 -e SIMBAY_SMOKE_TEST_ONLY=1 -e SIMBAY_PARTICLES=1 -e SIMBAY_REPLAY_BENCHMARK_CHUNK_SIZES= -e SIMBAY_REPLAY_CHUNK_SIZE=0 simbay
+
 docker-build:
 	docker compose build
 
 docker-run:
-	docker compose up --build
+	docker compose up --build -d
 	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"
 
 docker-simbay-up:
@@ -50,3 +53,9 @@ format:
 
 lint:
 	poetry run black --check -l 120 ./
+
+down:
+	docker compose down
+
+up:
+	docker compose up --build -d
