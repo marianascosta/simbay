@@ -212,6 +212,10 @@ class MJXParticleFilter:
             phase=phase,
         )
 
+    def block_until_ready(self) -> None:
+        self.env.block_until_ready()
+        jax.block_until_ready(self.particles)
+
     def update(self, observation) -> None:
         likelihoods = self.env.compute_likelihoods_device(observation)
         self.weights = self._update_jit(self.weights, likelihoods)
@@ -262,6 +266,11 @@ class MJXParticleFilter:
 
     def particles_host(self):
         return jax.device_get(self.particles)
+
+    def replay_state_snapshot(self) -> dict[str, jax.Array]:
+        snapshot = self.env.replay_state_snapshot()
+        snapshot["particles"] = self.particles
+        return snapshot
 
     def memory_profile(self) -> dict[str, float | int]:
         return {

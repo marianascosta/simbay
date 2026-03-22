@@ -93,9 +93,26 @@ def _parse_replay_chunk_size() -> int:
     return chunk_size
 
 
+def _parse_replay_benchmark_chunk_sizes() -> tuple[int, ...]:
+    raw_value = os.getenv("SIMBAY_REPLAY_BENCHMARK_CHUNK_SIZES", "32,64").strip()
+    if not raw_value:
+        return ()
+
+    chunk_sizes = tuple(int(part.strip()) for part in raw_value.split(",") if part.strip())
+    allowed_chunk_sizes = {32, 64}
+    invalid = [chunk_size for chunk_size in chunk_sizes if chunk_size not in allowed_chunk_sizes]
+    if invalid:
+        raise ValueError(
+            "SIMBAY_REPLAY_BENCHMARK_CHUNK_SIZES must contain only 32 and/or 64, "
+            f"got {sorted(set(invalid))}"
+        )
+    return chunk_sizes
+
+
 def _replay_trajectory(particle_filter, phase: str, trajectory: np.ndarray, replay_chunk_size: int) -> None:
     if isinstance(particle_filter, MJXParticleFilter) and replay_chunk_size > 0:
         particle_filter.replay_chunked(trajectory, replay_chunk_size, phase=phase)
+        particle_filter.block_until_ready()
         return
 
     for qpos in trajectory:
@@ -157,13 +174,15 @@ def _log_replay_benchmark_summary(mode: str, summary: dict[str, dict[str, float 
         )
     if snapshot is not None:
         logger.info(
-            "replay_reference_profile mode=%s predict_calls=%d propagate_calls=%d batch_step_calls=%d "
+            "replay_reference_profile mode=%s predict_calls=%d propagate_calls=%d "
+            "batch_step_calls=%d batch_step_chunk_calls=%d "
             "rng_wall_ms=%.3f propagate_wall_ms=%.3f batch_step_wall_ms=%.3f block_wall_ms=%.3f "
             "mjx_bytes_in_use=%d mjx_peak_bytes_in_use=%d mjx_bytes_limit=%d",
             mode,
             int(snapshot["predict_call_count"]),
             int(snapshot["propagate_call_count"]),
             int(snapshot["batch_step_call_count"]),
+            int(snapshot.get("batch_step_chunk_call_count", 0)),
             float(snapshot["rng_wall_seconds"]) * 1000.0,
             float(snapshot["propagate_wall_seconds"]) * 1000.0,
             float(snapshot["batch_step_wall_seconds"]) * 1000.0,
@@ -172,6 +191,84 @@ def _log_replay_benchmark_summary(mode: str, summary: dict[str, dict[str, float 
             int(snapshot["mjx_peak_bytes_in_use"]),
             int(snapshot["mjx_bytes_limit"]),
         )
+
+
+def _run_chunked_replay(
+    particle_filter: MJXParticleFilter,
+    trajectories: list[tuple[str, np.ndarray]],
+    *,
+    chunk_size: int,
+) -> dict[str, dict[str, float | int]]:
+    results: dict[str, dict[str, float | int]] = {}
+    total_steps = 0
+    total_wall_seconds = 0.0
+
+    for phase, trajectory in trajectories:
+        phase_start = time.perf_counter()
+        particle_filter.replay_chunked(trajectory, chunk_size, phase=phase)
+        particle_filter.block_until_ready()
+        phase_wall_seconds = time.perf_counter() - phase_start
+        phase_steps = len(trajectory)
+        total_steps += phase_steps
+        total_wall_seconds += phase_wall_seconds
+        results[phase] = {
+            "steps": phase_steps,
+            "wall_seconds": phase_wall_seconds,
+            "ms_per_step": (phase_wall_seconds / phase_steps) * 1000.0 if phase_steps else 0.0,
+        }
+
+    results["total"] = {
+        "steps": total_steps,
+        "wall_seconds": total_wall_seconds,
+        "ms_per_step": (total_wall_seconds / total_steps) * 1000.0 if total_steps else 0.0,
+    }
+    return results
+
+
+def _validate_chunked_replay_against_reference(
+    limits,
+    num_particles: int,
+    trajectories: list[tuple[str, np.ndarray]],
+    *,
+    chunk_size: int,
+) -> None:
+    reference_env, reference_filter = _create_particle_filter(True, limits, num_particles)
+    reference_filter.warmup_runtime()
+    _run_reference_replay(reference_filter, trajectories, synchronize=True)
+    reference_filter.block_until_ready()
+    reference_snapshot = reference_filter.replay_state_snapshot()
+
+    chunked_env, chunked_filter = _create_particle_filter(True, limits, num_particles)
+    chunked_filter.warmup_runtime(replay_chunk_sizes=(chunk_size,))
+    _run_chunked_replay(chunked_filter, trajectories, chunk_size=chunk_size)
+    chunked_snapshot = chunked_filter.replay_state_snapshot()
+
+    particle_diff = float(
+        jax.device_get(
+            jnp.max(jnp.abs(reference_snapshot["particles"] - chunked_snapshot["particles"]))
+        )
+    )
+    qpos_diff = float(
+        jax.device_get(jnp.max(jnp.abs(reference_snapshot["qpos"] - chunked_snapshot["qpos"])))
+    )
+    force_diff = float(
+        jax.device_get(
+            jnp.max(
+                jnp.abs(reference_snapshot["force_sensor"] - chunked_snapshot["force_sensor"])
+            )
+        )
+    )
+
+    logger.info(
+        "replay_chunk_validation chunk_size=%d particle_max_abs_diff=%.9f "
+        "qpos_max_abs_diff=%.9f force_sensor_max_abs_diff=%.9f",
+        chunk_size,
+        particle_diff,
+        qpos_diff,
+        force_diff,
+    )
+
+    del reference_env, reference_filter, chunked_env, chunked_filter
 
 
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
@@ -210,6 +307,7 @@ setup_stage = metrics.start_stage("setup")
 logger = setup_logging()
 headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
 use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
+require_gpu = _env_enabled("SIMBAY_REQUIRE_GPU")
 export_particle_mass_metrics = os.getenv(
     "SIMBAY_EXPORT_PARTICLE_MASS_METRICS",
     "false",
@@ -220,7 +318,9 @@ particle_mass_metrics_every_n_steps = max(
 )
 benchmark_replay_only = _env_enabled("SIMBAY_REPLAY_BENCHMARK_ONLY")
 benchmark_replay_sync = _env_enabled("SIMBAY_REPLAY_BENCHMARK_SYNC", "true")
+smoke_test_only = _env_enabled("SIMBAY_SMOKE_TEST_ONLY")
 replay_chunk_size = _parse_replay_chunk_size()
+benchmark_chunk_sizes = _parse_replay_benchmark_chunk_sizes()
 
 if use_mjx:
     try:
@@ -256,6 +356,18 @@ env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
 metrics.set_particle_count(num_particles)
 
+if use_mjx and require_gpu and env_memory_profile["execution_platform"] != "gpu":
+    logger.error(
+        "gpu_required_but_unavailable execution_platform=%s execution_device=%s "
+        "default_jax_platform=%s default_jax_device=%s",
+        env_memory_profile["execution_platform"],
+        env_memory_profile["execution_device"],
+        env_memory_profile["default_jax_platform"],
+        env_memory_profile["default_jax_device"],
+    )
+    shutdown_metrics(metrics)
+    raise RuntimeError("SIMBAY_REQUIRE_GPU is enabled but MJX is not running on a GPU.")
+
 if use_mjx:
     metrics.set_backend("mjx", str(env_memory_profile["execution_device"]))
     metrics.update_mjx_memory(
@@ -268,7 +380,7 @@ if use_mjx:
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mjx "
         "benchmark_replay_only=%s benchmark_replay_sync=%s "
-        "replay_chunk_size=%d "
+        "replay_chunk_size=%d benchmark_chunk_sizes=%s "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -285,6 +397,7 @@ if use_mjx:
         benchmark_replay_only,
         benchmark_replay_sync,
         replay_chunk_size,
+        benchmark_chunk_sizes,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -305,7 +418,7 @@ else:
         "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
         "headless=%s backend=mujoco "
         "benchmark_replay_only=%s benchmark_replay_sync=%s "
-        "replay_chunk_size=%d "
+        "replay_chunk_size=%d benchmark_chunk_sizes=%s "
         "state_memory_total_bytes=%d state_memory_total=%s "
         "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
         "process_memory_per_particle_estimate_bytes=%.2f "
@@ -323,6 +436,7 @@ else:
         benchmark_replay_only,
         benchmark_replay_sync,
         replay_chunk_size,
+        benchmark_chunk_sizes,
         memory_profile["state_bytes_total"],
         format_bytes(memory_profile["state_bytes_total"]),
         memory_profile["state_bytes_per_particle"],
@@ -342,6 +456,16 @@ else:
     )
     metrics.set_backend("mujoco", "cpu")
 metrics.finish_stage(setup_stage)
+
+if smoke_test_only:
+    logger.info(
+        "smoke_test_complete backend=%s execution_platform=%s execution_device=%s",
+        "mjx" if use_mjx else "mujoco",
+        env_memory_profile.get("execution_platform", "cpu"),
+        env_memory_profile.get("execution_device", "cpu"),
+    )
+    shutdown_metrics(metrics)
+    raise SystemExit(0)
 
 # ==========================================
 # 2. TRAJECTORY PLANNING
@@ -433,6 +557,41 @@ if benchmark_replay_only:
             compile_overhead_seconds * 1000.0,
             benchmark_replay_sync,
         )
+
+        for chunk_size in benchmark_chunk_sizes:
+            _validate_chunked_replay_against_reference(
+                limits,
+                num_particles,
+                replay_trajectories,
+                chunk_size=chunk_size,
+            )
+
+            chunk_env, chunk_filter = _create_particle_filter(use_mjx, limits, num_particles)
+            chunk_filter.warmup_runtime(replay_chunk_sizes=(chunk_size,))
+            chunk_summary = _run_chunked_replay(
+                chunk_filter,
+                replay_trajectories,
+                chunk_size=chunk_size,
+            )
+            _log_replay_benchmark_summary(
+                f"chunked_{chunk_size}",
+                chunk_summary,
+                chunk_filter.replay_profile_snapshot(),
+            )
+            logger.info(
+                "replay_chunk_benchmark_compare chunk_size=%d reference_ms_per_step=%.3f "
+                "chunked_ms_per_step=%.3f speedup=%.3f",
+                chunk_size,
+                float(steady_summary["total"]["ms_per_step"]),
+                float(chunk_summary["total"]["ms_per_step"]),
+                (
+                    float(steady_summary["total"]["ms_per_step"])
+                    / float(chunk_summary["total"]["ms_per_step"])
+                )
+                if float(chunk_summary["total"]["ms_per_step"]) > 0.0
+                else 0.0,
+            )
+            del chunk_env, chunk_filter
         del cold_env, steady_env
 
     shutdown_metrics(metrics)

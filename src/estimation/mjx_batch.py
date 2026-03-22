@@ -159,6 +159,10 @@ class MJXBatch:
     def step_call_count(self) -> int:
         return self._step_call_count
 
+    @property
+    def step_chunk_call_count(self) -> int:
+        return self._step_chunk_call_count
+
     def _audit_step_signature(self, control_input, masses, phase: str | None) -> None:
         control = jnp.asarray(control_input)
         particle_masses = jnp.asarray(masses)
@@ -241,6 +245,9 @@ class MJXBatch:
 
     def sensor_slice(self, start: int, width: int):
         return self._data.sensordata[:, start : start + width]
+
+    def qpos(self):
+        return self._data.qpos
 
     def resample(self, indexes) -> None:
         jax_indexes = jnp.asarray(indexes)

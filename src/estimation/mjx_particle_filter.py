@@ -141,9 +141,13 @@ class FrankaMJXEnv(ParticleEnvironment):
     def replay_profile_snapshot(self) -> dict[str, float | int]:
         memory_profile = self.memory_profile()
         batch_step_call_count = self._batch.step_call_count if self._batch is not None else 0
+        batch_step_chunk_call_count = (
+            self._batch.step_chunk_call_count if self._batch is not None else 0
+        )
         return {
             "propagate_call_count": int(self._replay_profile["propagate_call_count"]),
             "batch_step_call_count": int(batch_step_call_count),
+            "batch_step_chunk_call_count": int(batch_step_chunk_call_count),
             "rng_wall_seconds": float(self._replay_profile["rng_wall_seconds"]),
             "propagate_wall_seconds": float(self._replay_profile["propagate_wall_seconds"]),
             "batch_step_wall_seconds": float(self._replay_profile["batch_step_wall_seconds"]),
@@ -250,6 +254,19 @@ class FrankaMJXEnv(ParticleEnvironment):
             jax_particles = masses_chunk[-1]
 
         return jax_particles
+
+    def block_until_ready(self) -> None:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before synchronization.")
+        self._batch.block_until_ready()
+
+    def replay_state_snapshot(self) -> dict[str, jax.Array]:
+        if self._batch is None:
+            raise RuntimeError("MJX batch must be initialized before snapshotting state.")
+        return {
+            "qpos": self._batch.qpos(),
+            "force_sensor": self._batch.sensor_slice(self.force_adr, 3),
+        }
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         return np.asarray(self.compute_likelihoods_device(observation))
