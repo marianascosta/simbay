@@ -33,6 +33,16 @@ def _estimate_particles(particles: np.ndarray, weights: np.ndarray) -> float:
     return float(np.sum(particles * weights, axis=0))
 
 
+def _uniform_weight_metrics(weights: np.ndarray) -> tuple[float, float, bool]:
+    if weights.size == 0:
+        return 0.0, 0.0, False
+    uniform = 1.0 / weights.shape[0]
+    deviations = np.abs(weights - uniform)
+    l1_distance = float(np.sum(deviations))
+    max_deviation = float(np.max(deviations))
+    return l1_distance, max_deviation, bool(max_deviation <= 1e-6)
+
+
 def _systematic_resample(
     weights: np.ndarray,
     particles: np.ndarray,
@@ -87,6 +97,7 @@ class WarpParticleFilter:
         self._rng = np.random.default_rng(7)
         self._ess = float(self.N)
         self._step_index = 0
+        self._resample_count = 0
 
         state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
         self.state_bytes_total = state_bytes_total
@@ -154,6 +165,7 @@ class WarpParticleFilter:
         )
         self.env.resample_states(indexes)
         self._ess = float(self.N)
+        self._resample_count += 1
 
     def step(self, control_input, observation) -> dict[str, float | bool]:
         self.particles = self.env.propagate(self.particles, control_input)
@@ -174,9 +186,13 @@ class WarpParticleFilter:
         )
         if did_resample:
             self.env.resample_states(indexes)
+            self._resample_count += 1
+        diagnostics = self.env.last_measurement_diagnostics()
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
+            self.weights
+        )
         should_log_diag = self._step_index < 5 or self._step_index % 100 == 0
         if should_log_diag:
-            diagnostics = self.env.last_measurement_diagnostics()
             self.logger.info(
                 "warp_measurement_diagnostics step=%d resampled=%s "
                 "mass_min=%.6f mass_max=%.6f mass_mean=%.6f "
@@ -212,6 +228,11 @@ class WarpParticleFilter:
         return {
             "ess": float(self._ess),
             "resampled": did_resample,
+            "resample_count": self._resample_count,
+            "uniform_weight_l1_distance": uniform_weight_l1,
+            "uniform_weight_max_deviation": uniform_weight_max_dev,
+            "collapsed_to_uniform": collapsed_to_uniform,
+            "diagnostics": diagnostics,
         }
 
     def effective_sample_size(self) -> float:

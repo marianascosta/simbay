@@ -34,6 +34,17 @@ def _estimate_particles(particles: jax.Array, weights: jax.Array) -> jax.Array:
     return jnp.sum(particles * weights, axis=0)
 
 
+def _uniform_weight_metrics(weights: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    count = weights.shape[0]
+    uniform = 1.0 / count
+    deviations = jnp.abs(weights - uniform)
+    return (
+        jnp.sum(deviations),
+        jnp.max(deviations),
+        jnp.max(deviations) <= 1e-6,
+    )
+
+
 def _systematic_resample(
     weights: jax.Array,
     particles: jax.Array,
@@ -101,6 +112,7 @@ class MJXParticleFilter:
         self.weights = jnp.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
         self._rng_key = jax.random.PRNGKey(7)
         self._ess = float(self.N)
+        self._resample_count = 0
 
         state_bytes_total = int(self.particles.size * self.particles.dtype.itemsize)
         state_bytes_total += int(self.weights.size * self.weights.dtype.itemsize)
@@ -116,6 +128,7 @@ class MJXParticleFilter:
         self._update_jit = jax.jit(_normalize_weights)
         self._ess_jit = jax.jit(_effective_sample_size)
         self._update_resample_jit = jax.jit(_update_and_optionally_resample)
+        self._uniform_metrics_jit = jax.jit(_uniform_weight_metrics)
 
         self.logger.info(
             "mjx_particle_filter_initialized particles=%d state_bytes_total=%d "
@@ -180,6 +193,7 @@ class MJXParticleFilter:
         )
         self.env.resample_states_device(indexes)
         self._ess = float(self.N)
+        self._resample_count += 1
 
     def step(self, control_input, observation) -> dict[str, float | bool]:
         self.particles = self.env.propagate_particles_device(self.particles, control_input)
@@ -197,10 +211,18 @@ class MJXParticleFilter:
         did_resample_host = bool(jax.device_get(did_resample))
         if did_resample_host:
             self.env.resample_states_device(indexes)
+            self._resample_count += 1
         self._ess = float(jax.device_get(ess))
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = jax.device_get(
+            self._uniform_metrics_jit(self.weights)
+        )
         return {
             "ess": self._ess,
             "resampled": did_resample_host,
+            "resample_count": self._resample_count,
+            "uniform_weight_l1_distance": float(uniform_weight_l1),
+            "uniform_weight_max_deviation": float(uniform_weight_max_dev),
+            "collapsed_to_uniform": bool(collapsed_to_uniform),
         }
 
     def effective_sample_size(self) -> float:

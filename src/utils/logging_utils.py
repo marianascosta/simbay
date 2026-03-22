@@ -6,7 +6,17 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
-def setup_logging(log_dir: str | Path = "logs") -> logging.Logger:
+class _RunIdFilter(logging.Filter):
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self._run_id = run_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.run_id = self._run_id
+        return True
+
+
+def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logging.Logger:
     """
     Configure application logging for both stdout and a rotating file.
     """
@@ -24,13 +34,15 @@ def setup_logging(log_dir: str | Path = "logs") -> logging.Logger:
     log_path.mkdir(parents=True, exist_ok=True)
 
     formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        fmt="%(asctime)s %(levelname)s %(name)s run_id=%(run_id)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    run_id_filter = _RunIdFilter(run_id)
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(level)
     stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(run_id_filter)
 
     file_handler = RotatingFileHandler(
         log_path / "simbay.log",
@@ -39,6 +51,7 @@ def setup_logging(log_dir: str | Path = "logs") -> logging.Logger:
     )
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(run_id_filter)
 
     logger.addHandler(stream_handler)
     logger.addHandler(file_handler)
