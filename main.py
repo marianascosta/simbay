@@ -522,6 +522,7 @@ mass_series = ParticleMassTimeseriesCollector(
     flush_snapshots=mass_series_flush_snapshots,
 )
 latest_particles_snapshot = None
+phase_4_bootstrap_applied = False
 
 for step, qpos in enumerate(traj4):
     robot_execute_start = time.perf_counter()
@@ -542,7 +543,15 @@ for step, qpos in enumerate(traj4):
 
     # 3. Update beliefs based on the noisy real reading and resample
     if use_batched_backend:
-        step_result = particle_filter.step(qpos, noisy_ft_reading)
+        if backend == "warp" and not phase_4_bootstrap_applied:
+            step_result = particle_filter.bootstrap_first_update(
+                qpos,
+                noisy_ft_reading,
+                max_attempts=3,
+            )
+            phase_4_bootstrap_applied = True
+        else:
+            step_result = particle_filter.step(qpos, noisy_ft_reading)
     else:
         particle_filter.predict(qpos)
         particle_filter.update(noisy_ft_reading)
@@ -626,6 +635,9 @@ for step, qpos in enumerate(traj4):
         metrics.update_invalid_state_counts(
             invalid_sensor_events=int(diagnostics.get("invalid_sensor_events", 0.0)),
             invalid_state_events=int(diagnostics.get("invalid_state_events", 0.0)),
+            skipped_invalid_updates=int(step_result.get("skipped_invalid_updates", 0)),
+            skipped_invalid_update=bool(step_result.get("skipped_invalid_update", False)),
+            bootstrap_attempts=int(step_result.get("bootstrap_attempts", 1)),
             first_invalid_sensor_step=int(diagnostics.get("first_invalid_sensor_step", -1.0)),
             first_invalid_state_step=int(diagnostics.get("first_invalid_state_step", -1.0)),
             sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),

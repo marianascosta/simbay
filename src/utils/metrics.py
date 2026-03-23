@@ -528,6 +528,9 @@ class SimbayMetrics:
         *,
         invalid_sensor_events: int,
         invalid_state_events: int,
+        skipped_invalid_updates: int,
+        skipped_invalid_update: bool,
+        bootstrap_attempts: int,
         first_invalid_sensor_step: int,
         first_invalid_state_step: int,
         sim_force_nonfinite_count: int,
@@ -547,6 +550,21 @@ class SimbayMetrics:
             "simbay_invalid_state_events_total",
             invalid_state_events,
             "Cumulative count of Warp state snapshots with non-finite entries.",
+        )
+        self._store.set_gauge(
+            "simbay_skipped_invalid_updates_total",
+            skipped_invalid_updates,
+            "Cumulative count of Warp filter updates skipped because the likelihood batch or backend state was invalid.",
+        )
+        self._store.set_gauge(
+            "simbay_skipped_invalid_update",
+            1.0 if skipped_invalid_update else 0.0,
+            "Whether the latest Warp filter update was skipped because the likelihood batch or backend state was invalid.",
+        )
+        self._store.set_gauge(
+            "simbay_first_update_bootstrap_attempts",
+            bootstrap_attempts,
+            "Number of attempts used to obtain a valid first Warp phase-4 measurement update.",
         )
         self._store.set_gauge(
             "simbay_first_invalid_sensor_step",

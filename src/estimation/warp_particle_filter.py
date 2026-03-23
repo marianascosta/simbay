@@ -66,6 +66,11 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._state_invalid_active = False
         self._first_invalid_sensor_step: int | None = None
         self._first_invalid_state_step: int | None = None
+        self._repair_active = False
+        self._recovery_snapshot_ready = False
+        self._recovery_masses = np.empty((0,), dtype=np.float32)
+        self._recovery_step_count = 0
+        self._recovery_rng_state = self._rng.bit_generator.state
 
     @property
     def num_particles(self) -> int:
@@ -86,6 +91,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         self.logger.info("warp_runtime_warmup_done")
         self._masses = masses.copy()
         self._step_count = 0
+        self.capture_recovery_snapshot()
         return masses
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
@@ -135,11 +141,19 @@ class FrankaWarpEnv(ParticleEnvironment):
         del particles
         if self._batch is None:
             raise RuntimeError("Warp batch must be initialized before likelihood evaluation.")
+        repaired_worlds = np.zeros((self._num_particles,), dtype=bool)
+        pre_counts = self._batch.state_nonfinite_counts()
+        if any(value > 0 for value in pre_counts.values()):
+            repaired_worlds = self._batch.repair_invalid_worlds_from_snapshot()
         sim_forces = self._batch.sensor_slice(self.force_adr, 3)
         observation_np = np.asarray(observation, dtype=np.float32)
         diff = observation_np - sim_forces
         dist_sq = np.sum(diff**2, axis=1)
-        likelihoods = np.exp(-0.5 * dist_sq / self._MEASUREMENT_VARIANCE)
+        log_likelihoods = -0.5 * dist_sq / self._MEASUREMENT_VARIANCE
+        finite_log_likelihoods = np.isfinite(log_likelihoods)
+        if np.any(finite_log_likelihoods):
+            log_likelihoods = log_likelihoods - np.max(log_likelihoods[finite_log_likelihoods])
+        likelihoods = np.exp(log_likelihoods)
         sim_force_finite = np.isfinite(sim_forces)
         diff_finite = np.isfinite(diff)
         likelihood_finite = np.isfinite(likelihoods)
@@ -220,6 +234,15 @@ class FrankaWarpEnv(ParticleEnvironment):
                 state_nonfinite_counts["sensordata_nonfinite_count"],
                 state_nonfinite_counts["ctrl_nonfinite_count"],
             )
+        repair_active_now = bool(np.any(repaired_worlds))
+        repair_transition = repair_active_now and not self._repair_active
+        self._repair_active = repair_active_now
+        if repair_transition:
+            self.logger.warning(
+                "warp_repaired_invalid_worlds step=%d repaired_worlds=%d",
+                self._step_count,
+                int(np.count_nonzero(repaired_worlds)),
+            )
 
         self._last_measurement_diagnostics = {
             "obs_fx": float(observation_np[0]),
@@ -272,10 +295,12 @@ class FrankaWarpEnv(ParticleEnvironment):
                 state_nonfinite_counts["sensordata_nonfinite_count"]
             ),
             "ctrl_nonfinite_count": float(state_nonfinite_counts["ctrl_nonfinite_count"]),
+            "repaired_world_count": float(np.count_nonzero(repaired_worlds)),
             "likelihood_min": float(np.min(likelihoods)),
             "likelihood_max": float(np.max(likelihoods)),
             "likelihood_mean": float(np.mean(likelihoods)),
             "likelihood_std": float(np.std(likelihoods)),
+            "likelihood_range": float(np.max(likelihoods) - np.min(likelihoods)),
         }
 
         return likelihoods
@@ -302,6 +327,26 @@ class FrankaWarpEnv(ParticleEnvironment):
             normalized_lengths,
         )
         return normalized_lengths
+
+    def capture_recovery_snapshot(self) -> None:
+        if self._batch is None:
+            return
+        self._batch.capture_recovery_snapshot()
+        self._recovery_snapshot_ready = True
+        self._recovery_masses = self._masses.copy()
+        self._recovery_step_count = self._step_count
+        self._recovery_rng_state = self._rng.bit_generator.state
+
+    def restore_recovery_snapshot(self) -> bool:
+        if self._batch is None or not self._recovery_snapshot_ready:
+            return False
+        if not self._batch.restore_recovery_snapshot():
+            return False
+        self._masses = self._recovery_masses.copy()
+        self._step_count = int(self._recovery_step_count)
+        self._rng.bit_generator.state = self._recovery_rng_state
+        counts = self._batch.state_nonfinite_counts()
+        return not any(value > 0 for value in counts.values())
 
     def memory_profile(self) -> dict[str, int | float | str]:
         if self._batch is not None:
