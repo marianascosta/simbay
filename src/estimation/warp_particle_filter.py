@@ -118,14 +118,6 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._masses = next_particles.copy()
 
         self._step_count += 1
-        if self._step_count % 500 == 0:
-            self.logger.info(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_propagate",
-                    step=self._step_count,
-                )
-            )
 
         return next_particles
 
@@ -148,14 +140,6 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._masses = mass_trajectory[-1].copy()
 
         self._step_count += int(controls.shape[0])
-        if self._step_count and self._step_count % 500 == 0:
-            self.logger.info(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_rollout_complete",
-                    step=self._step_count,
-                )
-            )
 
         return self._masses.copy()
 

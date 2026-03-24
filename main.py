@@ -157,11 +157,60 @@ def _log_substage_duration(
     logger.info(
         extend_logging_data(
             logging_data,
-            event="phase_substage_duration",
+            event="substage_finished",
             phase=phase,
             substage=substage,
             steps=steps,
             duration_ms=duration_seconds * 1000.0,
+        )
+    )
+
+
+def _log_stage_started(
+    logging_data: dict[str, object],
+    stage: str,
+    *,
+    steps: int | None = None,
+) -> None:
+    payload = extend_logging_data(
+        logging_data,
+        event="stage_started",
+        stage=stage,
+    )
+    if steps is not None:
+        payload["steps"] = steps
+    logger.info(payload)
+
+
+def _log_stage_finished(
+    logging_data: dict[str, object],
+    stage: str,
+    duration_seconds: float,
+) -> None:
+    logger.info(
+        extend_logging_data(
+            logging_data,
+            event="stage_finished",
+            stage=stage,
+            duration_ms=duration_seconds * 1000.0,
+        )
+    )
+
+
+def _log_substage_started(
+    logging_data: dict[str, object],
+    phase: str,
+    substage: str,
+    *,
+    steps: int,
+) -> None:
+    logger.info(
+        extend_logging_data(
+            logging_data,
+            event="substage_started",
+            phase=phase,
+            substage=substage,
+            steps=steps,
         )
     )
 
@@ -191,7 +240,7 @@ signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 # ==========================================
 # 1. SETUP
 # ==========================================
-run_id = os.getenv("SIMBAY_RUN_ID", str(uuid4()))
+run_id = os.getenv("SIMBAY_RUN_ID") or str(uuid4())
 base_logging_data = {"run_id": run_id}
 run_wall_start = time.perf_counter()
 metrics = create_metrics_from_env(run_id=run_id)
@@ -221,6 +270,7 @@ metrics.register_substages(
 metrics.start()
 setup_stage = metrics.start_stage("setup")
 logger = setup_logging(run_id=run_id)
+_log_stage_started(base_logging_data, "setup")
 headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
 use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
 mass_series_enabled = os.getenv("SIMBAY_MASS_TIMESERIES_ENABLED", "1").lower() in {
@@ -326,12 +376,14 @@ _log_setup_summary(
     headless,
 )
 _log_run_metadata(base_logging_data, backend, execution_device, num_particles, dt)
-metrics.finish_stage(setup_stage)
+setup_duration = metrics.finish_stage(setup_stage)
+_log_stage_finished(base_logging_data, "setup", setup_duration)
 
 # ==========================================
 # 2. TRAJECTORY PLANNING
 # ==========================================
 planning_stage = metrics.start_stage("ik_planning")
+_log_stage_started(base_logging_data, "ik_planning")
 target_quat = np.array([0.0, 1.0, 0.0, 0.0])
 
 pre_grasp_pos = obj_pos + np.array([0.0, 0.0, 0.15])
@@ -383,7 +435,8 @@ if use_batched_backend:
             phase4_step_warmup=1,
         )
     )
-metrics.finish_stage(planning_stage)
+planning_duration = metrics.finish_stage(planning_stage)
+_log_stage_finished(base_logging_data, "ik_planning", planning_duration)
 
 # ==========================================
 # 3. EXECUTION
@@ -391,29 +444,18 @@ metrics.finish_stage(planning_stage)
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
-logger.info(
-    extend_logging_data(
-        base_logging_data,
-        event="phase_start",
-        phase="approach",
-        steps=len(traj1),
-    )
-)
+_log_stage_started(base_logging_data, "phase_1_approach", steps=len(traj1))
 robot_execute_stage = metrics.start_substage("phase_1_approach", "robot_execute")
+_log_substage_started(
+    base_logging_data,
+    "phase_1_approach",
+    "robot_execute",
+    steps=len(traj1),
+)
 for i, qpos in enumerate(traj1):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    if (i + 1) % 100 == 0 or i == len(traj1) - 1:
-        logger.info(
-            extend_logging_data(
-                base_logging_data,
-                event="phase_progress",
-                phase="approach",
-                step=i + 1,
-                total_steps=len(traj1),
-            )
-        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration(
     base_logging_data,
@@ -430,6 +472,12 @@ metrics.set_substage_workload(
     robot_execute_duration,
 )
 pf_replay_stage = metrics.start_substage("phase_1_approach", "pf_replay")
+_log_substage_started(
+    base_logging_data,
+    "phase_1_approach",
+    "pf_replay",
+    steps=len(traj1),
+)
 if use_batched_backend:
     particle_filter.predict_trajectory(traj1)
 else:
@@ -459,34 +507,24 @@ if backend == "warp":
         bytes_limit=int(env_memory_profile["bytes_limit"]),
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
-metrics.finish_stage(approach_stage)
+approach_duration = metrics.finish_stage(approach_stage)
+_log_stage_finished(base_logging_data, "phase_1_approach", approach_duration)
 
 
 # Phase 2: Descend vertically to the object (No PF updates)
 descend_stage = metrics.start_stage("phase_2_descend")
-logger.info(
-    extend_logging_data(
-        base_logging_data,
-        event="phase_start",
-        phase="descend",
-        steps=len(traj2),
-    )
-)
+_log_stage_started(base_logging_data, "phase_2_descend", steps=len(traj2))
 robot_execute_stage = metrics.start_substage("phase_2_descend", "robot_execute")
+_log_substage_started(
+    base_logging_data,
+    "phase_2_descend",
+    "robot_execute",
+    steps=len(traj2),
+)
 for i, qpos in enumerate(traj2):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    if (i + 1) % 100 == 0 or i == len(traj2) - 1:
-        logger.info(
-            extend_logging_data(
-                base_logging_data,
-                event="phase_progress",
-                phase="descend",
-                step=i + 1,
-                total_steps=len(traj2),
-            )
-        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration(
     base_logging_data,
@@ -503,6 +541,12 @@ metrics.set_substage_workload(
     robot_execute_duration,
 )
 pf_replay_stage = metrics.start_substage("phase_2_descend", "pf_replay")
+_log_substage_started(
+    base_logging_data,
+    "phase_2_descend",
+    "pf_replay",
+    steps=len(traj2),
+)
 if use_batched_backend:
     particle_filter.predict_trajectory(traj2)
 else:
@@ -532,34 +576,24 @@ if backend == "warp":
         bytes_limit=int(env_memory_profile["bytes_limit"]),
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
-metrics.finish_stage(descend_stage)
+descend_duration = metrics.finish_stage(descend_stage)
+_log_stage_finished(base_logging_data, "phase_2_descend", descend_duration)
 
 
 # Phase 3: Close the Gripper (No PF updates)
 grip_stage = metrics.start_stage("phase_3_grip")
-logger.info(
-    extend_logging_data(
-        base_logging_data,
-        event="phase_start",
-        phase="close_gripper",
-        steps=len(traj3),
-    )
-)
+_log_stage_started(base_logging_data, "phase_3_grip", steps=len(traj3))
 robot_execute_stage = metrics.start_substage("phase_3_grip", "robot_execute")
+_log_substage_started(
+    base_logging_data,
+    "phase_3_grip",
+    "robot_execute",
+    steps=len(traj3),
+)
 for i, qpos in enumerate(traj3):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
-    if (i + 1) % 100 == 0 or i == len(traj3) - 1:
-        logger.info(
-            extend_logging_data(
-                base_logging_data,
-                event="phase_progress",
-                phase="close_gripper",
-                step=i + 1,
-                total_steps=len(traj3),
-            )
-        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
 _log_substage_duration(
     base_logging_data,
@@ -576,6 +610,12 @@ metrics.set_substage_workload(
     robot_execute_duration,
 )
 pf_replay_stage = metrics.start_substage("phase_3_grip", "pf_replay")
+_log_substage_started(
+    base_logging_data,
+    "phase_3_grip",
+    "pf_replay",
+    steps=len(traj3),
+)
 if use_batched_backend:
     particle_filter.predict_trajectory(traj3)
 else:
@@ -605,18 +645,13 @@ if backend == "warp":
         bytes_limit=int(env_memory_profile["bytes_limit"]),
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
-metrics.finish_stage(grip_stage)
+grip_duration = metrics.finish_stage(grip_stage)
+_log_stage_finished(base_logging_data, "phase_3_grip", grip_duration)
 
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
 lft_stage = metrics.start_stage("phase_4_lift")
-logger.info(
-    extend_logging_data(
-        base_logging_data,
-        event="phase_start",
-        phase="lift_and_estimate",
-    )
-)
+_log_stage_started(base_logging_data, "phase_4_lift", steps=len(traj4))
 
 # <--- Initialize lists to hold the historical data for the graph --->
 history_particles = []
@@ -643,6 +678,12 @@ mass_series = ParticleMassTimeseriesCollector(
 )
 latest_particles_snapshot = None
 phase_4_bootstrap_applied = False
+phase_4_invalid_sensor_events = 0
+phase_4_invalid_state_events = 0
+phase_4_skipped_invalid_updates = 0
+phase_4_first_invalid_sensor_step = -1
+phase_4_first_invalid_state_step = -1
+phase_4_max_repaired_world_count = 0
 
 for step, qpos in enumerate(traj4):
     robot_execute_start = time.perf_counter()
@@ -741,6 +782,32 @@ for step, qpos in enumerate(traj4):
         )
     if backend == "warp":
         diagnostics = step_result.get("diagnostics", {})
+        phase_4_invalid_sensor_events = max(
+            phase_4_invalid_sensor_events,
+            int(diagnostics.get("invalid_sensor_events", 0.0)),
+        )
+        phase_4_invalid_state_events = max(
+            phase_4_invalid_state_events,
+            int(diagnostics.get("invalid_state_events", 0.0)),
+        )
+        phase_4_skipped_invalid_updates = max(
+            phase_4_skipped_invalid_updates,
+            int(step_result.get("skipped_invalid_updates", 0)),
+        )
+        current_first_invalid_sensor_step = int(
+            diagnostics.get("first_invalid_sensor_step", -1.0)
+        )
+        current_first_invalid_state_step = int(
+            diagnostics.get("first_invalid_state_step", -1.0)
+        )
+        if phase_4_first_invalid_sensor_step < 0 and current_first_invalid_sensor_step >= 0:
+            phase_4_first_invalid_sensor_step = current_first_invalid_sensor_step
+        if phase_4_first_invalid_state_step < 0 and current_first_invalid_state_step >= 0:
+            phase_4_first_invalid_state_step = current_first_invalid_state_step
+        phase_4_max_repaired_world_count = max(
+            phase_4_max_repaired_world_count,
+            int(diagnostics.get("repaired_world_count", 0.0)),
+        )
         metrics.update_likelihood_health(
             sim_force_finite_ratio=float(diagnostics.get("sim_force_finite_ratio", 0.0)),
             diff_finite_ratio=float(diagnostics.get("diff_finite_ratio", 0.0)),
@@ -783,70 +850,35 @@ for step, qpos in enumerate(traj4):
                 diagnostics.get("sim_force_signal_particle_ratio", 0.0)
             ),
         )
-    should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0
-    if should_log_step:
-        rss_bytes = get_process_memory_bytes()
-        if backend == "warp":
-            env_memory_profile = env.memory_profile()
-            metrics.update_warp_memory(
-                stage="phase_4_lift",
-                bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-                peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-                bytes_limit=int(env_memory_profile["bytes_limit"]),
-                state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-            )
-            logger.info(
-                extend_logging_data(
-                    base_logging_data,
-                    event="particle_filter_step",
-                    step=step,
-                    particles=particle_filter.N,
-                    wall_ms=step_wall_duration * 1000.0,
-                    step_rate_hz=step_rate_hz,
-                    cpu_ms=step_cpu_duration * 1000.0,
-                    cpu_equivalent_cores=cpu_equivalent_cores_used,
-                    cpu_percent_single_core=cpu_percent_single_core,
-                    cpu_percent_total_machine=cpu_percent_total_machine,
-                    ess=particle_filter.effective_sample_size(),
-                    estimate=current_estimate,
-                    rss_bytes=rss_bytes,
-                    rss=format_bytes(rss_bytes),
-                    backend="warp",
-                    execution_platform=env_memory_profile["execution_platform"],
-                    execution_device=env_memory_profile["execution_device"],
-                )
-            )
-        else:
-            logger.info(
-                extend_logging_data(
-                    base_logging_data,
-                    event="particle_filter_step",
-                    step=step,
-                    particles=particle_filter.N,
-                    wall_ms=step_wall_duration * 1000.0,
-                    step_rate_hz=step_rate_hz,
-                    cpu_ms=step_cpu_duration * 1000.0,
-                    cpu_equivalent_cores=cpu_equivalent_cores_used,
-                    cpu_percent_single_core=cpu_percent_single_core,
-                    cpu_percent_total_machine=cpu_percent_total_machine,
-                    ess=particle_filter.effective_sample_size(),
-                    estimate=current_estimate,
-                    rss_bytes=rss_bytes,
-                    rss=format_bytes(rss_bytes),
-                    mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
-                    mujoco_native_memory_total=format_bytes(
-                        env_memory_profile["native_bytes_total"]
-                    ),
-                )
-            )
+if backend == "warp":
+    env_memory_profile = env.memory_profile()
+    metrics.update_warp_memory(
+        stage="phase_4_lift",
+        bytes_in_use=int(env_memory_profile["bytes_in_use"]),
+        peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
+        bytes_limit=int(env_memory_profile["bytes_limit"]),
+        state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
+    )
 metrics.set_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total)
 metrics.set_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total)
+_log_substage_started(
+    base_logging_data,
+    "phase_4_lift",
+    "robot_execute",
+    steps=len(traj4),
+)
 _log_substage_duration(
     base_logging_data,
     "phase_4_lift",
     "robot_execute",
     phase_4_robot_execute_total,
     len(traj4),
+)
+_log_substage_started(
+    base_logging_data,
+    "phase_4_lift",
+    "pf_update",
+    steps=len(traj4),
 )
 _log_substage_duration(
     base_logging_data,
@@ -869,7 +901,8 @@ metrics.set_substage_workload(
     particle_filter.N,
     phase_4_pf_update_total,
 )
-metrics.finish_stage(lft_stage)
+lft_duration = metrics.finish_stage(lft_stage)
+_log_stage_finished(base_logging_data, "phase_4_lift", lft_duration)
 
 avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
 avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
@@ -925,6 +958,12 @@ elif backend == "warp":
             backend="warp",
             execution_platform=env_memory_profile["execution_platform"],
             execution_device=env_memory_profile["execution_device"],
+            invalid_sensor_events=phase_4_invalid_sensor_events,
+            invalid_state_events=phase_4_invalid_state_events,
+            skipped_invalid_updates=phase_4_skipped_invalid_updates,
+            first_invalid_sensor_step=phase_4_first_invalid_sensor_step,
+            first_invalid_state_step=phase_4_first_invalid_state_step,
+            max_repaired_world_count=phase_4_max_repaired_world_count,
         )
     )
 else:
@@ -1011,6 +1050,7 @@ if mass_series_artifacts:
 # 4. GRAPH GENERATION
 # ==========================================
 plot_stage = metrics.start_stage("plot_generation")
+_log_stage_started(base_logging_data, "plot_generation")
 logger.info(extend_logging_data(base_logging_data, event="plot_generation_start"))
 
 
@@ -1021,7 +1061,13 @@ for step_index, particle_masses in zip(history_particle_steps, history_particles
     plt.scatter([step_index] * len(particle_masses), particle_masses, color='blue', alpha=0.05, s=15)
 
 # Plot the Filter's official guess (Mean)
-plt.plot(range(num_steps), history_estimates, color='red', linewidth=3, label='Filter Estimate (Mean)')
+plt.plot(
+    range(len(history_estimates)),
+    history_estimates,
+    color='red',
+    linewidth=3,
+    label='Filter Estimate (Mean)',
+)
 
 # Plot the True Mass
 plt.axhline(y=true_mass, color='green', linestyle='--', linewidth=2, label=f'True Mass ({true_mass} kg)')
@@ -1046,7 +1092,8 @@ logger.info(
         path=str(output_path),
     )
 )
-metrics.finish_stage(plot_stage)
+plot_duration = metrics.finish_stage(plot_stage)
+_log_stage_finished(base_logging_data, "plot_generation", plot_duration)
 
 if backend == "cpu":
     jax.clear_caches()

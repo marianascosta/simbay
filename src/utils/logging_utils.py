@@ -23,7 +23,10 @@ class _StructuredFormatter(logging.Formatter):
         if isinstance(record.msg, dict):
             payload = dict(record.msg)
         else:
-            payload = {"message": record.getMessage()}
+            payload = {"msg": record.getMessage()}
+
+        if "event" in payload and "msg" not in payload:
+            payload["msg"] = payload.pop("event")
 
         payload.setdefault("run_id", getattr(record, "run_id", "unknown"))
         payload.setdefault("level", record.levelname)
@@ -38,7 +41,9 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     """
     logger = logging.getLogger("simbay")
     if logger.handlers:
-        return logger
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
 
     level_name = os.getenv("SIMBAY_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)

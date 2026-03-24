@@ -252,16 +252,19 @@ class WarpBatch:
     def memory_profile(self) -> dict[str, int | str | bool]:
         device = wp.get_preferred_device()
         execution_platform = "cuda" if getattr(device, "is_cuda", False) else str(device)
-        bytes_in_use = self._estimate_state_bytes()
-        self._peak_bytes_in_use = max(self._peak_bytes_in_use, bytes_in_use)
+        state_bytes_estimate = self._estimate_state_bytes()
+        bytes_in_use = state_bytes_estimate
         bytes_limit = 0
         mem_info = getattr(device, "mem_info", None)
         if callable(mem_info):
             try:
-                _free_bytes, total_bytes = mem_info()
+                free_bytes, total_bytes = mem_info()
+                bytes_in_use = max(int(total_bytes) - int(free_bytes), 0)
                 bytes_limit = int(total_bytes)
             except Exception:
+                bytes_in_use = state_bytes_estimate
                 bytes_limit = 0
+        self._peak_bytes_in_use = max(self._peak_bytes_in_use, bytes_in_use)
         return {
             "execution_platform": execution_platform,
             "execution_device": getattr(device, "name", str(device)),
@@ -271,17 +274,36 @@ class WarpBatch:
             "bytes_in_use": bytes_in_use,
             "peak_bytes_in_use": self._peak_bytes_in_use,
             "bytes_limit": bytes_limit,
-            "state_bytes_estimate": bytes_in_use,
+            "state_bytes_estimate": state_bytes_estimate,
         }
 
     def _estimate_state_bytes(self) -> int:
         total = int(self._body_mass_np.nbytes)
-        for field_name in _WARP_MEMORY_FIELDS:
-            array = getattr(self._data, field_name, None)
-            if array is None:
+        total += self._estimate_object_bytes(self._model)
+        total += self._estimate_object_bytes(self._data)
+        if self._recovery_snapshot is not None:
+            total += sum(int(values.nbytes) for values in self._recovery_snapshot.values())
+        return total
+
+    @staticmethod
+    def _estimate_object_bytes(obj) -> int:
+        total = 0
+        seen_arrays: set[int] = set()
+        for field_name in dir(obj):
+            if field_name.startswith("_"):
                 continue
             try:
-                total += int(np.asarray(array.numpy()).nbytes)
+                value = getattr(obj, field_name)
+            except Exception:
+                continue
+            if callable(value) or id(value) in seen_arrays:
+                continue
+            numpy_fn = getattr(value, "numpy", None)
+            if not callable(numpy_fn):
+                continue
+            try:
+                total += int(np.asarray(numpy_fn()).nbytes)
+                seen_arrays.add(id(value))
             except Exception:
                 continue
         return total

@@ -1854,11 +1854,6 @@
     "list": [
       {
         "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
         "datasource": {
           "type": "prometheus",
           "uid": "prometheus"
@@ -1870,12 +1865,8 @@
         "multi": true,
         "name": "run_id",
         "options": [],
-        "query": {
-          "qryType": 1,
-          "query": "label_values(simbay_run_info, run_id)",
-          "refId": "Prometheus-run_id-Variable-Query"
-        },
-        "refresh": 1,
+        "query": "label_values(simbay_run_info, run_id)",
+        "refresh": 2,
         "regex": "",
         "sort": 3,
         "type": "query"

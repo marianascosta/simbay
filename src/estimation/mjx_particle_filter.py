@@ -120,14 +120,6 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._batch.step(control_input, jax_particles)
 
         self._step_count += 1
-        if self._step_count % 500 == 0:
-            self.logger.info(
-                extend_logging_data(
-                    self.logging_data,
-                    event="mjx_propagate",
-                    step=self._step_count,
-                )
-            )
 
         return jax_particles
 
@@ -153,14 +145,6 @@ class FrankaMJXEnv(ParticleEnvironment):
         )
         self._batch.rollout(controls, particle_trajectory)
         self._step_count += int(controls.shape[0])
-        if self._step_count and self._step_count % 500 == 0:
-            self.logger.info(
-                extend_logging_data(
-                    self.logging_data,
-                    event="mjx_rollout_complete",
-                    step=self._step_count,
-                )
-            )
         return final_particles
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:

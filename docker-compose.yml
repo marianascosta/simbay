@@ -7,7 +7,7 @@ services:
     container_name: simbay
     environment:
       MPLBACKEND: Agg
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-1000}"
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
       SIMBAY_BACKEND: "${SIMBAY_BACKEND:-warp}"

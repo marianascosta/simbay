@@ -669,25 +669,25 @@ class SimbayMetrics:
         self._store.set_gauge(
             "simbay_warp_bytes_in_use",
             bytes_in_use,
-            "Estimated active Warp bytes for tracked model/data arrays.",
+            "Observed execution-device bytes used when Warp reports free/total memory, otherwise a tracked Warp state-byte estimate.",
             labels,
         )
         self._store.set_gauge(
             "simbay_warp_peak_bytes_in_use",
             peak_bytes_in_use,
-            "Peak estimated active Warp bytes for tracked model/data arrays.",
+            "Peak observed execution-device bytes used during the run, or peak tracked Warp state-byte estimate when device memory usage is unavailable.",
             labels,
         )
         self._store.set_gauge(
             "simbay_warp_bytes_limit",
             bytes_limit,
-            "Estimated Warp execution-device memory limit in bytes when available.",
+            "Warp execution-device total memory in bytes when available.",
             labels,
         )
         self._store.set_gauge(
             "simbay_warp_state_bytes_estimate",
             state_bytes_estimate,
-            "Estimated Warp state bytes for tracked model/data arrays.",
+            "Tracked lower-bound byte estimate for Warp model/data arrays and recovery snapshots.",
             labels,
         )
 

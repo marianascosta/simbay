@@ -367,36 +367,6 @@ class WarpParticleFilter:
                     ),
                 )
             )
-        should_log_diag = self._step_index < 5 or self._step_index % 100 == 0
-        if should_log_diag:
-            self.logger.info(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_measurement_diagnostics",
-                    step=self._step_index,
-                    resampled=did_resample,
-                    mass_min=float(np.min(self.particles)),
-                    mass_max=float(np.max(self.particles)),
-                    mass_mean=float(np.mean(self.particles)),
-                    obs_fx=diagnostics.get("obs_fx", 0.0),
-                    obs_fy=diagnostics.get("obs_fy", 0.0),
-                    obs_fz=diagnostics.get("obs_fz", 0.0),
-                    obs_norm=diagnostics.get("obs_norm", 0.0),
-                    sim_force_norm_min=diagnostics.get("sim_force_norm_min", 0.0),
-                    sim_force_norm_max=diagnostics.get("sim_force_norm_max", 0.0),
-                    sim_force_norm_mean=diagnostics.get("sim_force_norm_mean", 0.0),
-                    sim_force_axis_std_x=diagnostics.get("sim_force_axis_std_x", 0.0),
-                    sim_force_axis_std_y=diagnostics.get("sim_force_axis_std_y", 0.0),
-                    sim_force_axis_std_z=diagnostics.get("sim_force_axis_std_z", 0.0),
-                    diff_norm_min=diagnostics.get("diff_norm_min", 0.0),
-                    diff_norm_max=diagnostics.get("diff_norm_max", 0.0),
-                    diff_norm_mean=diagnostics.get("diff_norm_mean", 0.0),
-                    likelihood_min=diagnostics.get("likelihood_min", 0.0),
-                    likelihood_max=diagnostics.get("likelihood_max", 0.0),
-                    likelihood_mean=diagnostics.get("likelihood_mean", 0.0),
-                    likelihood_std=diagnostics.get("likelihood_std", 0.0),
-                )
-            )
         self._step_index += 1
         return {
             "ess": float(self._ess),
