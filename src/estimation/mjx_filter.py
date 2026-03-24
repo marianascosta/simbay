@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from src.utils.logging_utils import get_process_memory_bytes
+from src.utils.logging_utils import extend_logging_data
 
 from .mjx_particle_filter import FrankaMJXEnv
 
@@ -100,9 +101,10 @@ def _update_and_optionally_resample(
 class MJXParticleFilter:
     """JAX-backed particle filter for the MJX environment."""
 
-    def __init__(self, env: FrankaMJXEnv):
+    def __init__(self, env: FrankaMJXEnv, logging_data: dict[str, object] | None = None):
         self.logger = logging.getLogger("simbay.mjx_particle_filter")
         self.env = env
+        self.logging_data = dict(logging_data or {})
 
         init_memory_before = get_process_memory_bytes()
         self.particles = self.env.initialize_particles_device()
@@ -131,12 +133,16 @@ class MJXParticleFilter:
         self._uniform_metrics_jit = jax.jit(_uniform_weight_metrics)
 
         self.logger.info(
-            "mjx_particle_filter_initialized particles=%d state_bytes_total=%d "
-            "state_bytes_per_particle=%.2f process_memory_per_particle_estimate_bytes=%.2f",
-            self.N,
-            self.state_bytes_total,
-            self.state_bytes_per_particle,
-            self.process_memory_per_particle_estimate,
+            extend_logging_data(
+                self.logging_data,
+                event="mjx_particle_filter_initialized",
+                particles=self.N,
+                state_bytes_total=self.state_bytes_total,
+                state_bytes_per_particle=self.state_bytes_per_particle,
+                process_memory_per_particle_estimate_bytes=(
+                    self.process_memory_per_particle_estimate
+                ),
+            )
         )
 
     def warmup_runtime(self, rollout_lengths: list[int]) -> list[int]:
@@ -163,9 +169,12 @@ class MJXParticleFilter:
         jax.block_until_ready(estimate)
         jax.block_until_ready(update_resample)
         self.logger.info(
-            "mjx_filter_runtime_warmup_done particles=%d rollout_lengths=%s",
-            self.N,
-            warmed_rollout_lengths,
+            extend_logging_data(
+                self.logging_data,
+                event="mjx_filter_runtime_warmup_done",
+                particles=self.N,
+                rollout_lengths=warmed_rollout_lengths,
+            )
         )
         return warmed_rollout_lengths
 

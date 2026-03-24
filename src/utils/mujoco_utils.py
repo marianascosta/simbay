@@ -1,6 +1,7 @@
 # ==========================================
 # 1. IMPORTS
 # ==========================================
+import logging
 import os
 
 import mujoco
@@ -10,6 +11,9 @@ from src.robots import MujocoRobot
 
 from .constants import DEFAULT_OBJECT_PROPS
 from .constants import FRANKA_HOME_QPOS
+
+
+logger = logging.getLogger("simbay.mujoco_utils")
 
 
 # ==========================================
@@ -46,7 +50,12 @@ def modify_object_properties(model, data, body_name, props):
         body_id = model.body(body_name).id
         geom_id = model.body_geomadr[body_id]
     except KeyError:
-        print(f"ERROR: Body '{body_name}' not found!")
+        logger.error(
+            {
+                "event": "mujoco_body_not_found",
+                "body_name": body_name,
+            }
+        )
         return
 
     # A. Save State

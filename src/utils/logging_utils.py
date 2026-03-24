@@ -1,9 +1,11 @@
+import json
 import logging
 import os
 import resource
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 
 class _RunIdFilter(logging.Filter):
@@ -14,6 +16,20 @@ class _RunIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.run_id = self._run_id
         return True
+
+
+class _StructuredFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if isinstance(record.msg, dict):
+            payload = dict(record.msg)
+        else:
+            payload = {"message": record.getMessage()}
+
+        payload.setdefault("run_id", getattr(record, "run_id", "unknown"))
+        payload.setdefault("level", record.levelname)
+        payload.setdefault("logger", record.name)
+        payload.setdefault("timestamp", self.formatTime(record, self.datefmt))
+        return json.dumps(payload, default=str, sort_keys=True)
 
 
 def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logging.Logger:
@@ -33,8 +49,7 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
-    formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(name)s run_id=%(run_id)s %(message)s",
+    formatter = _StructuredFormatter(
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
     run_id_filter = _RunIdFilter(run_id)
@@ -56,6 +71,12 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     logger.addHandler(stream_handler)
     logger.addHandler(file_handler)
     return logger
+
+
+def extend_logging_data(logging_data: dict[str, Any], **updates: Any) -> dict[str, Any]:
+    merged = dict(logging_data)
+    merged.update(updates)
+    return merged
 
 
 def get_process_memory_bytes() -> int:

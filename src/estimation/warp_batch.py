@@ -13,6 +13,8 @@ import numpy as np
 import mujoco_warp as mjw
 import warp as wp
 
+from src.utils.logging_utils import extend_logging_data
+
 
 logger = logging.getLogger("simbay.warp_batch")
 
@@ -55,17 +57,22 @@ class WarpBatch:
         body_id: int,
         nconmax: int = 128,
         njmax: int = 256,
+        logging_data: dict[str, object] | None = None,
     ):
+        self.logging_data = dict(logging_data or {})
         self._body_id = body_id
         self._size = int(len(masses))
         self._ctrl_dim = int(mj_model.nu)
 
         logger.info(
-            "warp_batch_init nworld=%d body_id=%d nconmax=%d njmax=%d",
-            self._size,
-            body_id,
-            nconmax,
-            njmax,
+            extend_logging_data(
+                self.logging_data,
+                event="warp_batch_init",
+                nworld=self._size,
+                body_id=body_id,
+                nconmax=nconmax,
+                njmax=njmax,
+            )
         )
 
         self._model = mjw.put_model(mj_model)
@@ -88,7 +95,13 @@ class WarpBatch:
         self._peak_bytes_in_use = 0
         self._recovery_snapshot: dict[str, np.ndarray] | None = None
 
-        logger.info("warp_batch_init_complete nworld=%d", self._size)
+        logger.info(
+            extend_logging_data(
+                self.logging_data,
+                event="warp_batch_init_complete",
+                nworld=self._size,
+            )
+        )
 
     @property
     def ctrl_dim(self) -> int:
@@ -99,7 +112,13 @@ class WarpBatch:
         _assign_warp_array(self._data.ctrl, dummy_ctrl)
         mjw.step(self._model, self._data)
         wp.synchronize()
-        logger.info("warp_batch_warmup_done nworld=%d", self._size)
+        logger.info(
+            extend_logging_data(
+                self.logging_data,
+                event="warp_batch_warmup_done",
+                nworld=self._size,
+            )
+        )
 
     def warmup_rollout(self, steps: int) -> None:
         if steps <= 0:
@@ -109,7 +128,13 @@ class WarpBatch:
         for _ in range(steps):
             mjw.step(self._model, self._data)
         wp.synchronize()
-        logger.info("warp_batch_rollout_warmup_done steps=%d", steps)
+        logger.info(
+            extend_logging_data(
+                self.logging_data,
+                event="warp_batch_rollout_warmup_done",
+                steps=steps,
+            )
+        )
 
     def step(self, control_input: np.ndarray, masses: np.ndarray) -> None:
         self._body_mass_np[:, self._body_id] = np.asarray(masses, dtype=np.float32)

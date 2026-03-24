@@ -4,6 +4,7 @@ import numpy as np
 
 from .base import ParticleEnvironment
 from src.utils.logging_utils import get_process_memory_bytes
+from src.utils.logging_utils import extend_logging_data
 
 
 class ParticleFilter:
@@ -15,7 +16,7 @@ class ParticleFilter:
     ParticleEnvironment to handle domain-specific physics and sensor models.
     """
     
-    def __init__(self, env: ParticleEnvironment):
+    def __init__(self, env: ParticleEnvironment, logging_data: dict[str, object] | None = None):
         """
         Initializes the particle filter with a uniform weight distribution.
         
@@ -24,6 +25,7 @@ class ParticleFilter:
         """
         self.logger = logging.getLogger("simbay.particle_filter")
         self.env = env
+        self.logging_data = dict(logging_data or {})
 
         # Ask the environment for the initial states first
         init_memory_before = get_process_memory_bytes()
@@ -43,12 +45,16 @@ class ParticleFilter:
         )
 
         self.logger.info(
-            "particle_filter_initialized particles=%d state_bytes_total=%d "
-            "state_bytes_per_particle=%.2f process_memory_per_particle_estimate_bytes=%.2f",
-            self.N,
-            self.state_bytes_total,
-            self.state_bytes_per_particle,
-            self.process_memory_per_particle_estimate,
+            extend_logging_data(
+                self.logging_data,
+                event="particle_filter_initialized",
+                particles=self.N,
+                state_bytes_total=self.state_bytes_total,
+                state_bytes_per_particle=self.state_bytes_per_particle,
+                process_memory_per_particle_estimate_bytes=(
+                    self.process_memory_per_particle_estimate
+                ),
+            )
         )
 
     def predict(self, control_input: np.ndarray):

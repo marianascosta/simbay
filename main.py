@@ -1,4 +1,5 @@
 import gc
+import logging
 import os
 from pathlib import Path
 import signal
@@ -24,6 +25,7 @@ from src.planning import plan_linear_trajectory
 from src.utils import DEFAULT_OBJECT_PROPS
 from src.utils import FRANKA_HOME_QPOS
 from src.utils import initialize_mujoco_env
+from src.utils.logging_utils import extend_logging_data
 from src.utils.logging_utils import format_bytes
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.mass_timeseries import ParticleMassTimeseriesCollector
@@ -35,9 +37,11 @@ from src.utils.metrics import shutdown_metrics
 shutdown_requested = False
 shutdown_signal_name: str | None = None
 logger = None
+base_logging_data: dict[str, object] = {}
 
 
 def _log_setup_summary(
+    logging_data: dict[str, object],
     backend_name: str,
     env_memory_profile: dict[str, Any],
     memory_profile: dict[str, Any],
@@ -47,65 +51,71 @@ def _log_setup_summary(
     cpu_cores: int,
     headless: bool,
 ) -> None:
-    common_prefix = (
-        "simulation_setup dt=%.6f true_mass=%.4f particles=%d cpu_cores=%d "
-        "headless=%s backend=%s "
-        "state_memory_total_bytes=%d state_memory_total=%s "
-        "state_memory_per_particle_bytes=%.2f state_memory_per_particle=%s "
-        "process_memory_per_particle_estimate_bytes=%.2f "
-        "process_memory_per_particle_estimate=%s "
-    )
-    common_args = (
-        dt,
-        true_mass,
-        num_particles,
-        cpu_cores,
-        headless,
-        backend_name,
-        memory_profile["state_bytes_total"],
-        format_bytes(memory_profile["state_bytes_total"]),
-        memory_profile["state_bytes_per_particle"],
-        format_bytes(memory_profile["state_bytes_per_particle"]),
-        memory_profile["process_memory_per_particle_estimate_bytes"],
-        format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
+    common_data = extend_logging_data(
+        logging_data,
+        event="simulation_setup",
+        dt=dt,
+        true_mass=true_mass,
+        particles=num_particles,
+        cpu_cores=cpu_cores,
+        headless=headless,
+        backend=backend_name,
+        state_memory_total_bytes=memory_profile["state_bytes_total"],
+        state_memory_total=format_bytes(memory_profile["state_bytes_total"]),
+        state_memory_per_particle_bytes=memory_profile["state_bytes_per_particle"],
+        state_memory_per_particle=format_bytes(memory_profile["state_bytes_per_particle"]),
+        process_memory_per_particle_estimate_bytes=(
+            memory_profile["process_memory_per_particle_estimate_bytes"]
+        ),
+        process_memory_per_particle_estimate=format_bytes(
+            memory_profile["process_memory_per_particle_estimate_bytes"]
+        ),
     )
 
     if backend_name in {"cpu", "warp"}:
         logger.info(
-            common_prefix
-            + "execution_platform=%s execution_device=%s "
-            + "default_jax_platform=%s default_jax_device=%s "
-            + "device_fallback_applied=%s bytes_in_use=%d peak_bytes_in_use=%d bytes_limit=%d",
-            *common_args,
-            env_memory_profile["execution_platform"],
-            env_memory_profile["execution_device"],
-            env_memory_profile["default_jax_platform"],
-            env_memory_profile["default_jax_device"],
-            env_memory_profile["device_fallback_applied"],
-            env_memory_profile["bytes_in_use"],
-            env_memory_profile["peak_bytes_in_use"],
-            env_memory_profile["bytes_limit"],
+            extend_logging_data(
+                common_data,
+                execution_platform=env_memory_profile["execution_platform"],
+                execution_device=env_memory_profile["execution_device"],
+                default_jax_platform=env_memory_profile["default_jax_platform"],
+                default_jax_device=env_memory_profile["default_jax_device"],
+                device_fallback_applied=env_memory_profile["device_fallback_applied"],
+                bytes_in_use=env_memory_profile["bytes_in_use"],
+                peak_bytes_in_use=env_memory_profile["peak_bytes_in_use"],
+                bytes_limit=env_memory_profile["bytes_limit"],
+            )
         )
         return
 
     logger.info(
-        common_prefix
-        + "mujoco_model_buffer_per_particle_bytes=%d mujoco_model_buffer_per_particle=%s "
-        + "mujoco_data_buffer_per_particle_bytes=%d mujoco_data_buffer_per_particle=%s "
-        + "mujoco_data_arena_per_particle_bytes=%d mujoco_data_arena_per_particle=%s "
-        + "mujoco_native_memory_per_particle_bytes=%d mujoco_native_memory_per_particle=%s "
-        + "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
-        *common_args,
-        env_memory_profile["model_nbuffer_bytes_per_robot"],
-        format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
-        env_memory_profile["data_nbuffer_bytes_per_robot"],
-        format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
-        env_memory_profile["data_narena_bytes_per_robot"],
-        format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
-        env_memory_profile["native_bytes_per_robot"],
-        format_bytes(env_memory_profile["native_bytes_per_robot"]),
-        env_memory_profile["native_bytes_total"],
-        format_bytes(env_memory_profile["native_bytes_total"]),
+        extend_logging_data(
+            common_data,
+            mujoco_model_buffer_per_particle_bytes=(
+                env_memory_profile["model_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_model_buffer_per_particle=format_bytes(
+                env_memory_profile["model_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_buffer_per_particle_bytes=(
+                env_memory_profile["data_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_buffer_per_particle=format_bytes(
+                env_memory_profile["data_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_arena_per_particle_bytes=(
+                env_memory_profile["data_narena_bytes_per_robot"]
+            ),
+            mujoco_data_arena_per_particle=format_bytes(
+                env_memory_profile["data_narena_bytes_per_robot"]
+            ),
+            mujoco_native_memory_per_particle_bytes=env_memory_profile["native_bytes_per_robot"],
+            mujoco_native_memory_per_particle=format_bytes(
+                env_memory_profile["native_bytes_per_robot"]
+            ),
+            mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
+            mujoco_native_memory_total=format_bytes(env_memory_profile["native_bytes_total"]),
+        )
     )
 
 
@@ -115,45 +125,63 @@ def _handle_shutdown_signal(signum, _frame) -> None:
 
     shutdown_requested = True
     shutdown_signal_name = signal.Signals(signum).name
-    message = (
-        f"shutdown_requested signal={shutdown_signal_name} "
-        "mode=graceful action=finish_current_run"
-    )
     if logger is not None:
-        logger.info(message)
+        logger.info(
+            extend_logging_data(
+                base_logging_data,
+                event="shutdown_requested",
+                signal=shutdown_signal_name,
+                mode="graceful",
+                action="finish_current_run",
+            )
+        )
     else:
-        print(message)
+        logging.getLogger("simbay").info(
+            {
+                "event": "shutdown_requested",
+                "run_id": base_logging_data.get("run_id", "unknown"),
+                "signal": shutdown_signal_name,
+                "mode": "graceful",
+                "action": "finish_current_run",
+            }
+        )
 
 
 def _log_substage_duration(
+    logging_data: dict[str, object],
     phase: str,
     substage: str,
     duration_seconds: float,
     steps: int,
 ) -> None:
     logger.info(
-        "phase_substage_duration phase=%s substage=%s steps=%d duration_ms=%.3f",
-        phase,
-        substage,
-        steps,
-        duration_seconds * 1000.0,
+        extend_logging_data(
+            logging_data,
+            event="phase_substage_duration",
+            phase=phase,
+            substage=substage,
+            steps=steps,
+            duration_ms=duration_seconds * 1000.0,
+        )
     )
 
 
 def _log_run_metadata(
-    run_id: str,
+    logging_data: dict[str, object],
     backend_name: str,
     execution_device: str,
     num_particles: int,
     dt: float,
 ) -> None:
     logger.info(
-        "run_metadata run_id=%s backend=%s device=%s particles=%d control_dt=%.6f",
-        run_id,
-        backend_name,
-        execution_device,
-        num_particles,
-        dt,
+        extend_logging_data(
+            logging_data,
+            event="run_metadata",
+            backend=backend_name,
+            device=execution_device,
+            particles=num_particles,
+            control_dt=dt,
+        )
     )
 
 
@@ -164,6 +192,7 @@ signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 # 1. SETUP
 # ==========================================
 run_id = os.getenv("SIMBAY_RUN_ID", str(uuid4()))
+base_logging_data = {"run_id": run_id}
 run_wall_start = time.perf_counter()
 metrics = create_metrics_from_env(run_id=run_id)
 metrics.register_stages(
@@ -219,10 +248,22 @@ if backend == "cpu":
     try:
         device = jax.devices("gpu")[0]
         memory_stats = device.memory_stats() or {}
-        print(f"GPU memory stats: {memory_stats}")
-        logger.info("gpu_memory_stats device=%s stats=%s", device, memory_stats)
+        logger.info(
+            extend_logging_data(
+                base_logging_data,
+                event="gpu_memory_stats",
+                device=str(device),
+                stats=memory_stats,
+            )
+        )
     except Exception as exc:
-        logger.warning("gpu_memory_stats_unavailable error=%s", exc)
+        logger.warning(
+            extend_logging_data(
+                base_logging_data,
+                event="gpu_memory_stats_unavailable",
+                error=str(exc),
+            )
+        )
 
 # Setup "real" robot
 real_robot = initialize_mujoco_env()
@@ -250,14 +291,14 @@ if backend == "warp":
             ) from exc
         raise
 
-    env = FrankaWarpEnv(limits, num_particles)
-    particle_filter = WarpParticleFilter(env)
+    env = FrankaWarpEnv(limits, num_particles, logging_data=base_logging_data)
+    particle_filter = WarpParticleFilter(env, logging_data=base_logging_data)
 elif backend == "cpu":
-    env = FrankaMJXEnv(limits, num_particles)
-    particle_filter = MJXParticleFilter(env)
+    env = FrankaMJXEnv(limits, num_particles, logging_data=base_logging_data)
+    particle_filter = MJXParticleFilter(env, logging_data=base_logging_data)
 else:
     env = FrankaMuJoCoEnv(limits, num_particles)
-    particle_filter = ParticleFilter(env)
+    particle_filter = ParticleFilter(env, logging_data=base_logging_data)
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
@@ -274,6 +315,7 @@ if backend == "warp":
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
 _log_setup_summary(
+    base_logging_data,
     backend,
     env_memory_profile,
     memory_profile,
@@ -283,7 +325,7 @@ _log_setup_summary(
     cpu_cores,
     headless,
 )
-_log_run_metadata(run_id, backend, execution_device, num_particles, dt)
+_log_run_metadata(base_logging_data, backend, execution_device, num_particles, dt)
 metrics.finish_stage(setup_stage)
 
 # ==========================================
@@ -332,10 +374,14 @@ if use_batched_backend:
         ]
     )
     logger.info(
-        "backend_runtime_warmup_summary backend=%s particles=%d rollout_lengths=%s phase4_step_warmup=1",
-        backend,
-        particle_filter.N,
-        warmed_rollout_lengths,
+        extend_logging_data(
+            base_logging_data,
+            event="backend_runtime_warmup_summary",
+            backend=backend,
+            particles=particle_filter.N,
+            rollout_lengths=warmed_rollout_lengths,
+            phase4_step_warmup=1,
+        )
     )
 metrics.finish_stage(planning_stage)
 
@@ -345,16 +391,37 @@ metrics.finish_stage(planning_stage)
 
 # Phase 1: Move ABOVE the object (No PF updates, just predict to stay synced)
 approach_stage = metrics.start_stage("phase_1_approach")
-logger.info("phase_start name=approach steps=%d", len(traj1))
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="phase_start",
+        phase="approach",
+        steps=len(traj1),
+    )
+)
 robot_execute_stage = metrics.start_substage("phase_1_approach", "robot_execute")
 for i, qpos in enumerate(traj1):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj1) - 1:
-        logger.info("phase_progress name=approach step=%d/%d", i + 1, len(traj1))
+        logger.info(
+            extend_logging_data(
+                base_logging_data,
+                event="phase_progress",
+                phase="approach",
+                step=i + 1,
+                total_steps=len(traj1),
+            )
+        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
-_log_substage_duration("phase_1_approach", "robot_execute", robot_execute_duration, len(traj1))
+_log_substage_duration(
+    base_logging_data,
+    "phase_1_approach",
+    "robot_execute",
+    robot_execute_duration,
+    len(traj1),
+)
 metrics.set_substage_workload(
     "phase_1_approach",
     "robot_execute",
@@ -369,7 +436,13 @@ else:
     for qpos in traj1:
         particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
-_log_substage_duration("phase_1_approach", "pf_replay", pf_replay_duration, len(traj1))
+_log_substage_duration(
+    base_logging_data,
+    "phase_1_approach",
+    "pf_replay",
+    pf_replay_duration,
+    len(traj1),
+)
 metrics.set_substage_workload(
     "phase_1_approach",
     "pf_replay",
@@ -391,16 +464,37 @@ metrics.finish_stage(approach_stage)
 
 # Phase 2: Descend vertically to the object (No PF updates)
 descend_stage = metrics.start_stage("phase_2_descend")
-logger.info("phase_start name=descend steps=%d", len(traj2))
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="phase_start",
+        phase="descend",
+        steps=len(traj2),
+    )
+)
 robot_execute_stage = metrics.start_substage("phase_2_descend", "robot_execute")
 for i, qpos in enumerate(traj2):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj2) - 1:
-        logger.info("phase_progress name=descend step=%d/%d", i + 1, len(traj2))
+        logger.info(
+            extend_logging_data(
+                base_logging_data,
+                event="phase_progress",
+                phase="descend",
+                step=i + 1,
+                total_steps=len(traj2),
+            )
+        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
-_log_substage_duration("phase_2_descend", "robot_execute", robot_execute_duration, len(traj2))
+_log_substage_duration(
+    base_logging_data,
+    "phase_2_descend",
+    "robot_execute",
+    robot_execute_duration,
+    len(traj2),
+)
 metrics.set_substage_workload(
     "phase_2_descend",
     "robot_execute",
@@ -415,7 +509,13 @@ else:
     for qpos in traj2:
         particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
-_log_substage_duration("phase_2_descend", "pf_replay", pf_replay_duration, len(traj2))
+_log_substage_duration(
+    base_logging_data,
+    "phase_2_descend",
+    "pf_replay",
+    pf_replay_duration,
+    len(traj2),
+)
 metrics.set_substage_workload(
     "phase_2_descend",
     "pf_replay",
@@ -437,16 +537,37 @@ metrics.finish_stage(descend_stage)
 
 # Phase 3: Close the Gripper (No PF updates)
 grip_stage = metrics.start_stage("phase_3_grip")
-logger.info("phase_start name=close_gripper steps=%d", len(traj3))
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="phase_start",
+        phase="close_gripper",
+        steps=len(traj3),
+    )
+)
 robot_execute_stage = metrics.start_substage("phase_3_grip", "robot_execute")
 for i, qpos in enumerate(traj3):
     real_robot.move_joints(qpos)
     if viewer is not None:
         viewer.sync()
     if (i + 1) % 100 == 0 or i == len(traj3) - 1:
-        logger.info("phase_progress name=close_gripper step=%d/%d", i + 1, len(traj3))
+        logger.info(
+            extend_logging_data(
+                base_logging_data,
+                event="phase_progress",
+                phase="close_gripper",
+                step=i + 1,
+                total_steps=len(traj3),
+            )
+        )
 robot_execute_duration = metrics.finish_substage(robot_execute_stage)
-_log_substage_duration("phase_3_grip", "robot_execute", robot_execute_duration, len(traj3))
+_log_substage_duration(
+    base_logging_data,
+    "phase_3_grip",
+    "robot_execute",
+    robot_execute_duration,
+    len(traj3),
+)
 metrics.set_substage_workload(
     "phase_3_grip",
     "robot_execute",
@@ -461,7 +582,13 @@ else:
     for qpos in traj3:
         particle_filter.predict(qpos)
 pf_replay_duration = metrics.finish_substage(pf_replay_stage)
-_log_substage_duration("phase_3_grip", "pf_replay", pf_replay_duration, len(traj3))
+_log_substage_duration(
+    base_logging_data,
+    "phase_3_grip",
+    "pf_replay",
+    pf_replay_duration,
+    len(traj3),
+)
 metrics.set_substage_workload(
     "phase_3_grip",
     "pf_replay",
@@ -483,7 +610,13 @@ metrics.finish_stage(grip_stage)
 
 # Phase 4: Lift straight up (OBJECT IS GRASPED - START TRACKING MASS)
 lft_stage = metrics.start_stage("phase_4_lift")
-logger.info("phase_start name=lift_and_estimate")
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="phase_start",
+        phase="lift_and_estimate",
+    )
+)
 
 # <--- Initialize lists to hold the historical data for the graph --->
 history_particles = []
@@ -663,52 +796,65 @@ for step, qpos in enumerate(traj4):
                 state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
             )
             logger.info(
-                "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
-                "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
-                "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
-                "rss_bytes=%d rss=%s backend=warp "
-                "execution_platform=%s execution_device=%s",
-                step,
-                particle_filter.N,
-                step_wall_duration * 1000.0,
-                step_rate_hz,
-                step_cpu_duration * 1000.0,
-                cpu_equivalent_cores_used,
-                cpu_percent_single_core,
-                cpu_percent_total_machine,
-                particle_filter.effective_sample_size(),
-                current_estimate,
-                rss_bytes,
-                format_bytes(rss_bytes),
-                env_memory_profile["execution_platform"],
-                env_memory_profile["execution_device"],
+                extend_logging_data(
+                    base_logging_data,
+                    event="particle_filter_step",
+                    step=step,
+                    particles=particle_filter.N,
+                    wall_ms=step_wall_duration * 1000.0,
+                    step_rate_hz=step_rate_hz,
+                    cpu_ms=step_cpu_duration * 1000.0,
+                    cpu_equivalent_cores=cpu_equivalent_cores_used,
+                    cpu_percent_single_core=cpu_percent_single_core,
+                    cpu_percent_total_machine=cpu_percent_total_machine,
+                    ess=particle_filter.effective_sample_size(),
+                    estimate=current_estimate,
+                    rss_bytes=rss_bytes,
+                    rss=format_bytes(rss_bytes),
+                    backend="warp",
+                    execution_platform=env_memory_profile["execution_platform"],
+                    execution_device=env_memory_profile["execution_device"],
+                )
             )
         else:
             logger.info(
-                "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
-                "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
-                "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
-                "rss_bytes=%d rss=%s mujoco_native_memory_total_bytes=%d "
-                "mujoco_native_memory_total=%s",
-                step,
-                particle_filter.N,
-                step_wall_duration * 1000.0,
-                step_rate_hz,
-                step_cpu_duration * 1000.0,
-                cpu_equivalent_cores_used,
-                cpu_percent_single_core,
-                cpu_percent_total_machine,
-                particle_filter.effective_sample_size(),
-                current_estimate,
-                rss_bytes,
-                format_bytes(rss_bytes),
-                env_memory_profile["native_bytes_total"],
-                format_bytes(env_memory_profile["native_bytes_total"]),
+                extend_logging_data(
+                    base_logging_data,
+                    event="particle_filter_step",
+                    step=step,
+                    particles=particle_filter.N,
+                    wall_ms=step_wall_duration * 1000.0,
+                    step_rate_hz=step_rate_hz,
+                    cpu_ms=step_cpu_duration * 1000.0,
+                    cpu_equivalent_cores=cpu_equivalent_cores_used,
+                    cpu_percent_single_core=cpu_percent_single_core,
+                    cpu_percent_total_machine=cpu_percent_total_machine,
+                    ess=particle_filter.effective_sample_size(),
+                    estimate=current_estimate,
+                    rss_bytes=rss_bytes,
+                    rss=format_bytes(rss_bytes),
+                    mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
+                    mujoco_native_memory_total=format_bytes(
+                        env_memory_profile["native_bytes_total"]
+                    ),
+                )
             )
 metrics.set_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total)
 metrics.set_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total)
-_log_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total, len(traj4))
-_log_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total, len(traj4))
+_log_substage_duration(
+    base_logging_data,
+    "phase_4_lift",
+    "robot_execute",
+    phase_4_robot_execute_total,
+    len(traj4),
+)
+_log_substage_duration(
+    base_logging_data,
+    "phase_4_lift",
+    "pf_update",
+    phase_4_pf_update_total,
+    len(traj4),
+)
 metrics.set_substage_workload(
     "phase_4_lift",
     "robot_execute",
@@ -741,70 +887,82 @@ if backend == "cpu":
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
     logger.info(
-        "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
-        "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
-        "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
-        "backend=cpu execution_platform=%s execution_device=%s "
-        "default_jax_platform=%s default_jax_device=%s "
-        "device_fallback_applied=%s",
-        len(pf_wall_durations),
-        avg_wall_duration * 1000.0,
-        avg_step_rate_hz,
-        avg_cpu_duration * 1000.0,
-        avg_cpu_equivalent_cores,
-        float(particle_filter.estimate()),
-        abs(true_mass - particle_filter.estimate()) * 100,
-        get_process_memory_bytes(),
-        format_bytes(get_process_memory_bytes()),
-        env_memory_profile["execution_platform"],
-        env_memory_profile["execution_device"],
-        env_memory_profile["default_jax_platform"],
-        env_memory_profile["default_jax_device"],
-        env_memory_profile["device_fallback_applied"],
+        extend_logging_data(
+            base_logging_data,
+            event="particle_filter_summary",
+            steps=len(pf_wall_durations),
+            avg_wall_ms=avg_wall_duration * 1000.0,
+            avg_step_rate_hz=avg_step_rate_hz,
+            avg_cpu_ms=avg_cpu_duration * 1000.0,
+            avg_cpu_equivalent_cores=avg_cpu_equivalent_cores,
+            final_estimate=float(particle_filter.estimate()),
+            final_error_pct=abs(true_mass - particle_filter.estimate()) * 100,
+            final_rss_bytes=get_process_memory_bytes(),
+            final_rss=format_bytes(get_process_memory_bytes()),
+            backend="cpu",
+            execution_platform=env_memory_profile["execution_platform"],
+            execution_device=env_memory_profile["execution_device"],
+            default_jax_platform=env_memory_profile["default_jax_platform"],
+            default_jax_device=env_memory_profile["default_jax_device"],
+            device_fallback_applied=env_memory_profile["device_fallback_applied"],
+        )
     )
 elif backend == "warp":
     env_memory_profile = env.memory_profile()
     logger.info(
-        "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
-        "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
-        "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
-        "backend=warp execution_platform=%s execution_device=%s",
-        len(pf_wall_durations),
-        avg_wall_duration * 1000.0,
-        avg_step_rate_hz,
-        avg_cpu_duration * 1000.0,
-        avg_cpu_equivalent_cores,
-        float(particle_filter.estimate()),
-        abs(true_mass - particle_filter.estimate()) * 100,
-        get_process_memory_bytes(),
-        format_bytes(get_process_memory_bytes()),
-        env_memory_profile["execution_platform"],
-        env_memory_profile["execution_device"],
+        extend_logging_data(
+            base_logging_data,
+            event="particle_filter_summary",
+            steps=len(pf_wall_durations),
+            avg_wall_ms=avg_wall_duration * 1000.0,
+            avg_step_rate_hz=avg_step_rate_hz,
+            avg_cpu_ms=avg_cpu_duration * 1000.0,
+            avg_cpu_equivalent_cores=avg_cpu_equivalent_cores,
+            final_estimate=float(particle_filter.estimate()),
+            final_error_pct=abs(true_mass - particle_filter.estimate()) * 100,
+            final_rss_bytes=get_process_memory_bytes(),
+            final_rss=format_bytes(get_process_memory_bytes()),
+            backend="warp",
+            execution_platform=env_memory_profile["execution_platform"],
+            execution_device=env_memory_profile["execution_device"],
+        )
     )
 else:
     logger.info(
-        "particle_filter_summary steps=%d avg_wall_ms=%.3f avg_step_rate_hz=%.2f "
-        "avg_cpu_ms=%.3f avg_cpu_equivalent_cores=%.3f final_estimate=%.6f "
-        "final_error_pct=%.2f final_rss_bytes=%d final_rss=%s "
-        "mujoco_native_memory_total_bytes=%d mujoco_native_memory_total=%s",
-        len(pf_wall_durations),
-        avg_wall_duration * 1000.0,
-        avg_step_rate_hz,
-        avg_cpu_duration * 1000.0,
-        avg_cpu_equivalent_cores,
-        float(particle_filter.estimate()),
-        abs(true_mass - particle_filter.estimate()) * 100,
-        get_process_memory_bytes(),
-        format_bytes(get_process_memory_bytes()),
-        env_memory_profile["native_bytes_total"],
-        format_bytes(env_memory_profile["native_bytes_total"]),
+        extend_logging_data(
+            base_logging_data,
+            event="particle_filter_summary",
+            steps=len(pf_wall_durations),
+            avg_wall_ms=avg_wall_duration * 1000.0,
+            avg_step_rate_hz=avg_step_rate_hz,
+            avg_cpu_ms=avg_cpu_duration * 1000.0,
+            avg_cpu_equivalent_cores=avg_cpu_equivalent_cores,
+            final_estimate=float(particle_filter.estimate()),
+            final_error_pct=abs(true_mass - particle_filter.estimate()) * 100,
+            final_rss_bytes=get_process_memory_bytes(),
+            final_rss=format_bytes(get_process_memory_bytes()),
+            mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
+            mujoco_native_memory_total=format_bytes(env_memory_profile["native_bytes_total"]),
+        )
     )
 
-logger.info("sequence_complete awaiting_user_input=%s", not headless)
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="sequence_complete",
+        awaiting_user_input=not headless,
+    )
+)
 if not headless and not shutdown_requested:
     input()
 elif not headless and shutdown_requested:
-    logger.info("sequence_complete skipping_user_input signal=%s", shutdown_signal_name)
+    logger.info(
+        extend_logging_data(
+            base_logging_data,
+            event="sequence_complete_skipping_user_input",
+            signal=shutdown_signal_name,
+        )
+    )
 final_prediction = float(particle_filter.estimate())
 time_to_prediction_seconds = time.perf_counter() - run_wall_start
 metrics.set_prediction_ready(
@@ -812,21 +970,39 @@ metrics.set_prediction_ready(
     final_error_pct=abs(true_mass - final_prediction) * 100,
 )
 logger.info(
-    "prediction_ready total_wall_s=%.3f final_mass_prediction_kg=%.4f",
-    time_to_prediction_seconds,
-    final_prediction,
+    extend_logging_data(
+        base_logging_data,
+        event="prediction_ready",
+        total_wall_s=time_to_prediction_seconds,
+        final_mass_prediction_kg=final_prediction,
+    )
 )
-logger.info("final_mass_prediction_kg=%.4f", final_prediction)
-logger.info("final_error_pct=%.2f", abs(true_mass - final_prediction) * 100)
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="final_mass_prediction",
+        final_mass_prediction_kg=final_prediction,
+    )
+)
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="final_error",
+        final_error_pct=abs(true_mass - final_prediction) * 100,
+    )
+)
 history_particle_steps_array, history_particles, mass_series_artifacts = mass_series.finalize()
 history_particle_steps = history_particle_steps_array.tolist()
 if mass_series_artifacts:
     logger.info(
-        "mass_timeseries_export_complete snapshots=%d artifacts=%d path=%s sample_interval=%d",
-        len(history_particles),
-        len(mass_series_artifacts),
-        mass_series_artifacts[0].parent,
-        mass_series_sample_interval,
+        extend_logging_data(
+            base_logging_data,
+            event="mass_timeseries_export_complete",
+            snapshots=len(history_particles),
+            artifacts=len(mass_series_artifacts),
+            path=str(mass_series_artifacts[0].parent),
+            sample_interval=mass_series_sample_interval,
+        )
     )
 # You should also print the real mass here to see if the filter got it right!
 
@@ -835,7 +1011,7 @@ if mass_series_artifacts:
 # 4. GRAPH GENERATION
 # ==========================================
 plot_stage = metrics.start_stage("plot_generation")
-logger.info("plot_generation_start")
+logger.info(extend_logging_data(base_logging_data, event="plot_generation_start"))
 
 
 plt.figure(figsize=(10, 6))
@@ -863,17 +1039,26 @@ output_dir.mkdir(exist_ok=True)
 output_path = output_dir / "particle_filter_evolution.png"
 plt.savefig(output_path, dpi=150, bbox_inches="tight")
 plt.close()
-logger.info("plot_saved path=%s", output_path)
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="plot_saved",
+        path=str(output_path),
+    )
+)
 metrics.finish_stage(plot_stage)
 
 if backend == "cpu":
     jax.clear_caches()
     gc.collect()
-    logger.info("jax_cleanup_complete")
+    logger.info(extend_logging_data(base_logging_data, event="jax_cleanup_complete"))
 
 logger.info(
-    "goodbye shutdown_requested=%s signal=%s",
-    shutdown_requested,
-    shutdown_signal_name or "none",
+    extend_logging_data(
+        base_logging_data,
+        event="goodbye",
+        shutdown_requested=shutdown_requested,
+        signal=shutdown_signal_name or "none",
+    )
 )
 shutdown_metrics(metrics)

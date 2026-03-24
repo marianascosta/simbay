@@ -13,6 +13,7 @@ import numpy as np
 from src.utils import DEFAULT_OBJECT_PROPS
 from src.utils import load_mujoco_model
 from src.utils import modify_object_properties
+from src.utils.logging_utils import extend_logging_data
 from src.utils.mjx_utils import prepare_model_for_mjx
 
 from .base import ParticleEnvironment
@@ -30,8 +31,10 @@ class FrankaWarpEnv(ParticleEnvironment):
         num_particles: int,
         nconmax: int = 128,
         njmax: int = 256,
+        logging_data: dict[str, object] | None = None,
     ):
         self.logger = logging.getLogger("simbay.warp_env")
+        self.logging_data = dict(logging_data or {})
         self.min, self.max = limits
         self._num_particles = num_particles
         self.std_dev = 0.005
@@ -85,10 +88,17 @@ class FrankaWarpEnv(ParticleEnvironment):
             self.block_body_id,
             nconmax=self._nconmax,
             njmax=self._njmax,
+            logging_data=self.logging_data,
         )
-        self.logger.info("warp_runtime_warmup_start particles=%d", self._num_particles)
+        self.logger.info(
+            extend_logging_data(
+                self.logging_data,
+                event="warp_runtime_warmup_start",
+                particles=self._num_particles,
+            )
+        )
         self._batch.warmup()
-        self.logger.info("warp_runtime_warmup_done")
+        self.logger.info(extend_logging_data(self.logging_data, event="warp_runtime_warmup_done"))
         self._masses = masses.copy()
         self._step_count = 0
         self.capture_recovery_snapshot()
@@ -109,7 +119,13 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         self._step_count += 1
         if self._step_count % 500 == 0:
-            self.logger.info("warp_propagate step=%d", self._step_count)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="warp_propagate",
+                    step=self._step_count,
+                )
+            )
 
         return next_particles
 
@@ -133,7 +149,13 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         self._step_count += int(controls.shape[0])
         if self._step_count and self._step_count % 500 == 0:
-            self.logger.info("warp_rollout_complete step=%d", self._step_count)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="warp_rollout_complete",
+                    step=self._step_count,
+                )
+            )
 
         return self._masses.copy()
 
@@ -210,38 +232,42 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         if sensor_invalid_transition:
             self.logger.warning(
-                "warp_invalid_sensor_state step=%d obs=(%.6f,%.6f,%.6f) "
-                "mass_min=%.6f mass_max=%.6f mass_mean=%.6f "
-                "sim_force_nonfinite=%d diff_nonfinite=%d likelihood_nonfinite=%d",
-                self._step_count,
-                float(observation_np[0]),
-                float(observation_np[1]),
-                float(observation_np[2]),
-                float(np.min(self._masses)) if self._masses.size else 0.0,
-                float(np.max(self._masses)) if self._masses.size else 0.0,
-                float(np.mean(self._masses)) if self._masses.size else 0.0,
-                sim_force_nonfinite_count,
-                diff_nonfinite_count,
-                likelihood_nonfinite_count,
+                extend_logging_data(
+                    self.logging_data,
+                    event="warp_invalid_sensor_state",
+                    step=self._step_count,
+                    observation=observation_np.tolist(),
+                    mass_min=float(np.min(self._masses)) if self._masses.size else 0.0,
+                    mass_max=float(np.max(self._masses)) if self._masses.size else 0.0,
+                    mass_mean=float(np.mean(self._masses)) if self._masses.size else 0.0,
+                    sim_force_nonfinite_count=sim_force_nonfinite_count,
+                    diff_nonfinite_count=diff_nonfinite_count,
+                    likelihood_nonfinite_count=likelihood_nonfinite_count,
+                )
             )
         if state_invalid_transition:
             self.logger.warning(
-                "warp_invalid_backend_state step=%d qpos_nonfinite=%d qvel_nonfinite=%d "
-                "sensordata_nonfinite=%d ctrl_nonfinite=%d",
-                self._step_count,
-                state_nonfinite_counts["qpos_nonfinite_count"],
-                state_nonfinite_counts["qvel_nonfinite_count"],
-                state_nonfinite_counts["sensordata_nonfinite_count"],
-                state_nonfinite_counts["ctrl_nonfinite_count"],
+                extend_logging_data(
+                    self.logging_data,
+                    event="warp_invalid_backend_state",
+                    step=self._step_count,
+                    qpos_nonfinite_count=state_nonfinite_counts["qpos_nonfinite_count"],
+                    qvel_nonfinite_count=state_nonfinite_counts["qvel_nonfinite_count"],
+                    sensordata_nonfinite_count=state_nonfinite_counts["sensordata_nonfinite_count"],
+                    ctrl_nonfinite_count=state_nonfinite_counts["ctrl_nonfinite_count"],
+                )
             )
         repair_active_now = bool(np.any(repaired_worlds))
         repair_transition = repair_active_now and not self._repair_active
         self._repair_active = repair_active_now
         if repair_transition:
             self.logger.warning(
-                "warp_repaired_invalid_worlds step=%d repaired_worlds=%d",
-                self._step_count,
-                int(np.count_nonzero(repaired_worlds)),
+                extend_logging_data(
+                    self.logging_data,
+                    event="warp_repaired_invalid_worlds",
+                    step=self._step_count,
+                    repaired_world_count=int(np.count_nonzero(repaired_worlds)),
+                )
             )
 
         self._last_measurement_diagnostics = {
@@ -322,9 +348,12 @@ class FrankaWarpEnv(ParticleEnvironment):
         for length in normalized_lengths:
             self._batch.warmup_rollout(length)
         self.logger.info(
-            "warp_runtime_rollout_warmup_done particles=%d rollout_lengths=%s",
-            self._num_particles,
-            normalized_lengths,
+            extend_logging_data(
+                self.logging_data,
+                event="warp_runtime_rollout_warmup_done",
+                particles=self._num_particles,
+                rollout_lengths=normalized_lengths,
+            )
         )
         return normalized_lengths
 

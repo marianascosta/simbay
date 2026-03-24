@@ -10,6 +10,7 @@ import numpy as np
 from src.utils import DEFAULT_OBJECT_PROPS
 from src.utils import load_mujoco_model
 from src.utils import modify_object_properties
+from src.utils.logging_utils import extend_logging_data
 from src.utils.mjx_utils import prepare_model_for_mjx
 
 from .base import ParticleEnvironment
@@ -23,8 +24,14 @@ class FrankaMJXEnv(ParticleEnvironment):
     of a sequential Python loop.
     """
 
-    def __init__(self, limits: tuple[float, float], num_particles: int):
+    def __init__(
+        self,
+        limits: tuple[float, float],
+        num_particles: int,
+        logging_data: dict[str, object] | None = None,
+    ):
         self.logger = logging.getLogger("simbay.mjx_env")
+        self.logging_data = dict(logging_data or {})
         self.min, self.max = limits
         self._num_particles = num_particles
         self.std_dev = 0.005
@@ -59,9 +66,15 @@ class FrankaMJXEnv(ParticleEnvironment):
         masses = np.random.uniform(self.min, self.max, size=n)
 
         self._batch = MJXBatch(self._mj_model, self._mj_data, masses, self.block_body_id)
-        self.logger.info("mjx_jit_warmup_start particles=%d", n)
+        self.logger.info(
+            extend_logging_data(
+                self.logging_data,
+                event="mjx_jit_warmup_start",
+                particles=n,
+            )
+        )
         self._batch.warmup()
-        self.logger.info("mjx_jit_warmup_done")
+        self.logger.info(extend_logging_data(self.logging_data, event="mjx_jit_warmup_done"))
 
         self._step_count = 0
 
@@ -108,7 +121,13 @@ class FrankaMJXEnv(ParticleEnvironment):
 
         self._step_count += 1
         if self._step_count % 500 == 0:
-            self.logger.info("mjx_propagate step=%d", self._step_count)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_propagate",
+                    step=self._step_count,
+                )
+            )
 
         return jax_particles
 
@@ -135,7 +154,13 @@ class FrankaMJXEnv(ParticleEnvironment):
         self._batch.rollout(controls, particle_trajectory)
         self._step_count += int(controls.shape[0])
         if self._step_count and self._step_count % 500 == 0:
-            self.logger.info("mjx_rollout_complete step=%d", self._step_count)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_rollout_complete",
+                    step=self._step_count,
+                )
+            )
         return final_particles
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
@@ -185,8 +210,11 @@ class FrankaMJXEnv(ParticleEnvironment):
         for length in normalized_lengths:
             self._batch.warmup_rollout(length)
         self.logger.info(
-            "mjx_runtime_rollout_warmup_done particles=%d rollout_lengths=%s",
-            self._num_particles,
-            normalized_lengths,
+            extend_logging_data(
+                self.logging_data,
+                event="mjx_runtime_rollout_warmup_done",
+                particles=self._num_particles,
+                rollout_lengths=normalized_lengths,
+            )
         )
         return normalized_lengths

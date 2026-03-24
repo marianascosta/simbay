@@ -1,6 +1,11 @@
+import logging
+
 import numpy as np
 
 from .base import IKProblem
+
+
+logger = logging.getLogger("simbay.ik_solver")
 
 
 def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
@@ -34,7 +39,13 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         
         # 3. Check Convergence
         if error < tol:
-            print(f"[IK Info] Converged in {i} iterations with error: {error:.2e}.")
+            logger.info(
+                {
+                    "event": "ik_converged",
+                    "iterations": i,
+                    "error": error,
+                }
+            )
             return theta
 
         # 4. Compute Jacobian & Step
@@ -47,5 +58,11 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
     
     # NOTE: If we reach max_iter, the returned 'error' corresponds to the 
     # second-to-last position. This is acceptable for failed/non-converged states.
-    print(f"[IK Info] Did not converge in {i} iterations with 2nd to last error: {error:.2e}.")
+    logger.info(
+        {
+            "event": "ik_not_converged",
+            "iterations": i,
+            "error": error,
+        }
+    )
     return theta
