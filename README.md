@@ -46,4 +46,20 @@ docker compose --profile gpu up --build
 This starts the app metrics endpoint, Prometheus, Grafana, and `node-exporter`
 in one workflow. Omit `--profile gpu` if you do not want `dcgm-exporter`.
 
-See [docs/observability.md](/Users/marianacosta/Documents/fcul/simbay/simbay/docs/observability.md) for the Compose-based setup and validation queries.
+## Profiling
+
+In-process Nsight Python profiling can be enabled for container runs with:
+
+```sh
+SIMBAY_ENABLE_NSIGHT=1 docker compose up --build simbay
+```
+
+Or via:
+
+```sh
+make docker-simbay-profile
+```
+
+The image installs `nsight-python`, and the Warp phase-4 hot path is annotated
+in code. Profiling stays disabled by default and is activated only when
+`SIMBAY_ENABLE_NSIGHT=1`.

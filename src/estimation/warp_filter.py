@@ -4,6 +4,7 @@ import numpy as np
 
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.logging_utils import extend_logging_data
+from src.utils.profiling import annotate
 
 from .warp_particle_filter import FrankaWarpEnv
 
@@ -312,8 +313,10 @@ class WarpParticleFilter:
         self._resample_count += 1
 
     def step(self, control_input, observation) -> dict[str, float | bool]:
-        self.particles = self.env.propagate(self.particles, control_input)
-        likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        with annotate("warp_pf_propagate"):
+            self.particles = self.env.propagate(self.particles, control_input)
+        with annotate("warp_pf_likelihood"):
+            likelihoods = self.env.compute_likelihoods(self.particles, observation)
         diagnostics = self.env.last_measurement_diagnostics()
         if not self._measurement_is_valid(diagnostics):
             return self._skip_invalid_update(diagnostics)
@@ -327,14 +330,10 @@ class WarpParticleFilter:
             self._ess,
             indexes,
             did_resample,
-        ) = _update_and_optionally_resample(
-            self.weights,
-            self.particles,
-            likelihoods,
-            offset,
-        )
+        ) = _update_and_optionally_resample(self.weights, self.particles, likelihoods, offset)
         if did_resample:
-            self.env.resample_states(indexes)
+            with annotate("warp_pf_resample_states"):
+                self.env.resample_states(indexes)
             self._resample_count += 1
         self._save_last_good_snapshot()
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(

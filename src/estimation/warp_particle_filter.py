@@ -15,6 +15,7 @@ from src.utils import load_mujoco_model
 from src.utils import modify_object_properties
 from src.utils.logging_utils import extend_logging_data
 from src.utils.mjx_utils import prepare_model_for_mjx
+from src.utils.profiling import annotate
 
 from .base import ParticleEnvironment
 from .warp_batch import WarpBatch
@@ -114,7 +115,8 @@ class FrankaWarpEnv(ParticleEnvironment):
             self.min,
             self.max,
         ).astype(np.float32)
-        self._batch.step(control_input, next_particles)
+        with annotate("warp_batch_step"):
+            self._batch.step(control_input, next_particles)
         self._masses = next_particles.copy()
 
         self._step_count += 1
@@ -136,7 +138,8 @@ class FrankaWarpEnv(ParticleEnvironment):
             self.min,
             self.max,
         ).astype(np.float32)
-        self._batch.rollout(controls, mass_trajectory)
+        with annotate("warp_batch_rollout"):
+            self._batch.rollout(controls, mass_trajectory)
         self._masses = mass_trajectory[-1].copy()
 
         self._step_count += int(controls.shape[0])
@@ -150,8 +153,10 @@ class FrankaWarpEnv(ParticleEnvironment):
         repaired_worlds = np.zeros((self._num_particles,), dtype=bool)
         pre_counts = self._batch.state_nonfinite_counts()
         if any(value > 0 for value in pre_counts.values()):
-            repaired_worlds = self._batch.repair_invalid_worlds_from_snapshot()
-        sim_forces = self._batch.sensor_slice(self.force_adr, 3)
+            with annotate("warp_repair_invalid_worlds"):
+                repaired_worlds = self._batch.repair_invalid_worlds_from_snapshot()
+        with annotate("warp_sensor_slice"):
+            sim_forces = self._batch.sensor_slice(self.force_adr, 3)
         observation_np = np.asarray(observation, dtype=np.float32)
         diff = observation_np - sim_forces
         dist_sq = np.sum(diff**2, axis=1)

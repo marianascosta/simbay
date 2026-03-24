@@ -1,11 +1,12 @@
 import gc
+from datetime import datetime
 import logging
+import math
 import os
 from pathlib import Path
 import signal
 import time
 from typing import Any
-from uuid import uuid4
 
 # Apply JAX/XLA settings before importing modules that may load JAX.
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -32,12 +33,29 @@ from src.utils.mass_timeseries import ParticleMassTimeseriesCollector
 from src.utils.logging_utils import setup_logging
 from src.utils.metrics import create_metrics_from_env
 from src.utils.metrics import shutdown_metrics
+from src.utils.profiling import annotate
 
 
 shutdown_requested = False
 shutdown_signal_name: str | None = None
 logger = None
 base_logging_data: dict[str, object] = {}
+
+
+def _weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+    if values.size == 0:
+        return 0.0
+    if values.size != weights.size:
+        raise ValueError("values and weights must have the same length")
+    quantile = min(max(float(quantile), 0.0), 1.0)
+    order = np.argsort(values)
+    sorted_values = values[order]
+    sorted_weights = np.clip(weights[order], 0.0, None)
+    total_weight = float(np.sum(sorted_weights))
+    if total_weight <= 0.0:
+        return float(np.quantile(sorted_values, quantile))
+    cumulative = np.cumsum(sorted_weights) / total_weight
+    return float(np.interp(quantile, cumulative, sorted_values))
 
 
 def _log_setup_summary(
@@ -240,7 +258,7 @@ signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 # ==========================================
 # 1. SETUP
 # ==========================================
-run_id = os.getenv("SIMBAY_RUN_ID") or str(uuid4())
+run_id = os.getenv("SIMBAY_RUN_ID") or datetime.now().strftime("%Y%m%d%H%M%S")
 base_logging_data = {"run_id": run_id}
 run_wall_start = time.perf_counter()
 metrics = create_metrics_from_env(run_id=run_id)
@@ -684,6 +702,11 @@ phase_4_skipped_invalid_updates = 0
 phase_4_first_invalid_sensor_step = -1
 phase_4_first_invalid_state_step = -1
 phase_4_max_repaired_world_count = 0
+phase_4_abs_error_sum = 0.0
+phase_4_squared_error_sum = 0.0
+time_to_first_estimate_seconds = -1.0
+convergence_time_to_5pct_seconds = -1.0
+convergence_time_to_10pct_seconds = -1.0
 
 for step, qpos in enumerate(traj4):
     robot_execute_start = time.perf_counter()
@@ -704,15 +727,16 @@ for step, qpos in enumerate(traj4):
 
     # 3. Update beliefs based on the noisy real reading and resample
     if use_batched_backend:
-        if backend == "warp" and not phase_4_bootstrap_applied:
-            step_result = particle_filter.bootstrap_first_update(
-                qpos,
-                noisy_ft_reading,
-                max_attempts=3,
-            )
-            phase_4_bootstrap_applied = True
-        else:
-            step_result = particle_filter.step(qpos, noisy_ft_reading)
+        with annotate("phase4_particle_filter_step"):
+            if backend == "warp" and not phase_4_bootstrap_applied:
+                step_result = particle_filter.bootstrap_first_update(
+                    qpos,
+                    noisy_ft_reading,
+                    max_attempts=3,
+                )
+                phase_4_bootstrap_applied = True
+            else:
+                step_result = particle_filter.step(qpos, noisy_ft_reading)
     else:
         particle_filter.predict(qpos)
         particle_filter.update(noisy_ft_reading)
@@ -738,6 +762,20 @@ for step, qpos in enumerate(traj4):
             history_particles.append(particles_snapshot)
     current_estimate = float(particle_filter.estimate())
     history_estimates.append(current_estimate)
+    if time_to_first_estimate_seconds < 0.0:
+        time_to_first_estimate_seconds = time.perf_counter() - run_wall_start
+
+    abs_error_kg = abs(current_estimate - true_mass)
+    rel_error_pct = (abs_error_kg / true_mass * 100.0) if true_mass != 0 else 0.0
+    phase_4_abs_error_sum += abs_error_kg
+    phase_4_squared_error_sum += abs_error_kg**2
+    phase_4_mae_kg = phase_4_abs_error_sum / (step + 1)
+    phase_4_rmse_kg = math.sqrt(phase_4_squared_error_sum / (step + 1))
+    elapsed_since_run_start = time.perf_counter() - run_wall_start
+    if convergence_time_to_10pct_seconds < 0.0 and rel_error_pct <= 10.0:
+        convergence_time_to_10pct_seconds = elapsed_since_run_start
+    if convergence_time_to_5pct_seconds < 0.0 and rel_error_pct <= 5.0:
+        convergence_time_to_5pct_seconds = elapsed_since_run_start
 
     step_wall_duration = time.perf_counter() - step_wall_start
     step_cpu_duration = time.process_time() - step_cpu_start
@@ -767,7 +805,35 @@ for step, qpos in enumerate(traj4):
         uniform_weight_max_deviation=float(step_result.get("uniform_weight_max_deviation", 0.0)),
         collapsed_to_uniform=bool(step_result.get("collapsed_to_uniform", False)),
     )
+    metrics.update_accuracy_metrics(
+        mass_abs_error_kg=abs_error_kg,
+        mass_rel_error_pct=rel_error_pct,
+        phase4_mae_kg=phase_4_mae_kg,
+        phase4_rmse_kg=phase_4_rmse_kg,
+        mass_error_within_1pct=rel_error_pct <= 1.0,
+        mass_error_within_5pct=rel_error_pct <= 5.0,
+        mass_error_within_10pct=rel_error_pct <= 10.0,
+        convergence_time_to_5pct_seconds=convergence_time_to_5pct_seconds,
+        convergence_time_to_10pct_seconds=convergence_time_to_10pct_seconds,
+        time_to_first_estimate_seconds=time_to_first_estimate_seconds,
+    )
     if latest_particles_snapshot is not None:
+        weights_snapshot = np.asarray(particle_filter.weights, dtype=np.float64).reshape(-1)
+        particle_values = np.asarray(latest_particles_snapshot, dtype=np.float64).reshape(-1)
+        particle_weight_sum = float(np.sum(weights_snapshot))
+        if particle_weight_sum > 0.0:
+            weights_snapshot = weights_snapshot / particle_weight_sum
+        ci50_low = _weighted_quantile(particle_values, weights_snapshot, 0.25)
+        ci50_high = _weighted_quantile(particle_values, weights_snapshot, 0.75)
+        ci90_low = _weighted_quantile(particle_values, weights_snapshot, 0.05)
+        ci90_high = _weighted_quantile(particle_values, weights_snapshot, 0.95)
+        safe_weights = np.clip(weights_snapshot, np.finfo(np.float64).tiny, 1.0)
+        weight_entropy = float(-np.sum(safe_weights * np.log(safe_weights)))
+        max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
+        weight_entropy_normalized = (
+            float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
+        )
+        weight_perplexity = float(np.exp(weight_entropy))
         metrics.update_resample_state(
             steps=step + 1,
             resample_count=phase_4_resample_count,
@@ -779,6 +845,15 @@ for step, qpos in enumerate(traj4):
             particle_p10=float(np.percentile(latest_particles_snapshot, 10)),
             particle_p50=float(np.percentile(latest_particles_snapshot, 50)),
             particle_p90=float(np.percentile(latest_particles_snapshot, 90)),
+        )
+        metrics.update_uncertainty_metrics(
+            credible_interval_50_width_kg=ci50_high - ci50_low,
+            credible_interval_90_width_kg=ci90_high - ci90_low,
+            credible_interval_50_contains_truth=ci50_low <= true_mass <= ci50_high,
+            credible_interval_90_contains_truth=ci90_low <= true_mass <= ci90_high,
+            weight_entropy=weight_entropy,
+            weight_entropy_normalized=weight_entropy_normalized,
+            weight_perplexity=weight_perplexity,
         )
     if backend == "warp":
         diagnostics = step_result.get("diagnostics", {})

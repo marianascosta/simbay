@@ -14,9 +14,11 @@ matplot = "^0.1.9"
 mujoco-mjx = "^3.6.0"
 mujoco-warp = { version = ">=0.0.2", optional = true }
 warp-lang = { version = ">=1.11.1", optional = true }
+nsight-python = { version = "*", optional = true }
 
 [tool.poetry.extras]
 warp = ["mujoco-warp", "warp-lang"]
+profiling = ["nsight-python"]
 
 
 [build-system]

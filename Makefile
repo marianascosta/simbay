@@ -1,4 +1,4 @@
-.PHONY: install install-warp shell run run-warp run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp
+.PHONY: install install-warp shell run run-warp run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -41,6 +41,9 @@ docker-run:
 
 docker-simbay-up:
 	docker compose up --build -d simbay
+
+docker-simbay-profile:
+	SIMBAY_ENABLE_NSIGHT=1 docker compose up --build simbay
 
 docker-simbay-down:
 	docker compose stop simbay

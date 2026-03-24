@@ -373,6 +373,118 @@ class SimbayMetrics:
             "Milliseconds spent per particle-step during the latest lift/update step.",
         )
 
+    def update_accuracy_metrics(
+        self,
+        *,
+        mass_abs_error_kg: float,
+        mass_rel_error_pct: float,
+        phase4_mae_kg: float,
+        phase4_rmse_kg: float,
+        mass_error_within_1pct: bool,
+        mass_error_within_5pct: bool,
+        mass_error_within_10pct: bool,
+        convergence_time_to_5pct_seconds: float,
+        convergence_time_to_10pct_seconds: float,
+        time_to_first_estimate_seconds: float,
+    ) -> None:
+        self._store.set_gauge(
+            "simbay_mass_abs_error_kg",
+            mass_abs_error_kg,
+            "Absolute difference between the current mass estimate and the true mass.",
+        )
+        self._store.set_gauge(
+            "simbay_mass_rel_error_pct",
+            mass_rel_error_pct,
+            "Relative percent error of the current mass estimate.",
+        )
+        self._store.set_gauge(
+            "simbay_phase4_mae_kg",
+            phase4_mae_kg,
+            "Running mean absolute error across phase-4 updates.",
+        )
+        self._store.set_gauge(
+            "simbay_phase4_rmse_kg",
+            phase4_rmse_kg,
+            "Running root mean squared error across phase-4 updates.",
+        )
+        self._store.set_gauge(
+            "simbay_mass_error_within_1pct",
+            1.0 if mass_error_within_1pct else 0.0,
+            "Whether the latest mass estimate is within 1 percent of the true mass.",
+        )
+        self._store.set_gauge(
+            "simbay_mass_error_within_5pct",
+            1.0 if mass_error_within_5pct else 0.0,
+            "Whether the latest mass estimate is within 5 percent of the true mass.",
+        )
+        self._store.set_gauge(
+            "simbay_mass_error_within_10pct",
+            1.0 if mass_error_within_10pct else 0.0,
+            "Whether the latest mass estimate is within 10 percent of the true mass.",
+        )
+        self._store.set_gauge(
+            "simbay_convergence_time_to_5pct_seconds",
+            convergence_time_to_5pct_seconds,
+            "Time until the mass estimate first reached 5 percent relative error or better, or -1 if not reached.",
+        )
+        self._store.set_gauge(
+            "simbay_convergence_time_to_10pct_seconds",
+            convergence_time_to_10pct_seconds,
+            "Time until the mass estimate first reached 10 percent relative error or better, or -1 if not reached.",
+        )
+        self._store.set_gauge(
+            "simbay_time_to_first_estimate_seconds",
+            time_to_first_estimate_seconds,
+            "Time from run start until the first phase-4 estimate was produced.",
+        )
+
+    def update_uncertainty_metrics(
+        self,
+        *,
+        credible_interval_50_width_kg: float,
+        credible_interval_90_width_kg: float,
+        credible_interval_50_contains_truth: bool,
+        credible_interval_90_contains_truth: bool,
+        weight_entropy: float,
+        weight_entropy_normalized: float,
+        weight_perplexity: float,
+    ) -> None:
+        self._store.set_gauge(
+            "simbay_credible_interval_50_width_kg",
+            credible_interval_50_width_kg,
+            "Width of the central 50 percent credible interval over particle mass.",
+        )
+        self._store.set_gauge(
+            "simbay_credible_interval_90_width_kg",
+            credible_interval_90_width_kg,
+            "Width of the central 90 percent credible interval over particle mass.",
+        )
+        self._store.set_gauge(
+            "simbay_credible_interval_50_contains_truth",
+            1.0 if credible_interval_50_contains_truth else 0.0,
+            "Whether the true mass lies inside the central 50 percent credible interval.",
+        )
+        self._store.set_gauge(
+            "simbay_credible_interval_90_contains_truth",
+            1.0 if credible_interval_90_contains_truth else 0.0,
+            "Whether the true mass lies inside the central 90 percent credible interval.",
+        )
+        self._store.set_gauge(
+            "simbay_weight_entropy",
+            weight_entropy,
+            "Shannon entropy of the current particle-weight distribution.",
+        )
+        self._store.set_gauge(
+            "simbay_weight_entropy_normalized",
+            weight_entropy_normalized,
+            "Particle-weight entropy normalized by the maximum possible entropy.",
+        )
+        self._store.set_gauge(
+            "simbay_weight_perplexity",
+            weight_perplexity,
+            "Effective number of weight states implied by the current particle-weight distribution.",
+        )
+
     def update_resample_state(
         self,
         *,

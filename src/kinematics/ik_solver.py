@@ -43,7 +43,7 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
                 {
                     "event": "ik_converged",
                     "iterations": i,
-                    "error": error,
+                    "residual_norm": error,
                 }
             )
             return theta
@@ -62,7 +62,7 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         {
             "event": "ik_not_converged",
             "iterations": i,
-            "error": error,
+            "residual_norm": error,
         }
     )
     return theta
