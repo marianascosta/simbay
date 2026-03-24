@@ -20,7 +20,6 @@ RUN poetry install --no-interaction --no-ansi
 COPY assets ./assets
 COPY src ./src
 COPY main.py ./
-
 CMD ["python", "main.py"]
 
 
@@ -53,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 RUN python -m pip install --upgrade pip setuptools wheel poetry
+RUN python -m pip install nsight-python
 
 COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --no-interaction --no-ansi --extras warp
@@ -60,5 +60,4 @@ RUN poetry install --no-interaction --no-ansi --extras warp
 COPY assets ./assets
 COPY src ./src
 COPY main.py ./
-
 CMD ["python", "main.py"]

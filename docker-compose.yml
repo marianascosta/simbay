@@ -7,14 +7,19 @@ services:
     container_name: simbay
     environment:
       MPLBACKEND: Agg
-      SIMBAY_PARTICLES: "100"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-1000}"
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
-      SIMBAY_BACKEND: warp
+      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-warp}"
       SIMBAY_DOCKER_TARGET: "cuda"
       SIMBAY_METRICS_ENABLED: "1"
       SIMBAY_METRICS_PORT: "8000"
-      
+      SIMBAY_RUN_ID: "${SIMBAY_RUN_ID:-}"
+      SIMBAY_ENABLE_NSIGHT: "${SIMBAY_ENABLE_NSIGHT:-1}"
+      SIMBAY_MASS_TIMESERIES_ENABLED: "${SIMBAY_MASS_TIMESERIES_ENABLED:-1}"
+      SIMBAY_MASS_TIMESERIES_INTERVAL: "${SIMBAY_MASS_TIMESERIES_INTERVAL:-1}"
+      SIMBAY_MASS_TIMESERIES_FLUSH_SNAPSHOTS: "${SIMBAY_MASS_TIMESERIES_FLUSH_SNAPSHOTS:-64}"
+
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
@@ -94,11 +99,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   dcgm-exporter:
-    image: nvcr.io/nvidia/k8s/dcgm-exporter:latest
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-distroless
     container_name: simbay-dcgm-exporter
     profiles:
       - gpu
     gpus: all
+    cap_add:
+      - SYS_ADMIN
     ports:
       - "9400:9400"
 

@@ -54,11 +54,82 @@
       }
     ]
   },
+  "description": "Research-facing observability dashboard for Simbay benchmarking. Organized around convergence quality, computational efficiency, runtime resource use, and numerical stability.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "links": [],
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Executive Summary",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "id": 101,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_run_info{run_id=~\"$run_id\"}",
+          "legendFormat": "backend={{backend}} particles={{particles}} dt={{control_dt}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Run Configuration",
+      "type": "stat"
+    },
     {
       "datasource": {
         "type": "prometheus",
@@ -93,11 +164,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 0
+        "w": 4,
+        "x": 8,
+        "y": 1
       },
-      "id": 1,
+      "id": 102,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -115,13 +186,13 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_prediction_ready_seconds",
-          "legendFormat": "time_to_prediction",
+          "expr": "simbay_prediction_ready_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "prediction_ready",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Time To Prediction",
+      "title": "Prediction Ready",
       "type": "stat"
     },
     {
@@ -158,11 +229,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 0
+        "w": 4,
+        "x": 12,
+        "y": 1
       },
-      "id": 2,
+      "id": 103,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -180,7 +251,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_final_error_pct",
+          "expr": "simbay_final_error_pct{run_id=~\"$run_id\"}",
           "legendFormat": "final_error",
           "range": true,
           "refId": "A"
@@ -215,11 +286,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 0
+        "w": 4,
+        "x": 16,
+        "y": 1
       },
-      "id": 3,
+      "id": 104,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -237,13 +308,13 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_mass_estimate_kg",
-          "legendFormat": "estimate",
+          "expr": "simbay_mass_estimate_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "mass_estimate",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Latest Estimate",
+      "title": "Latest Mass Estimate",
       "type": "stat"
     },
     {
@@ -272,11 +343,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
+        "w": 4,
+        "x": 20,
+        "y": 1
       },
-      "id": 4,
+      "id": 105,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -294,7 +365,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_particle_count",
+          "expr": "simbay_particle_count{run_id=~\"$run_id\"}",
           "legendFormat": "particles",
           "range": true,
           "refId": "A"
@@ -314,7 +385,7 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 18,
+            "fillOpacity": 12,
             "lineWidth": 2,
             "showPoints": "never"
           },
@@ -327,9 +398,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 4
+        "y": 5
       },
-      "id": 5,
+      "id": 106,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -344,121 +415,13 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_mass_estimate_kg",
+          "expr": "simbay_mass_estimate_kg{run_id=~\"$run_id\"}",
           "legendFormat": "estimate",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Mass Estimate Over Time",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 12,
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 4
-      },
-      "id": 6,
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "editorMode": "code",
-          "expr": "simbay_effective_sample_size",
-          "legendFormat": "ess",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Effective Sample Size",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisPlacement": "auto",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "mappings": [],
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 12
-      },
-      "id": 7,
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "editorMode": "code",
-          "expr": "simbay_phase4_step_wall_seconds * 1000",
-          "legendFormat": "wall_ms",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "editorMode": "code",
-          "expr": "simbay_phase4_step_cpu_seconds * 1000",
-          "legendFormat": "cpu_ms",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Phase 4 Step Latency",
+      "title": "Mass Estimate Trajectory",
       "type": "timeseries"
     },
     {
@@ -485,9 +448,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 5
       },
-      "id": 8,
+      "id": 107,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -502,13 +465,563 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_phase4_cpu_equivalent_cores",
-          "legendFormat": "cpu_equivalent_cores",
+          "expr": "simbay_effective_sample_size{run_id=~\"$run_id\"}",
+          "legendFormat": "ess",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_resample_rate{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "resample_rate_pct",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_last_step_resampled{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "last_step_resampled_pct",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Posterior Health",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 110,
+      "panels": [],
+      "title": "Estimation Dynamics",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 111,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_step_wall_seconds{run_id=~\"$run_id\"} * 1000",
+          "legendFormat": "wall_ms",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_step_cpu_seconds{run_id=~\"$run_id\"} * 1000",
+          "legendFormat": "cpu_ms",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Phase 4 Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "id": 112,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_step_rate_hz{run_id=~\"$run_id\"}",
+          "legendFormat": "step_rate_hz",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_particle_steps_per_second{run_id=~\"$run_id\"}",
+          "legendFormat": "particle_steps_per_second",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Phase 4 Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "kg"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "id": 113,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_min_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "min",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_p10_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "p10",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_p50_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_mean_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "mean",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_p90_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "p90",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_max_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "max",
+          "range": true,
+          "refId": "F"
+        }
+      ],
+      "title": "Posterior Mass Bands",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "id": 114,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_particle_mass_std_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "mass_std_kg",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_uniform_weight_l1_distance{run_id=~\"$run_id\"}",
+          "legendFormat": "uniform_l1_distance",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_uniform_weight_max_deviation{run_id=~\"$run_id\"}",
+          "legendFormat": "uniform_max_deviation",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_collapsed_to_uniform{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "collapsed_to_uniform_pct",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Particle Spread And Weight Concentration",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 120,
+      "panels": [],
+      "title": "Performance And Runtime",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "idle"
+                },
+                "1": {
+                  "text": "active"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "id": 121,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_stage_active{run_id=~\"$run_id\"}",
+          "legendFormat": "{{stage}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Phase 4 CPU Core Pressure",
+      "title": "Stage Timeline",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "id": 122,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_stage_duration_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "{{stage}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Stage Duration Profile",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "id": 123,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_substage_step_rate_hz{run_id=~\"$run_id\"}",
+          "legendFormat": "{{phase}} / {{substage}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_step_rate_hz{run_id=~\"$run_id\"}",
+          "legendFormat": "phase_4_update",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Substage Step Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "id": 124,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_substage_ms_per_step{run_id=~\"$run_id\"}",
+          "legendFormat": "{{phase}} / {{substage}} ms_per_step",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_substage_ms_per_particle_step{run_id=~\"$run_id\"}",
+          "legendFormat": "{{phase}} / {{substage}} ms_per_particle_step",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_ms_per_particle_step{run_id=~\"$run_id\"}",
+          "legendFormat": "phase_4 ms_per_particle_step",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Normalized Simulation Cost",
       "type": "timeseries"
     },
     {
@@ -535,9 +1048,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 20
+        "y": 47
       },
-      "id": 9,
+      "id": 125,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -552,7 +1065,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_process_rss_bytes",
+          "expr": "simbay_process_rss_bytes{run_id=~\"$run_id\"}",
           "legendFormat": "{{stage}}",
           "range": true,
           "refId": "A"
@@ -572,12 +1085,12 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 10,
+            "fillOpacity": 12,
             "lineWidth": 2,
             "showPoints": "never"
           },
           "mappings": [],
-          "unit": "bytes"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -585,9 +1098,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 20
+        "y": 47
       },
-      "id": 10,
+      "id": 126,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -602,21 +1115,27 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_mjx_bytes_in_use",
-          "legendFormat": "in_use {{stage}}",
+          "expr": "simbay_phase4_cpu_equivalent_cores{run_id=~\"$run_id\"}",
+          "legendFormat": "cpu_equivalent_cores",
           "range": true,
           "refId": "A"
-        },
-        {
-          "editorMode": "code",
-          "expr": "simbay_mjx_peak_bytes_in_use",
-          "legendFormat": "peak {{stage}}",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "MJX Allocator Memory",
+      "title": "CPU Core Pressure",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "id": 130,
+      "panels": [],
+      "title": "System Resources",
+      "type": "row"
     },
     {
       "datasource": {
@@ -629,8 +1148,9 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 20,
-            "lineWidth": 1
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
           },
           "mappings": [],
           "unit": "percent"
@@ -641,9 +1161,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 28
+        "y": 56
       },
-      "id": 11,
+      "id": 131,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -659,7 +1179,7 @@
         {
           "editorMode": "code",
           "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) by (instance))",
-          "legendFormat": "host_cpu {{instance}}",
+          "legendFormat": "{{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -678,8 +1198,9 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 20,
-            "lineWidth": 1
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
           },
           "mappings": [],
           "unit": "bytes"
@@ -690,9 +1211,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 28
+        "y": 56
       },
-      "id": 12,
+      "id": 132,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -708,7 +1229,7 @@
         {
           "editorMode": "code",
           "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
-          "legendFormat": "host_memory_used {{instance}}",
+          "legendFormat": "{{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -727,11 +1248,12 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 20,
-            "lineWidth": 1
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
           },
           "mappings": [],
-          "unit": "percent"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -739,9 +1261,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 28
+        "y": 56
       },
-      "id": 13,
+      "id": 133,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -780,20 +1302,15 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "continuous-GrYlRd"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
           },
           "mappings": [],
-          "max": 1,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -801,35 +1318,52 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 64
       },
-      "id": 14,
+      "id": 134,
       "options": {
-        "colWidth": 0.9,
         "legend": {
-          "displayMode": "hidden",
+          "displayMode": "table",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
-        "mergeValues": true,
-        "rowHeight": 0.9,
-        "showValue": "never",
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_stage_active",
-          "legendFormat": "{{stage}}",
+          "expr": "simbay_warp_bytes_in_use{run_id=~\"$run_id\"}",
+          "legendFormat": "bytes_in_use {{stage}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_warp_peak_bytes_in_use{run_id=~\"$run_id\"}",
+          "legendFormat": "peak_bytes {{stage}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_warp_bytes_limit{run_id=~\"$run_id\"}",
+          "legendFormat": "bytes_limit {{stage}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_warp_state_bytes_estimate{run_id=~\"$run_id\"}",
+          "legendFormat": "state_bytes {{stage}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "title": "Stage Timeline",
-      "type": "state-timeline"
+      "title": "Warp Memory Footprint",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -839,19 +1373,214 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "continuous-BlYlRd"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
           },
           "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*power.*"
+            },
+            "properties": [
               {
-                "color": "green",
-                "value": null
+                "id": "unit",
+                "value": "watt"
               }
             ]
           },
-          "unit": "s"
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*temp.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*clock.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "hertz"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "id": 135,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "DCGM_FI_DEV_POWER_USAGE",
+          "legendFormat": "power {{gpu}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "DCGM_FI_DEV_GPU_TEMP",
+          "legendFormat": "temp {{gpu}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "DCGM_FI_DEV_SM_CLOCK * 1000000",
+          "legendFormat": "sm_clock {{gpu}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "DCGM_FI_DEV_MEM_CLOCK * 1000000",
+          "legendFormat": "mem_clock {{gpu}}",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "GPU Thermals, Power And Clocks",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 72
+      },
+      "id": 140,
+      "panels": [],
+      "title": "Numerical Stability And Physical Consistency",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 73
+      },
+      "id": 141,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_sim_force_finite_ratio{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "sim_force_finite_pct",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_measurement_residual_finite_ratio{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "residual_finite_pct",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_finite_ratio{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "likelihood_finite_pct",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_valid_force_particle_ratio{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "valid_force_particles_pct",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_active_contact_particle_ratio{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "active_contact_particles_pct",
+          "range": true,
+          "refId": "E"
+        }
+      ],
+      "title": "Finite Ratios And Contact Coverage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
         },
         "overrides": []
       },
@@ -859,36 +1588,725 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 73
       },
-      "id": 15,
+      "id": 142,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "showUnfilled": true,
-        "sizing": "auto"
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "editorMode": "code",
-          "expr": "simbay_stage_duration_seconds",
-          "legendFormat": "{{stage}}",
+          "expr": "simbay_invalid_sensor_events_total{run_id=~\"$run_id\"}",
+          "legendFormat": "invalid_sensor_events",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_invalid_state_events_total{run_id=~\"$run_id\"}",
+          "legendFormat": "invalid_state_events",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_skipped_invalid_updates_total{run_id=~\"$run_id\"}",
+          "legendFormat": "skipped_invalid_updates",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_sim_force_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "sim_force_nonfinite",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_measurement_residual_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "residual_nonfinite",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "likelihood_nonfinite",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_qpos_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "qpos_nonfinite",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_qvel_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "qvel_nonfinite",
+          "range": true,
+          "refId": "H"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_sensordata_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "sensordata_nonfinite",
+          "range": true,
+          "refId": "I"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_ctrl_nonfinite_count{run_id=~\"$run_id\"}",
+          "legendFormat": "ctrl_nonfinite",
+          "range": true,
+          "refId": "J"
         }
       ],
-      "title": "Stage Durations",
-      "type": "bargauge"
+      "title": "Invalid And Non-Finite Counters",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 81
+      },
+      "id": 143,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_min{run_id=~\"$run_id\"}",
+          "legendFormat": "min",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_mean{run_id=~\"$run_id\"}",
+          "legendFormat": "mean",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_max{run_id=~\"$run_id\"}",
+          "legendFormat": "max",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_likelihood_std{run_id=~\"$run_id\"}",
+          "legendFormat": "std",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Likelihood Statistics",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 81
+      },
+      "id": 144,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_sim_force_norm_mean{run_id=~\"$run_id\"}",
+          "legendFormat": "sim_force_norm_mean",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_measurement_residual_norm_mean{run_id=~\"$run_id\"}",
+          "legendFormat": "residual_norm_mean",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Force And Residual Norms",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 81
+      },
+      "id": 145,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_contact_count_mean{run_id=~\"$run_id\"}",
+          "legendFormat": "contact_count_mean",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_contact_count_max{run_id=~\"$run_id\"}",
+          "legendFormat": "contact_count_max",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_contact_metric_available{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "contact_metric_available_pct",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_contact_force_mismatch{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "contact_force_mismatch_pct",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Contact Health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 89
+      },
+      "id": 146,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_skipped_invalid_update{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "skipped_invalid_update_pct",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_first_update_bootstrap_attempts{run_id=~\"$run_id\"}",
+          "legendFormat": "bootstrap_attempts",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_first_invalid_sensor_step{run_id=~\"$run_id\"}",
+          "legendFormat": "first_invalid_sensor_step",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_first_invalid_state_step{run_id=~\"$run_id\"}",
+          "legendFormat": "first_invalid_state_step",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Robustness Events",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 97
+      },
+      "id": 150,
+      "panels": [],
+      "title": "Convergence And Calibration",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 98
+      },
+      "id": 151,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_time_to_first_estimate_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "time_to_first_estimate",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_convergence_time_to_5pct_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "time_to_5pct",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_convergence_time_to_10pct_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "time_to_10pct",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_prediction_ready_seconds{run_id=~\"$run_id\"}",
+          "legendFormat": "prediction_ready",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Convergence Timing",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*error.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*mae.*|.*rmse.*|.*abs_error.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kg"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 98
+      },
+      "id": 152,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_mass_abs_error_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "abs_error",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_mass_rel_error_pct{run_id=~\"$run_id\"}",
+          "legendFormat": "rel_error",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_mae_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "phase4_mae",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_phase4_rmse_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "phase4_rmse",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_final_error_pct{run_id=~\"$run_id\"}",
+          "legendFormat": "final_error",
+          "range": true,
+          "refId": "E"
+        }
+      ],
+      "title": "Accuracy Benchmarks",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*width.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kg"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*contains_truth.*|.*within_.*|.*entropy_normalized.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 106
+      },
+      "id": 153,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_credible_interval_50_width_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "ci50_width",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_credible_interval_90_width_kg{run_id=~\"$run_id\"}",
+          "legendFormat": "ci90_width",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_credible_interval_50_contains_truth{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "ci50_contains_truth",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_credible_interval_90_contains_truth{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "ci90_contains_truth",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_weight_entropy_normalized{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "weight_entropy_normalized",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_weight_perplexity{run_id=~\"$run_id\"}",
+          "legendFormat": "weight_perplexity",
+          "range": true,
+          "refId": "F"
+        }
+      ],
+      "title": "Uncertainty And Calibration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 106
+      },
+      "id": 154,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "simbay_mass_error_within_1pct{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "within_1pct",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_mass_error_within_5pct{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "within_5pct",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "simbay_mass_error_within_10pct{run_id=~\"$run_id\"} * 100",
+          "legendFormat": "within_10pct",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Accuracy Thresholds",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -896,10 +2314,33 @@
   "style": "dark",
   "tags": [
     "simbay",
-    "observability"
+    "benchmarking",
+    "observability",
+    "phd",
+    "robotics"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(simbay_run_info, run_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run ID",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "label_values(simbay_run_info, run_id)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 3,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-30m",
@@ -907,8 +2348,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Simbay Overview",
+  "title": "Simbay Benchmark Observatory",
   "uid": "simbay-overview",
-  "version": 1,
+  "version": 3,
   "weekStart": ""
 }

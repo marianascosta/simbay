@@ -1,5 +1,14 @@
 # type: ignore
+import logging
+import time
+
+import numpy as np
+
 from .base import BaseRobot
+from src.utils.logging_utils import extend_logging_data
+
+
+logger = logging.getLogger("simbay.real_robot")
 
 # --- CONDITIONAL IMPORTS ---
 try:
@@ -12,7 +21,12 @@ try:
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
-    print("Warning: ROS libraries not found. RealRobot will not work, but SimRobot is fine.")
+    logger.warning(
+        {
+            "event": "ros_libraries_unavailable",
+            "message": "RealRobot will not work, but SimRobot is fine.",
+        }
+    )
 
 
 
@@ -39,10 +53,10 @@ class RealRobot(BaseRobot):
         self.pub1 = self.node1.create_publisher(JointTrajectory, "/fr3_arm_controller/joint_trajectory", 10)
         self.sub1 = self.node1.create_subscription(JointState, "/joint_states", self.jointstate_callback, 10)
         
-        print("Waiting for robot connection...")
+        logger.info({"event": "robot_connection_waiting"})
         while self.current_joints is None:
             rclpy.spin_once(self.node1, timeout_sec=0.1)
-        print("✅ Robot Connected!")
+        logger.info({"event": "robot_connected"})
 
     def jointstate_callback(self, msg):
         if len(msg.name) >= 7:
@@ -78,15 +92,30 @@ class RealRobot(BaseRobot):
 
         # 3. Send and Wait
         self.pub1.publish(msg)
-        print(f"Moving Real Robot... Duration: {duration:.2f}s")
+        logger.info(
+            {
+                "event": "real_robot_move_to_pos",
+                "duration_s": duration,
+            }
+        )
         
         # Blocking wait (Sleep) to match SimRobot behavior
         time.sleep(duration + 0.1) 
 
     def open_gripper(self):
-        print(">> [MOCK] Opening Gripper (Hardware offline)")
+        logger.info(
+            {
+                "event": "mock_gripper_open",
+                "hardware_online": False,
+            }
+        )
         time.sleep(0.5)
 
     def close_gripper(self):
-        print(">> [MOCK] Closing Gripper (Hardware offline)")
+        logger.info(
+            {
+                "event": "mock_gripper_close",
+                "hardware_online": False,
+            }
+        )
         time.sleep(0.5)
