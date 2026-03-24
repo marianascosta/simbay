@@ -322,32 +322,6 @@ class SimbayMetrics:
             {"stage": stage},
         )
 
-    def update_mjx_memory(
-        self,
-        stage: str,
-        bytes_in_use: int,
-        peak_bytes_in_use: int,
-        bytes_limit: int,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_mjx_bytes_in_use",
-            bytes_in_use,
-            "Active MJX allocator bytes on the execution device.",
-            {"stage": stage},
-        )
-        self._store.set_gauge(
-            "simbay_mjx_peak_bytes_in_use",
-            peak_bytes_in_use,
-            "Peak MJX allocator bytes observed on the execution device.",
-            {"stage": stage},
-        )
-        self._store.set_gauge(
-            "simbay_mjx_bytes_limit",
-            bytes_limit,
-            "MJX allocator byte limit on the execution device.",
-            {"stage": stage},
-        )
-
     def update_filter_state(
         self,
         ess: float,

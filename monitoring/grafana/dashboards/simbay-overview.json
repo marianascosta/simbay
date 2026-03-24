@@ -572,63 +572,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "mappings": [],
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 20
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "editorMode": "code",
-          "expr": "simbay_mjx_bytes_in_use",
-          "legendFormat": "in_use {{stage}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "editorMode": "code",
-          "expr": "simbay_mjx_peak_bytes_in_use",
-          "legendFormat": "peak {{stage}}",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "MJX Allocator Memory",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
             "fillOpacity": 20,
             "lineWidth": 1
           },

@@ -140,6 +140,23 @@ def _log_substage_duration(
     )
 
 
+def _log_run_metadata(
+    run_id: str,
+    backend_name: str,
+    execution_device: str,
+    num_particles: int,
+    dt: float,
+) -> None:
+    logger.info(
+        "run_metadata run_id=%s backend=%s device=%s particles=%d control_dt=%.6f",
+        run_id,
+        backend_name,
+        execution_device,
+        num_particles,
+        dt,
+    )
+
+
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
 signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -244,17 +261,11 @@ else:
 memory_profile = particle_filter.memory_profile()
 env_memory_profile = env.memory_profile()
 cpu_cores = os.cpu_count() or 1
+execution_device = str(env_memory_profile.get("execution_device", backend))
 metrics.set_particle_count(num_particles)
-metrics.set_backend(backend, str(env.memory_profile().get("execution_device", backend)))
+metrics.set_backend(backend, execution_device)
 metrics.set_run_info(backend=backend, particles=num_particles, control_dt=dt)
-if backend == "cpu":
-    metrics.update_mjx_memory(
-        "setup",
-        int(env_memory_profile["bytes_in_use"]),
-        int(env_memory_profile["peak_bytes_in_use"]),
-        int(env_memory_profile["bytes_limit"]),
-    )
-elif backend == "warp":
+if backend == "warp":
     metrics.update_warp_memory(
         stage="setup",
         bytes_in_use=int(env_memory_profile["bytes_in_use"]),
@@ -272,7 +283,7 @@ _log_setup_summary(
     cpu_cores,
     headless,
 )
-logger.info("run_started backend=%s particles=%d control_dt=%.6f", backend, num_particles, dt)
+_log_run_metadata(run_id, backend, execution_device, num_particles, dt)
 metrics.finish_stage(setup_stage)
 
 # ==========================================
@@ -366,15 +377,7 @@ metrics.set_substage_workload(
     particle_filter.N,
     pf_replay_duration,
 )
-if backend == "cpu":
-    env_memory_profile = env.memory_profile()
-    metrics.update_mjx_memory(
-        "phase_1_approach",
-        int(env_memory_profile["bytes_in_use"]),
-        int(env_memory_profile["peak_bytes_in_use"]),
-        int(env_memory_profile["bytes_limit"]),
-    )
-elif backend == "warp":
+if backend == "warp":
     env_memory_profile = env.memory_profile()
     metrics.update_warp_memory(
         stage="phase_1_approach",
@@ -420,15 +423,7 @@ metrics.set_substage_workload(
     particle_filter.N,
     pf_replay_duration,
 )
-if backend == "cpu":
-    env_memory_profile = env.memory_profile()
-    metrics.update_mjx_memory(
-        "phase_2_descend",
-        int(env_memory_profile["bytes_in_use"]),
-        int(env_memory_profile["peak_bytes_in_use"]),
-        int(env_memory_profile["bytes_limit"]),
-    )
-elif backend == "warp":
+if backend == "warp":
     env_memory_profile = env.memory_profile()
     metrics.update_warp_memory(
         stage="phase_2_descend",
@@ -474,15 +469,7 @@ metrics.set_substage_workload(
     particle_filter.N,
     pf_replay_duration,
 )
-if backend == "cpu":
-    env_memory_profile = env.memory_profile()
-    metrics.update_mjx_memory(
-        "phase_3_grip",
-        int(env_memory_profile["bytes_in_use"]),
-        int(env_memory_profile["peak_bytes_in_use"]),
-        int(env_memory_profile["bytes_limit"]),
-    )
-elif backend == "warp":
+if backend == "warp":
     env_memory_profile = env.memory_profile()
     metrics.update_warp_memory(
         stage="phase_3_grip",
@@ -666,41 +653,7 @@ for step, qpos in enumerate(traj4):
     should_log_step = step in (0, len(traj4) - 1) or (step + 1) % 10 == 0
     if should_log_step:
         rss_bytes = get_process_memory_bytes()
-        if backend == "cpu":
-            env_memory_profile = env.memory_profile()
-            metrics.update_mjx_memory(
-                "phase_4_lift",
-                int(env_memory_profile["bytes_in_use"]),
-                int(env_memory_profile["peak_bytes_in_use"]),
-                int(env_memory_profile["bytes_limit"]),
-            )
-            logger.info(
-                "particle_filter_step step=%d particles=%d wall_ms=%.3f step_rate_hz=%.2f "
-                "cpu_ms=%.3f cpu_equivalent_cores=%.3f cpu_percent_single_core=%.2f "
-                "cpu_percent_total_machine=%.2f ess=%.2f estimate=%.6f "
-                "rss_bytes=%d rss=%s backend=cpu "
-                "execution_platform=%s execution_device=%s "
-                "default_jax_platform=%s default_jax_device=%s "
-                "device_fallback_applied=%s",
-                step,
-                particle_filter.N,
-                step_wall_duration * 1000.0,
-                step_rate_hz,
-                step_cpu_duration * 1000.0,
-                cpu_equivalent_cores_used,
-                cpu_percent_single_core,
-                cpu_percent_total_machine,
-                particle_filter.effective_sample_size(),
-                current_estimate,
-                rss_bytes,
-                format_bytes(rss_bytes),
-                env_memory_profile["execution_platform"],
-                env_memory_profile["execution_device"],
-                env_memory_profile["default_jax_platform"],
-                env_memory_profile["default_jax_device"],
-                env_memory_profile["device_fallback_applied"],
-            )
-        elif backend == "warp":
+        if backend == "warp":
             env_memory_profile = env.memory_profile()
             metrics.update_warp_memory(
                 stage="phase_4_lift",
