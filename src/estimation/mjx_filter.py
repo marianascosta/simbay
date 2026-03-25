@@ -5,8 +5,13 @@ import jax.numpy as jnp
 
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.logging_utils import extend_logging_data
+from src.utils.tracing import get_tracer
+from src.utils.tracing import span as tracing_span
 
 from .mjx_particle_filter import FrankaMJXEnv
+
+
+_TRACER = get_tracer("simbay.mjx_particle_filter")
 
 
 def _normalize_weights(weights: jax.Array, likelihoods: jax.Array) -> jax.Array:
@@ -102,152 +107,166 @@ class MJXParticleFilter:
     """JAX-backed particle filter for the MJX environment."""
 
     def __init__(self, env: FrankaMJXEnv, logging_data: dict[str, object] | None = None):
-        self.logger = logging.getLogger("simbay.mjx_particle_filter")
-        self.env = env
-        self.logging_data = dict(logging_data or {})
+        with tracing_span(_TRACER, "mjx_filter.__init__"):
+            self.logger = logging.getLogger("simbay.mjx_particle_filter")
+            self.env = env
+            self.logging_data = dict(logging_data or {})
 
-        init_memory_before = get_process_memory_bytes()
-        self.particles = self.env.initialize_particles_device()
-        init_memory_after = get_process_memory_bytes()
-        self.N = int(self.particles.shape[0])
+            init_memory_before = get_process_memory_bytes()
+            self.particles = self.env.initialize_particles_device()
+            init_memory_after = get_process_memory_bytes()
+            self.N = int(self.particles.shape[0])
 
-        self.weights = jnp.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
-        self._rng_key = jax.random.PRNGKey(7)
-        self._ess = float(self.N)
-        self._resample_count = 0
+            self.weights = jnp.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
+            self._rng_key = jax.random.PRNGKey(7)
+            self._ess = float(self.N)
+            self._resample_count = 0
 
-        state_bytes_total = int(self.particles.size * self.particles.dtype.itemsize)
-        state_bytes_total += int(self.weights.size * self.weights.dtype.itemsize)
-        self.state_bytes_total = state_bytes_total
-        self.state_bytes_per_particle = (
-            self.state_bytes_total / self.N if self.N else 0.0
-        )
-        self.process_memory_per_particle_estimate = (
-            max(init_memory_after - init_memory_before, 0) / self.N if self.N else 0.0
-        )
-
-        self._estimate_jit = jax.jit(_estimate_particles)
-        self._update_jit = jax.jit(_normalize_weights)
-        self._ess_jit = jax.jit(_effective_sample_size)
-        self._update_resample_jit = jax.jit(_update_and_optionally_resample)
-        self._uniform_metrics_jit = jax.jit(_uniform_weight_metrics)
-
-        self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="mjx_particle_filter_initialized",
-                particles=self.N,
-                state_bytes_total=self.state_bytes_total,
-                state_bytes_per_particle=self.state_bytes_per_particle,
-                process_memory_per_particle_estimate_bytes=(
-                    self.process_memory_per_particle_estimate
-                ),
+            state_bytes_total = int(self.particles.size * self.particles.dtype.itemsize)
+            state_bytes_total += int(self.weights.size * self.weights.dtype.itemsize)
+            self.state_bytes_total = state_bytes_total
+            self.state_bytes_per_particle = (
+                self.state_bytes_total / self.N if self.N else 0.0
             )
-        )
+            self.process_memory_per_particle_estimate = (
+                max(init_memory_after - init_memory_before, 0) / self.N if self.N else 0.0
+            )
+
+            self._estimate_jit = jax.jit(_estimate_particles)
+            self._update_jit = jax.jit(_normalize_weights)
+            self._ess_jit = jax.jit(_effective_sample_size)
+            self._update_resample_jit = jax.jit(_update_and_optionally_resample)
+            self._uniform_metrics_jit = jax.jit(_uniform_weight_metrics)
+
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_particle_filter_initialized",
+                    msg=f"Initialised the MJX particle filter with {self.N} particles.",
+                    particles=self.N,
+                    state_bytes_total=self.state_bytes_total,
+                    state_bytes_per_particle=self.state_bytes_per_particle,
+                    process_memory_per_particle_estimate_bytes=(
+                        self.process_memory_per_particle_estimate
+                    ),
+                )
+            )
 
     def warmup_runtime(self, rollout_lengths: list[int]) -> list[int]:
-        warmed_rollout_lengths = self.env.warmup_runtime(rollout_lengths)
-        zero_observation = jnp.zeros((3,), dtype=self.particles.dtype)
-        likelihoods = self.env.compute_likelihoods_device(zero_observation)
-        weights = self._update_jit(self.weights, likelihoods)
-        ess = self._ess_jit(weights)
-        estimate = self._estimate_jit(self.particles, weights)
+        with tracing_span(_TRACER, "mjx_filter.warmup_runtime", {"particles": self.N}):
+            warmed_rollout_lengths = self.env.warmup_runtime(rollout_lengths)
+            zero_observation = jnp.zeros((3,), dtype=self.particles.dtype)
+            likelihoods = self.env.compute_likelihoods_device(zero_observation)
+            weights = self._update_jit(self.weights, likelihoods)
+            ess = self._ess_jit(weights)
+            estimate = self._estimate_jit(self.particles, weights)
 
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
-        update_resample = self._update_resample_jit(
-            self.weights,
-            self.particles,
-            likelihoods,
-            offset,
-        )
-        indexes = jnp.arange(self.N, dtype=jnp.int32)
-        self.env.resample_states_device(indexes)
-
-        jax.block_until_ready(weights)
-        jax.block_until_ready(ess)
-        jax.block_until_ready(estimate)
-        jax.block_until_ready(update_resample)
-        self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="mjx_filter_runtime_warmup_done",
-                particles=self.N,
-                rollout_lengths=warmed_rollout_lengths,
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
+            update_resample = self._update_resample_jit(
+                self.weights,
+                self.particles,
+                likelihoods,
+                offset,
             )
-        )
-        return warmed_rollout_lengths
+            indexes = jnp.arange(self.N, dtype=jnp.int32)
+            self.env.resample_states_device(indexes)
+
+            jax.block_until_ready(weights)
+            jax.block_until_ready(ess)
+            jax.block_until_ready(estimate)
+            jax.block_until_ready(update_resample)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_filter_runtime_warmup_done",
+                    msg="Finished warming up the MJX particle filter runtime.",
+                    particles=self.N,
+                    rollout_lengths=warmed_rollout_lengths,
+                )
+            )
+            return warmed_rollout_lengths
 
     def predict(self, control_input) -> None:
-        self.particles = self.env.propagate_particles_device(self.particles, control_input)
+        with tracing_span(_TRACER, "mjx_filter.predict", {"particles": self.N}):
+            self.particles = self.env.propagate_particles_device(self.particles, control_input)
 
     def predict_trajectory(self, trajectory) -> None:
-        self.particles = self.env.rollout_predict_only_device(self.particles, trajectory)
+        step_count = int(getattr(trajectory, "shape", [len(trajectory)])[0]) if trajectory is not None else 0
+        with tracing_span(_TRACER, "mjx_filter.predict_trajectory", {"particles": self.N, "steps": step_count}):
+            self.particles = self.env.rollout_predict_only_device(self.particles, trajectory)
 
     def update(self, observation) -> None:
-        likelihoods = self.env.compute_likelihoods_device(observation)
-        self.weights = self._update_jit(self.weights, likelihoods)
-        self._ess = float(jax.device_get(self._ess_jit(self.weights)))
+        with tracing_span(_TRACER, "mjx_filter.update", {"particles": self.N}):
+            likelihoods = self.env.compute_likelihoods_device(observation)
+            self.weights = self._update_jit(self.weights, likelihoods)
+            self._ess = float(jax.device_get(self._ess_jit(self.weights)))
 
     def resample(self) -> None:
-        if self._ess >= self.N / 2:
-            return
+        with tracing_span(_TRACER, "mjx_filter.resample", {"particles": self.N}):
+            if self._ess >= self.N / 2:
+                return
 
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
-        self.weights, self.particles, indexes = _systematic_resample(
-            self.weights,
-            self.particles,
-            offset,
-        )
-        self.env.resample_states_device(indexes)
-        self._ess = float(self.N)
-        self._resample_count += 1
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
+            self.weights, self.particles, indexes = _systematic_resample(
+                self.weights,
+                self.particles,
+                offset,
+            )
+            self.env.resample_states_device(indexes)
+            self._ess = float(self.N)
+            self._resample_count += 1
 
     def step(self, control_input, observation) -> dict[str, float | bool]:
-        self.particles = self.env.propagate_particles_device(self.particles, control_input)
-        likelihoods = self.env.compute_likelihoods_device(observation)
+        with tracing_span(_TRACER, "mjx_filter.step", {"particles": self.N}):
+            self.particles = self.env.propagate_particles_device(self.particles, control_input)
+            likelihoods = self.env.compute_likelihoods_device(observation)
 
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
-        (
-            self.weights,
-            self.particles,
-            ess,
-            indexes,
-            did_resample,
-        ) = self._update_resample_jit(self.weights, self.particles, likelihoods, offset)
-        did_resample_host = bool(jax.device_get(did_resample))
-        if did_resample_host:
-            self.env.resample_states_device(indexes)
-            self._resample_count += 1
-        self._ess = float(jax.device_get(ess))
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = jax.device_get(
-            self._uniform_metrics_jit(self.weights)
-        )
-        return {
-            "ess": self._ess,
-            "resampled": did_resample_host,
-            "resample_count": self._resample_count,
-            "uniform_weight_l1_distance": float(uniform_weight_l1),
-            "uniform_weight_max_deviation": float(uniform_weight_max_dev),
-            "collapsed_to_uniform": bool(collapsed_to_uniform),
-        }
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            offset = jax.random.uniform(subkey, (), dtype=self.weights.dtype)
+            (
+                self.weights,
+                self.particles,
+                ess,
+                indexes,
+                did_resample,
+            ) = self._update_resample_jit(self.weights, self.particles, likelihoods, offset)
+            did_resample_host = bool(jax.device_get(did_resample))
+            if did_resample_host:
+                self.env.resample_states_device(indexes)
+                self._resample_count += 1
+            self._ess = float(jax.device_get(ess))
+            uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = jax.device_get(
+                self._uniform_metrics_jit(self.weights)
+            )
+            return {
+                "ess": self._ess,
+                "resampled": did_resample_host,
+                "resample_count": self._resample_count,
+                "uniform_weight_l1_distance": float(uniform_weight_l1),
+                "uniform_weight_max_deviation": float(uniform_weight_max_dev),
+                "collapsed_to_uniform": bool(collapsed_to_uniform),
+            }
 
     def effective_sample_size(self) -> float:
-        return self._ess
+        with tracing_span(_TRACER, "mjx_filter.effective_sample_size", {"particles": self.N}):
+            return self._ess
 
     def estimate(self) -> float:
-        estimate = self._estimate_jit(self.particles, self.weights)
-        return float(jax.device_get(estimate))
+        with tracing_span(_TRACER, "mjx_filter.estimate", {"particles": self.N}):
+            estimate = self._estimate_jit(self.particles, self.weights)
+            return float(jax.device_get(estimate))
 
     def particles_host(self):
-        return jax.device_get(self.particles)
+        with tracing_span(_TRACER, "mjx_filter.particles_host", {"particles": self.N}):
+            return jax.device_get(self.particles)
 
     def memory_profile(self) -> dict[str, float | int]:
-        return {
-            "particles": self.N,
-            "state_bytes_total": self.state_bytes_total,
-            "state_bytes_per_particle": self.state_bytes_per_particle,
-            "process_memory_per_particle_estimate_bytes": self.process_memory_per_particle_estimate,
-        }
+        with tracing_span(_TRACER, "mjx_filter.memory_profile", {"particles": self.N}):
+            return {
+                "particles": self.N,
+                "state_bytes_total": self.state_bytes_total,
+                "state_bytes_per_particle": self.state_bytes_per_particle,
+                "process_memory_per_particle_estimate_bytes": self.process_memory_per_particle_estimate,
+            }

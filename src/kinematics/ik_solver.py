@@ -2,12 +2,16 @@ import logging
 
 import numpy as np
 
+from src.utils.tracing import set_span_attributes
+from src.utils.tracing import trace_call
+
 from .base import IKProblem
 
 
 logger = logging.getLogger("simbay.ik_solver")
 
 
+@trace_call("simbay.ik_solver", "ik.solve")
 def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
                        tol: float = 1e-6, max_iter: int = 500):
     """
@@ -27,9 +31,19 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         tuple: (final_theta (np.ndarray), final_error (float))
     """
     # CRITICAL FIX: Make a copy so we don't overwrite the original 'theta' outside this function
+    set_span_attributes(
+        {
+            "ik.problem_class": problem.__class__.__name__,
+            "ik.theta_dim": int(theta.shape[0]),
+            "ik.target_dim": int(t.shape[0]),
+            "ik.tolerance": float(tol),
+            "ik.max_iterations": int(max_iter),
+        }
+    )
     theta = theta.copy()
 
     for i in range(max_iter):
+        set_span_attributes({"ik.iteration": i})
         # 1. Compute Forward Kinematics
         s = problem.get_s(theta)
         
@@ -39,9 +53,17 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         
         # 3. Check Convergence
         if error < tol:
+            set_span_attributes(
+                {
+                    "ik.converged": True,
+                    "ik.iterations": i,
+                    "ik.residual_norm": float(error),
+                }
+            )
             logger.info(
                 {
                     "event": "ik_converged",
+                    "msg": f"IK converged in {i} iterations.",
                     "iterations": i,
                     "residual_norm": error,
                 }
@@ -61,8 +83,16 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
     logger.info(
         {
             "event": "ik_not_converged",
+            "msg": f"IK did not converge after {i} iterations.",
             "iterations": i,
             "residual_norm": error,
+        }
+    )
+    set_span_attributes(
+        {
+            "ik.converged": False,
+            "ik.iterations": i,
+            "ik.residual_norm": float(error),
         }
     )
     return theta

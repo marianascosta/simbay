@@ -8,6 +8,8 @@ import mujoco
 import numpy as np
 
 from src.robots import MujocoRobot
+from src.utils.tracing import set_span_attributes
+from src.utils.tracing import trace_call
 
 from .constants import DEFAULT_OBJECT_PROPS
 from .constants import FRANKA_HOME_QPOS
@@ -19,12 +21,14 @@ logger = logging.getLogger("simbay.mujoco_utils")
 # ==========================================
 # 2. CORE MUJOCO LOADER
 # ==========================================
+@trace_call("simbay.mujoco_utils", "mujoco.load_model")
 def load_mujoco_model(xml_path):
     """
     Reads the XML from the path and builds a fresh, independent C++ model.
     The OS caches this file in RAM automatically, making it safe and lightning-fast
     to call this 100 times in a loop for the Particle Filter.
     """
+    set_span_attributes({"mujoco.xml_path": str(xml_path)})
     try:
         model = mujoco.MjModel.from_xml_path(xml_path) # type: ignore
         data = mujoco.MjData(model) # type: ignore
@@ -36,16 +40,24 @@ def load_mujoco_model(xml_path):
     data.ctrl[:7] = FRANKA_HOME_QPOS
     mujoco.mj_forward(model, data) # type: ignore
 
+    set_span_attributes({"mujoco.nq": int(model.nq), "mujoco.nv": int(model.nv)})
     return model, data
 
 
 # ==========================================
 # 3. PHYSICS MODIFIER
 # ==========================================
+@trace_call("simbay.mujoco_utils", "mujoco.modify_object_properties")
 def modify_object_properties(model, data, body_name, props):
     """
     Modifies a MuJoCo body (size, mass, friction, position).
     """
+    set_span_attributes(
+        {
+            "mujoco.body_name": str(body_name),
+            "mujoco.body_mass": float(props["mass"]),
+        }
+    )
     try:
         body_id = model.body(body_name).id
         geom_id = model.body_geomadr[body_id]
@@ -53,6 +65,7 @@ def modify_object_properties(model, data, body_name, props):
         logger.error(
             {
                 "event": "mujoco_body_not_found",
+                "msg": f"Could not find MuJoCo body '{body_name}'.",
                 "body_name": body_name,
             }
         )
@@ -101,7 +114,14 @@ def modify_object_properties(model, data, body_name, props):
 # ==========================================
 # 4. FACTORY
 # ==========================================
+@trace_call("simbay.mujoco_utils", "mujoco.initialize_env")
 def initialize_mujoco_env(object_properties=DEFAULT_OBJECT_PROPS):
+    set_span_attributes(
+        {
+            "mujoco.object_mass": float(object_properties["mass"]),
+            "mujoco.object_type": str(object_properties["type"]),
+        }
+    )
     xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
     
     model, data = load_mujoco_model(xml_path)

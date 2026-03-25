@@ -4,11 +4,20 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from src.utils.tracing import set_span_attributes
+
 from .base import BaseRobot
 
 
 class MujocoRobot(BaseRobot):
     def __init__(self, model, data, viewer=None):
+        set_span_attributes(
+            {
+                "robot.dt": float(model.opt.timestep),
+                "robot.nq": int(model.nq),
+                "robot.nv": int(model.nv),
+            }
+        )
         self.model = model
         self.data = data
         self.viewer: mujoco.viewer.Handle | None = viewer
@@ -18,6 +27,11 @@ class MujocoRobot(BaseRobot):
         self.force_adress = model.sensor_adr[self.force_sensor_id]
         
     def move_joints(self, pos):
+        set_span_attributes(
+            {
+                "robot.command_dim": int(np.asarray(pos).shape[0]),
+            }
+        )
         # Command control and update model
         self.data.ctrl[:8] = pos              
         mujoco.mj_step(self.model, self.data)  # type: ignore
@@ -31,10 +45,12 @@ class MujocoRobot(BaseRobot):
         return self.data.qpos[:7]
     
     def get_sensor_reads(self):
+        set_span_attributes({"robot.force_address": int(self.force_adress)})
         return self.data.sensordata[self.force_adress : self.force_adress + 3]
 
     
     def wait_seconds(self, duration):
+        set_span_attributes({"robot.wait_duration": float(duration)})
         steps = int(duration / self.dt)  
         for _ in range(steps):
             mujoco.mj_step(self.model, self.data)     # type: ignore

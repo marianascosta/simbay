@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 import time
 from contextlib import suppress
@@ -100,6 +101,9 @@ class SimbayMetrics:
         self._store.set_common_labels({"run_id": self.run_id})
         self._server: _ThreadedHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._system_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._host_cpu_count = max(os.cpu_count() or 1, 1)
         self._known_stages: set[str] = set()
         self._known_substages: set[tuple[str, str]] = set()
 
@@ -132,16 +136,24 @@ class SimbayMetrics:
             return
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
+        self._stop_event.clear()
+        self._sample_system_metrics(previous_cpu_totals=None, previous_process_totals=None)
+        self._system_thread = threading.Thread(target=self._run_system_sampler, daemon=True)
+        self._system_thread.start()
 
     def stop(self) -> None:
+        self._stop_event.set()
         if self._server is None:
             return
         self._server.shutdown()
         self._server.server_close()
         if self._thread is not None:
             self._thread.join()
+        if self._system_thread is not None:
+            self._system_thread.join()
         self._server = None
         self._thread = None
+        self._system_thread = None
 
     def register_stages(self, stages: Iterable[str]) -> None:
         for stage in stages:
@@ -814,6 +826,179 @@ class SimbayMetrics:
             final_error_pct,
             "Final percent error of the predicted mass.",
         )
+
+    def _run_system_sampler(self) -> None:
+        interval = float(os.getenv("SIMBAY_SYSTEM_METRICS_INTERVAL_SECONDS", "1.0"))
+        previous_cpu_totals = self._read_host_cpu_totals()
+        previous_process_totals = self._read_process_cpu_totals()
+        while not self._stop_event.wait(interval):
+            previous_cpu_totals, previous_process_totals = self._sample_system_metrics(
+                previous_cpu_totals,
+                previous_process_totals,
+            )
+
+    def _sample_system_metrics(
+        self,
+        previous_cpu_totals: tuple[float, float] | None,
+        previous_process_totals: tuple[float, float] | None,
+    ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+        self._store.set_gauge(
+            "simbay_process_memory_rss_bytes",
+            get_process_memory_bytes(),
+            "Resident set size of the Simbay process.",
+        )
+        self._store.set_gauge(
+            "simbay_host_memory_used_bytes",
+            self._read_host_memory_used_bytes(),
+            "Host memory currently in use for this benchmark run.",
+        )
+        current_cpu_totals = self._read_host_cpu_totals()
+        if previous_cpu_totals is not None and current_cpu_totals is not None:
+            previous_total, previous_idle = previous_cpu_totals
+            current_total, current_idle = current_cpu_totals
+            total_delta = current_total - previous_total
+            idle_delta = current_idle - previous_idle
+            cpu_percent = 0.0
+            if total_delta > 0:
+                cpu_percent = max(0.0, min(100.0, 100.0 * (1.0 - (idle_delta / total_delta))))
+            self._store.set_gauge(
+                "simbay_host_cpu_utilization_pct",
+                cpu_percent,
+                "Host CPU utilisation percentage for this benchmark run.",
+            )
+        current_process_totals = self._read_process_cpu_totals()
+        if previous_process_totals is not None and current_process_totals is not None:
+            previous_wall, previous_cpu = previous_process_totals
+            current_wall, current_cpu = current_process_totals
+            wall_delta = current_wall - previous_wall
+            cpu_delta = current_cpu - previous_cpu
+            process_cpu_percent = 0.0
+            if wall_delta > 0:
+                process_cpu_percent = max(0.0, 100.0 * (cpu_delta / wall_delta))
+            self._store.set_gauge(
+                "simbay_process_cpu_utilization_pct",
+                process_cpu_percent,
+                "CPU utilisation percentage of the Simbay process, expressed relative to one full core.",
+            )
+            self._store.set_gauge(
+                "simbay_process_cpu_machine_pct",
+                process_cpu_percent / float(self._host_cpu_count),
+                "CPU utilisation percentage of the Simbay process, expressed relative to total machine CPU capacity.",
+            )
+        gpu_metrics = self._read_gpu_metrics()
+        if gpu_metrics is not None:
+            self._store.set_gauge(
+                "simbay_gpu_utilization_pct",
+                gpu_metrics["utilization_pct"],
+                "GPU utilisation percentage for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_fb_used_bytes",
+                gpu_metrics["fb_used_bytes"],
+                "GPU frame-buffer memory currently in use for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_fb_utilization_pct",
+                gpu_metrics["fb_utilization_pct"],
+                "GPU frame-buffer memory utilisation percentage for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_power_watts",
+                gpu_metrics["power_watts"],
+                "GPU power draw in watts for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_temp_celsius",
+                gpu_metrics["temp_celsius"],
+                "GPU temperature in degrees Celsius for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_sm_clock_hz",
+                gpu_metrics["sm_clock_hz"],
+                "GPU SM clock frequency in hertz for this benchmark run.",
+            )
+            self._store.set_gauge(
+                "simbay_gpu_mem_clock_hz",
+                gpu_metrics["mem_clock_hz"],
+                "GPU memory clock frequency in hertz for this benchmark run.",
+            )
+        return current_cpu_totals, current_process_totals
+
+    @staticmethod
+    def _read_host_cpu_totals() -> tuple[float, float] | None:
+        try:
+            with open("/proc/stat", "r", encoding="utf-8") as handle:
+                first_line = handle.readline().strip()
+        except OSError:
+            return None
+        parts = first_line.split()
+        if len(parts) < 5 or parts[0] != "cpu":
+            return None
+        values = [float(value) for value in parts[1:]]
+        total = sum(values)
+        idle = values[3] + (values[4] if len(values) > 4 else 0.0)
+        return total, idle
+
+    @staticmethod
+    def _read_host_memory_used_bytes() -> float:
+        values: dict[str, float] = {}
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, raw_value = line.split(":", 1)
+                    values[key] = float(raw_value.strip().split()[0]) * 1024.0
+        except OSError:
+            return 0.0
+        total = values.get("MemTotal", 0.0)
+        available = values.get("MemAvailable", 0.0)
+        return max(total - available, 0.0)
+
+    @staticmethod
+    def _read_process_cpu_totals() -> tuple[float, float]:
+        return time.perf_counter(), time.process_time()
+
+    @staticmethod
+    def _read_gpu_metrics() -> dict[str, float] | None:
+        command = [
+            "nvidia-smi",
+            "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.sm,clocks.mem",
+            "--format=csv,noheader,nounits",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        if not lines:
+            return None
+        fields = [field.strip() for field in lines[0].split(",")]
+        if len(fields) != 7:
+            return None
+        try:
+            utilization_pct = float(fields[0])
+            fb_used_bytes = float(fields[1]) * 1024.0 * 1024.0
+            fb_total_bytes = float(fields[2]) * 1024.0 * 1024.0
+            temp_celsius = float(fields[3])
+            power_watts = float(fields[4])
+            sm_clock_hz = float(fields[5]) * 1_000_000.0
+            mem_clock_hz = float(fields[6]) * 1_000_000.0
+        except ValueError:
+            return None
+        return {
+            "utilization_pct": utilization_pct,
+            "fb_used_bytes": fb_used_bytes,
+            "fb_utilization_pct": (100.0 * fb_used_bytes / fb_total_bytes) if fb_total_bytes > 0 else 0.0,
+            "temp_celsius": temp_celsius,
+            "power_watts": power_watts,
+            "sm_clock_hz": sm_clock_hz,
+            "mem_clock_hz": mem_clock_hz,
+        }
 
 
 def create_metrics_from_env(run_id: str = "unknown") -> SimbayMetrics:

@@ -4,10 +4,14 @@ from typing import Tuple
 import mujoco
 import numpy as np
 
+from src.utils.tracing import set_span_attributes
+from src.utils.tracing import trace_public_methods
+
 # Local imports
 from .ik_solver import IKProblem
 
 
+@trace_public_methods("simbay.mujoco_ik")
 class MujocoPoseIK(IKProblem):
     """
     A MuJoCo-specific implementation of the IKProblem interface for 6-DOF tasks.
@@ -26,6 +30,13 @@ class MujocoPoseIK(IKProblem):
             site_name (str): The name of the target site in the XML (e.g., 'grasp_center').
             step_function (Callable): The numerical strategy (e.g., SDLS) to calculate joint deltas.
         """
+        set_span_attributes(
+            {
+                "ik.site_name": site_name,
+                "ik.nv": int(model.nv),
+                "ik.step_method": getattr(step_method, "__name__", str(step_method)),
+            }
+        )
         self.model = model
         self.data = data
         self.step_method = step_method
@@ -57,6 +68,7 @@ class MujocoPoseIK(IKProblem):
             np.ndarray: A 7D vector [x, y, z, qw, qx, qy, qz] representing 
                         Position (meters) and Orientation (Quaternion).
         """
+        set_span_attributes({"ik.theta_dim": int(theta.shape[0])})
         self.data.qpos[:] = theta
         mujoco.mj_forward(self.model, self.data) # type: ignore # Propagate kinematics
         
@@ -78,6 +90,12 @@ class MujocoPoseIK(IKProblem):
         Position: targ_pos - curr_pos
         Orientation: rotation vector (axis * angle) that rotates current -> target
         """
+        set_span_attributes(
+            {
+                "ik.state_dim": int(s.shape[0]),
+                "ik.target_dim": int(t.shape[0]),
+            }
+        )
         # 1. Unpack and Enforce Contiguity
         curr_pos = s[:3]
         curr_quat = np.ascontiguousarray(s[3:], dtype=np.float64)
@@ -115,6 +133,12 @@ class MujocoPoseIK(IKProblem):
             np.ndarray: Matrix where top 3 rows are linear velocity derivatives
                         and bottom 3 rows are angular velocity derivatives.
         """
+        set_span_attributes(
+            {
+                "ik.state_dim": int(s.shape[0]),
+                "ik.theta_dim": int(theta.shape[0]),
+            }
+        )
         # Note: mj_jacSite writes directly into our pre-allocated views (jac_pos, jac_rot)
         # which automatically updates self.J.
         
@@ -128,10 +152,18 @@ class MujocoPoseIK(IKProblem):
     
     def step(self, J: np.ndarray, e: np.ndarray) -> np.ndarray:
         """Delegates the mathematical step calculation to the chosen strategy."""
+        set_span_attributes(
+            {
+                "ik.jacobian_rows": int(J.shape[0]),
+                "ik.jacobian_cols": int(J.shape[1]),
+                "ik.error_dim": int(e.shape[0]),
+            }
+        )
         return self.step_method(J, e)
 
     def clamp_to_limits(self, theta: np.ndarray) -> np.ndarray:
         """Clamps joint angles to the physical limits defined in the XML."""
+        set_span_attributes({"ik.theta_dim": int(theta.shape[0])})
         for j in range(self.model.nv):
             if self.model.jnt_limited[j]:
                 theta[j] = np.clip(

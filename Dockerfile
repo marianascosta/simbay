@@ -55,7 +55,7 @@ RUN python -m pip install --upgrade pip setuptools wheel poetry
 RUN python -m pip install nsight-python
 
 COPY pyproject.toml poetry.lock README.md ./
-RUN poetry install --no-interaction --no-ansi --extras warp
+RUN poetry install --no-interaction --no-ansi --extras warp --extras tracing
 
 COPY assets ./assets
 COPY src ./src
