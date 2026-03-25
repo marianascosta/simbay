@@ -2,13 +2,15 @@ import mujoco
 import numpy as np
 
 from src.robots import MujocoRobot
-from src.utils import DEFAULT_OBJECT_PROPS
-from src.utils import initialize_mujoco_env
+from src.utils.constants import DEFAULT_OBJECT_PROPS
+from src.utils.mujoco_utils import initialize_mujoco_env
+from src.utils.tracing import trace_public_methods
 
 from .base import ParticleEnvironment
 
 """ Mass only for now"""
 
+@trace_public_methods("simbay.mujoco_env")
 class FrankaMuJoCoEnv(ParticleEnvironment):
     def __init__(self, limits: tuple[float, float], num_particles: int):
         self.min, self.max = limits
@@ -111,4 +113,3 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         
 
     
-

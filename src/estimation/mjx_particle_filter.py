@@ -7,14 +7,19 @@ import jax.numpy as jnp
 import mujoco
 import numpy as np
 
-from src.utils import DEFAULT_OBJECT_PROPS
-from src.utils import load_mujoco_model
-from src.utils import modify_object_properties
+from src.utils.constants import DEFAULT_OBJECT_PROPS
 from src.utils.logging_utils import extend_logging_data
 from src.utils.mjx_utils import prepare_model_for_mjx
+from src.utils.mujoco_utils import load_mujoco_model
+from src.utils.mujoco_utils import modify_object_properties
+from src.utils.tracing import get_tracer
+from src.utils.tracing import span as tracing_span
 
 from .base import ParticleEnvironment
 from .mjx_batch import MJXBatch
+
+
+_TRACER = get_tracer("simbay.mjx_env")
 
 
 class FrankaMJXEnv(ParticleEnvironment):
@@ -30,175 +35,194 @@ class FrankaMJXEnv(ParticleEnvironment):
         num_particles: int,
         logging_data: dict[str, object] | None = None,
     ):
-        self.logger = logging.getLogger("simbay.mjx_env")
-        self.logging_data = dict(logging_data or {})
-        self.min, self.max = limits
-        self._num_particles = num_particles
-        self.std_dev = 0.005
+        with tracing_span(_TRACER, "mjx_env.__init__", {"particles": num_particles}):
+            self.logger = logging.getLogger("simbay.mjx_env")
+            self.logging_data = dict(logging_data or {})
+            self.min, self.max = limits
+            self._num_particles = num_particles
+            self.std_dev = 0.005
 
-        xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
-        self._mj_model, self._mj_data = load_mujoco_model(xml_path)
-        modify_object_properties(self._mj_model, self._mj_data, "object", DEFAULT_OBJECT_PROPS)
-        prepare_model_for_mjx(self._mj_model)
+            xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
+            self._mj_model, self._mj_data = load_mujoco_model(xml_path)
+            modify_object_properties(self._mj_model, self._mj_data, "object", DEFAULT_OBJECT_PROPS)
+            prepare_model_for_mjx(self._mj_model)
 
-        self.block_body_id = mujoco.mj_name2id(
-            self._mj_model, mujoco.mjtObj.mjOBJ_BODY, "object"
-        )
-        force_sensor_id = mujoco.mj_name2id(
-            self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "hand_force"
-        )
-        self.force_adr = int(self._mj_model.sensor_adr[force_sensor_id])
+            self.block_body_id = mujoco.mj_name2id(
+                self._mj_model, mujoco.mjtObj.mjOBJ_BODY, "object"
+            )
+            force_sensor_id = mujoco.mj_name2id(
+                self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "hand_force"
+            )
+            self.force_adr = int(self._mj_model.sensor_adr[force_sensor_id])
 
-        self._batch: MJXBatch | None = None
-        self._rng_key = jax.random.PRNGKey(42)
-        self._propagate_once = jax.jit(self._build_propagate_once())
-        self._propagate_many = jax.jit(self._build_propagate_many())
+            self._batch: MJXBatch | None = None
+            self._rng_key = jax.random.PRNGKey(42)
+            self._propagate_once = jax.jit(self._build_propagate_once())
+            self._propagate_many = jax.jit(self._build_propagate_many())
 
     @property
     def num_particles(self) -> int:
         return self._num_particles
 
     def initialize_particles(self) -> np.ndarray:
-        return np.asarray(self.initialize_particles_device())
+        with tracing_span(_TRACER, "mjx_env.initialize_particles", {"particles": self._num_particles}):
+            return np.asarray(self.initialize_particles_device())
 
     def initialize_particles_device(self) -> jax.Array:
-        n = self._num_particles
-        masses = np.random.uniform(self.min, self.max, size=n)
+        with tracing_span(_TRACER, "mjx_env.initialize_particles_device", {"particles": self._num_particles}):
+            n = self._num_particles
+            masses = np.random.uniform(self.min, self.max, size=n)
 
-        self._batch = MJXBatch(self._mj_model, self._mj_data, masses, self.block_body_id)
-        self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="mjx_jit_warmup_start",
-                particles=n,
+            self._batch = MJXBatch(self._mj_model, self._mj_data, masses, self.block_body_id)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_jit_warmup_start",
+                    particles=n,
+                )
             )
-        )
-        self._batch.warmup()
-        self.logger.info(extend_logging_data(self.logging_data, event="mjx_jit_warmup_done"))
+            self._batch.warmup()
+            self.logger.info(extend_logging_data(self.logging_data, event="mjx_jit_warmup_done"))
 
-        self._step_count = 0
+            self._step_count = 0
 
-        return jax.device_put(masses, self._batch.device)
+            return jax.device_put(masses, self._batch.device)
 
     def _build_propagate_once(self):
-        minimum = self.min
-        maximum = self.max
+        with tracing_span(_TRACER, "mjx_env._build_propagate_once", {"particles": self._num_particles}):
+            minimum = self.min
+            maximum = self.max
 
-        def propagate(particles: jax.Array, noise: jax.Array) -> jax.Array:
-            return jnp.clip(particles + noise, minimum, maximum)
+            def propagate(particles: jax.Array, noise: jax.Array) -> jax.Array:
+                return jnp.clip(particles + noise, minimum, maximum)
 
-        return propagate
+            return propagate
 
     def _build_propagate_many(self):
-        minimum = self.min
-        maximum = self.max
+        with tracing_span(_TRACER, "mjx_env._build_propagate_many", {"particles": self._num_particles}):
+            minimum = self.min
+            maximum = self.max
 
-        def propagate(particles: jax.Array, noise_steps: jax.Array) -> tuple[jax.Array, jax.Array]:
-            def scan_step(carry: jax.Array, noise: jax.Array):
-                next_particles = jnp.clip(carry + noise, minimum, maximum)
-                return next_particles, next_particles
+            def propagate(particles: jax.Array, noise_steps: jax.Array) -> tuple[jax.Array, jax.Array]:
+                def scan_step(carry: jax.Array, noise: jax.Array):
+                    next_particles = jnp.clip(carry + noise, minimum, maximum)
+                    return next_particles, next_particles
 
-            final_particles, trajectory = jax.lax.scan(scan_step, particles, noise_steps)
-            return final_particles, trajectory
+                final_particles, trajectory = jax.lax.scan(scan_step, particles, noise_steps)
+                return final_particles, trajectory
 
-        return propagate
+            return propagate
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
-        return np.asarray(self.propagate_particles_device(particles, control_input))
+        with tracing_span(_TRACER, "mjx_env.propagate", {"particles": self._num_particles}):
+            return np.asarray(self.propagate_particles_device(particles, control_input))
 
     def propagate_particles_device(
         self,
         particles: np.ndarray | jax.Array,
         control_input: np.ndarray,
     ) -> jax.Array:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before propagation.")
+        with tracing_span(_TRACER, "mjx_env.propagate_particles_device", {"particles": self._num_particles}):
+            if self._batch is None:
+                raise RuntimeError("MJX batch must be initialized before propagation.")
 
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        noise = jax.random.normal(subkey, shape=(self._num_particles,)) * self.std_dev
-        jax_particles = self._propagate_once(jnp.asarray(particles), noise)
-        self._batch.step(control_input, jax_particles)
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            noise = jax.random.normal(subkey, shape=(self._num_particles,)) * self.std_dev
+            jax_particles = self._propagate_once(jnp.asarray(particles), noise)
+            self._batch.step(control_input, jax_particles)
 
-        self._step_count += 1
+            self._step_count += 1
 
-        return jax_particles
+            return jax_particles
 
     def rollout_predict_only_device(
         self,
         particles: np.ndarray | jax.Array,
         trajectory: np.ndarray,
     ) -> jax.Array:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before propagation.")
-        controls = jnp.asarray(trajectory)
-        if controls.size == 0:
-            return jnp.asarray(particles)
+        step_count = int(getattr(trajectory, "shape", [len(trajectory)])[0]) if trajectory is not None else 0
+        with tracing_span(
+            _TRACER,
+            "mjx_env.rollout_predict_only_device",
+            {"particles": self._num_particles, "steps": step_count},
+        ):
+            if self._batch is None:
+                raise RuntimeError("MJX batch must be initialized before propagation.")
+            controls = jnp.asarray(trajectory)
+            if controls.size == 0:
+                return jnp.asarray(particles)
 
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        noise_steps = jax.random.normal(
-            subkey,
-            shape=(controls.shape[0], self._num_particles),
-        ) * self.std_dev
-        final_particles, particle_trajectory = self._propagate_many(
-            jnp.asarray(particles),
-            noise_steps,
-        )
-        self._batch.rollout(controls, particle_trajectory)
-        self._step_count += int(controls.shape[0])
-        return final_particles
+            self._rng_key, subkey = jax.random.split(self._rng_key)
+            noise_steps = jax.random.normal(
+                subkey,
+                shape=(controls.shape[0], self._num_particles),
+            ) * self.std_dev
+            final_particles, particle_trajectory = self._propagate_many(
+                jnp.asarray(particles),
+                noise_steps,
+            )
+            self._batch.rollout(controls, particle_trajectory)
+            self._step_count += int(controls.shape[0])
+            return final_particles
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
-        return np.asarray(self.compute_likelihoods_device(observation))
+        with tracing_span(_TRACER, "mjx_env.compute_likelihoods", {"particles": self._num_particles}):
+            return np.asarray(self.compute_likelihoods_device(observation))
 
     def compute_likelihoods_device(self, observation: np.ndarray) -> jax.Array:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before likelihood evaluation.")
-        sim_forces = self._batch.sensor_slice(self.force_adr, 3)
+        with tracing_span(_TRACER, "mjx_env.compute_likelihoods_device", {"particles": self._num_particles}):
+            if self._batch is None:
+                raise RuntimeError("MJX batch must be initialized before likelihood evaluation.")
+            sim_forces = self._batch.sensor_slice(self.force_adr, 3)
 
-        obs = jnp.array(observation)
-        diff = obs - sim_forces
-        R = 1.0
-        dist_sq = jnp.sum(diff ** 2, axis=1)
-        likelihoods = jnp.exp(-0.5 * dist_sq / R)
+            obs = jnp.array(observation)
+            diff = obs - sim_forces
+            R = 1.0
+            dist_sq = jnp.sum(diff ** 2, axis=1)
+            likelihoods = jnp.exp(-0.5 * dist_sq / R)
 
-        return likelihoods
+            return likelihoods
 
     def resample_states(self, indexes: np.ndarray) -> None:
-        self.resample_states_device(indexes)
+        with tracing_span(_TRACER, "mjx_env.resample_states", {"particles": self._num_particles}):
+            self.resample_states_device(indexes)
 
     def resample_states_device(self, indexes: np.ndarray | jax.Array) -> None:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before resampling.")
-        self._batch.resample(indexes)
+        with tracing_span(_TRACER, "mjx_env.resample_states_device", {"particles": self._num_particles}):
+            if self._batch is None:
+                raise RuntimeError("MJX batch must be initialized before resampling.")
+            self._batch.resample(indexes)
 
     def memory_profile(self) -> dict[str, int | float | str]:
         """Report the actual MJX execution device and memory usage."""
-        default_device = jax.devices()[0]
-        if self._batch is not None:
-            return self._batch.memory_profile()
-        return {
-            "execution_platform": "uninitialized",
-            "execution_device": "uninitialized",
-            "default_jax_platform": str(default_device.platform),
-            "default_jax_device": str(default_device.device_kind),
-            "device_fallback_applied": False,
-            "bytes_in_use": 0,
-            "peak_bytes_in_use": 0,
-            "bytes_limit": 0,
-        }
+        with tracing_span(_TRACER, "mjx_env.memory_profile", {"particles": self._num_particles}):
+            default_device = jax.devices()[0]
+            if self._batch is not None:
+                return self._batch.memory_profile()
+            return {
+                "execution_platform": "uninitialized",
+                "execution_device": "uninitialized",
+                "default_jax_platform": str(default_device.platform),
+                "default_jax_device": str(default_device.device_kind),
+                "device_fallback_applied": False,
+                "bytes_in_use": 0,
+                "peak_bytes_in_use": 0,
+                "bytes_limit": 0,
+            }
 
     def warmup_runtime(self, rollout_lengths: Iterable[int]) -> list[int]:
-        if self._batch is None:
-            raise RuntimeError("MJX batch must be initialized before warmup.")
-        normalized_lengths = sorted({int(length) for length in rollout_lengths if int(length) > 0})
-        for length in normalized_lengths:
-            self._batch.warmup_rollout(length)
-        self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="mjx_runtime_rollout_warmup_done",
-                particles=self._num_particles,
-                rollout_lengths=normalized_lengths,
+        with tracing_span(_TRACER, "mjx_env.warmup_runtime", {"particles": self._num_particles}):
+            if self._batch is None:
+                raise RuntimeError("MJX batch must be initialized before warmup.")
+            normalized_lengths = sorted({int(length) for length in rollout_lengths if int(length) > 0})
+            for length in normalized_lengths:
+                self._batch.warmup_rollout(length)
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_runtime_rollout_warmup_done",
+                    particles=self._num_particles,
+                    rollout_lengths=normalized_lengths,
+                )
             )
-        )
-        return normalized_lengths
+            return normalized_lengths

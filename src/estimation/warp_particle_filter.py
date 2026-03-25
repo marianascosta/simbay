@@ -10,11 +10,11 @@ import os
 import mujoco
 import numpy as np
 
-from src.utils import DEFAULT_OBJECT_PROPS
-from src.utils import load_mujoco_model
-from src.utils import modify_object_properties
+from src.utils.constants import DEFAULT_OBJECT_PROPS
 from src.utils.logging_utils import extend_logging_data
 from src.utils.mjx_utils import prepare_model_for_mjx
+from src.utils.mujoco_utils import load_mujoco_model
+from src.utils.mujoco_utils import modify_object_properties
 from src.utils.profiling import annotate
 
 from .base import ParticleEnvironment

@@ -5,8 +5,10 @@ import numpy as np
 from .base import ParticleEnvironment
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.logging_utils import extend_logging_data
+from src.utils.tracing import trace_public_methods
 
 
+@trace_public_methods("simbay.particle_filter")
 class ParticleFilter:
     """
     A universal Particle Filter (Sequential Monte Carlo) implementation.
