@@ -359,7 +359,7 @@ signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 # ==========================================
 # 1. SETUP
 # ==========================================
-run_id = os.getenv("SIMBAY_RUN_ID") or datetime.now().strftime("%Y%m%d%H%M%S")
+run_id = os.getenv("SIMBAY_RUN_ID") or datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 setup_tracing(run_id=run_id)
 _tracer = get_tracer("simbay.main")
 _run_span_cm = tracing_span(_tracer, "simbay.run")
