@@ -129,6 +129,10 @@ def _log_setup_summary(
     common_data = extend_logging_data(
         logging_data,
         event="simulation_setup",
+        msg=(
+            f"Completed simulation setup for the {backend_name} backend "
+            f"with {num_particles} particles."
+        ),
         dt=dt,
         true_mass=true_mass,
         particles=num_particles,
@@ -205,6 +209,10 @@ def _handle_shutdown_signal(signum, _frame) -> None:
             extend_logging_data(
                 base_logging_data,
                 event="shutdown_requested",
+                msg=(
+                    f"Received {shutdown_signal_name} and will finish the current run "
+                    "before shutting down."
+                ),
                 signal=shutdown_signal_name,
                 mode="graceful",
                 action="finish_current_run",
@@ -214,6 +222,10 @@ def _handle_shutdown_signal(signum, _frame) -> None:
         logging.getLogger("simbay").info(
             {
                 "event": "shutdown_requested",
+                "msg": (
+                    f"Received {shutdown_signal_name} and will finish the current run "
+                    "before shutting down."
+                ),
                 "run_id": base_logging_data.get("run_id", "unknown"),
                 "signal": shutdown_signal_name,
                 "mode": "graceful",
@@ -269,6 +281,7 @@ def _log_stage_started(
     payload = extend_logging_data(
         logging_data,
         event="stage_started",
+        msg=f"Started {stage.replace('_', ' ')}.",
         stage=stage,
     )
     if steps is not None:
@@ -285,6 +298,10 @@ def _log_stage_finished(
         extend_logging_data(
             logging_data,
             event="stage_finished",
+            msg=(
+                f"Finished {stage.replace('_', ' ')} "
+                f"in {duration_seconds:.2f} seconds."
+            ),
             stage=stage,
             duration_ms=duration_seconds * 1000.0,
         )
@@ -302,6 +319,10 @@ def _log_substage_started(
         extend_logging_data(
             logging_data,
             event="substage_started",
+            msg=(
+                f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')} "
+                f"over {steps} {'step' if steps == 1 else 'steps'}."
+            ),
             phase=phase,
             substage=substage,
             steps=steps,
@@ -320,6 +341,10 @@ def _log_run_metadata(
         extend_logging_data(
             logging_data,
             event="run_metadata",
+            msg=(
+                f"Recorded run configuration for the {backend_name} backend with "
+                f"{num_particles} particles at dt {dt}."
+            ),
             backend=backend_name,
             device=execution_device,
             particles=num_particles,
@@ -403,6 +428,7 @@ with tracing_span(_tracer, "setup"):
                 extend_logging_data(
                     base_logging_data,
                     event="gpu_memory_stats",
+                    msg=f"Collected GPU memory statistics for {device}.",
                     device=str(device),
                     stats=memory_stats,
                 )
@@ -412,6 +438,7 @@ with tracing_span(_tracer, "setup"):
                 extend_logging_data(
                     base_logging_data,
                     event="gpu_memory_stats_unavailable",
+                    msg="Could not collect GPU memory statistics.",
                     error=str(exc),
                 )
             )
@@ -555,6 +582,10 @@ with tracing_span(_tracer, "ik_planning"):
             extend_logging_data(
                 base_logging_data,
                 event="backend_runtime_warmup_summary",
+                msg=(
+                    f"Finished backend runtime warm-up for the {backend} backend "
+                    f"with {particle_filter.N} particles."
+                ),
                 backend=backend,
                 particles=particle_filter.N,
                 rollout_lengths=warmed_rollout_lengths,
@@ -1021,6 +1052,10 @@ with tracing_span(_tracer, "phase_4_lift"):
                                             extend_logging_data(
                                                 base_logging_data,
                                                 event="warp_first_update_recovered",
+                                                msg=(
+                                                    f"Recovered the first Warp update after "
+                                                    f"{attempt} attempts."
+                                                ),
                                                 attempts=attempt,
                                                 step=particle_filter._step_index - 1,
                                             )
@@ -1328,6 +1363,10 @@ if backend == "cpu":
         extend_logging_data(
             base_logging_data,
             event="particle_filter_summary",
+            msg=(
+                f"Finished the particle filter run over {len(pf_wall_durations)} steps "
+                f"with a final estimate of {float(particle_filter.estimate()):.3f} kg."
+            ),
             steps=len(pf_wall_durations),
             avg_wall_ms=avg_wall_duration * 1000.0,
             avg_step_rate_hz=avg_step_rate_hz,
@@ -1351,6 +1390,10 @@ elif backend == "warp":
         extend_logging_data(
             base_logging_data,
             event="particle_filter_summary",
+            msg=(
+                f"Finished the particle filter run over {len(pf_wall_durations)} steps "
+                f"with a final estimate of {float(particle_filter.estimate()):.3f} kg."
+            ),
             steps=len(pf_wall_durations),
             avg_wall_ms=avg_wall_duration * 1000.0,
             avg_step_rate_hz=avg_step_rate_hz,
@@ -1376,6 +1419,10 @@ else:
         extend_logging_data(
             base_logging_data,
             event="particle_filter_summary",
+            msg=(
+                f"Finished the particle filter run over {len(pf_wall_durations)} steps "
+                f"with a final estimate of {float(particle_filter.estimate()):.3f} kg."
+            ),
             steps=len(pf_wall_durations),
             avg_wall_ms=avg_wall_duration * 1000.0,
             avg_step_rate_hz=avg_step_rate_hz,
@@ -1394,6 +1441,7 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="sequence_complete",
+        msg="Finished the execution sequence.",
         awaiting_user_input=not headless,
     )
 )
@@ -1404,6 +1452,7 @@ elif not headless and shutdown_requested:
         extend_logging_data(
             base_logging_data,
             event="sequence_complete_skipping_user_input",
+            msg="Skipped waiting for user input because shutdown was requested.",
             signal=shutdown_signal_name,
         )
     )
@@ -1417,6 +1466,9 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="prediction_ready",
+        msg=(
+            f"The prediction is ready after {time_to_prediction_seconds:.2f} seconds."
+        ),
         total_wall_s=time_to_prediction_seconds,
         final_mass_prediction_kg=final_prediction,
     )
@@ -1425,6 +1477,7 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="final_mass_prediction",
+        msg=f"Recorded the final mass prediction as {final_prediction:.3f} kg.",
         final_mass_prediction_kg=final_prediction,
     )
 )
@@ -1432,6 +1485,9 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="final_error",
+        msg=(
+            "Recorded the final percentage error for the mass prediction."
+        ),
         final_error_pct=abs(true_mass - final_prediction) * 100,
     )
 )
@@ -1442,6 +1498,10 @@ if mass_series_artifacts:
         extend_logging_data(
             base_logging_data,
             event="mass_timeseries_export_complete",
+            msg=(
+                f"Exported {len(history_particles)} particle-mass snapshots to "
+                f"{mass_series_artifacts[0].parent}."
+            ),
             snapshots=len(history_particles),
             artifacts=len(mass_series_artifacts),
             path=str(mass_series_artifacts[0].parent),
@@ -1456,7 +1516,13 @@ if mass_series_artifacts:
 # ==========================================
 plot_stage = metrics.start_stage("plot_generation")
 _log_stage_started(base_logging_data, "plot_generation")
-logger.info(extend_logging_data(base_logging_data, event="plot_generation_start"))
+logger.info(
+    extend_logging_data(
+        base_logging_data,
+        event="plot_generation_start",
+        msg="Started generating the output plots.",
+    )
+)
 with tracing_span(_tracer, "plot_generation"):
     set_span_attributes(
         {
@@ -1495,6 +1561,7 @@ with tracing_span(_tracer, "plot_generation"):
         extend_logging_data(
             base_logging_data,
             event="plot_saved",
+            msg=f"Saved the particle filter plot to {output_path}.",
             path=str(output_path),
         )
     )
@@ -1504,12 +1571,19 @@ _log_stage_finished(base_logging_data, "plot_generation", plot_duration)
 if backend == "cpu":
     jax.clear_caches()
     gc.collect()
-    logger.info(extend_logging_data(base_logging_data, event="jax_cleanup_complete"))
+    logger.info(
+        extend_logging_data(
+            base_logging_data,
+            event="jax_cleanup_complete",
+            msg="Finished cleaning up JAX caches.",
+        )
+    )
 
 logger.info(
     extend_logging_data(
         base_logging_data,
         event="goodbye",
+        msg="Finished the run and shut down cleanly.",
         shutdown_requested=shutdown_requested,
         signal=shutdown_signal_name or "none",
     )

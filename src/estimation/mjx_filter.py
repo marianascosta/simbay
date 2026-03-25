@@ -142,6 +142,7 @@ class MJXParticleFilter:
                 extend_logging_data(
                     self.logging_data,
                     event="mjx_particle_filter_initialized",
+                    msg=f"Initialised the MJX particle filter with {self.N} particles.",
                     particles=self.N,
                     state_bytes_total=self.state_bytes_total,
                     state_bytes_per_particle=self.state_bytes_per_particle,
@@ -179,6 +180,7 @@ class MJXParticleFilter:
                 extend_logging_data(
                     self.logging_data,
                     event="mjx_filter_runtime_warmup_done",
+                    msg="Finished warming up the MJX particle filter runtime.",
                     particles=self.N,
                     rollout_lengths=warmed_rollout_lengths,
                 )

@@ -8,6 +8,20 @@ from pathlib import Path
 from typing import Any
 
 
+_LOG_KEY_ORDER = (
+    "timestamp",
+    "level",
+    "logger",
+    "run_id",
+    "msg",
+    "backend",
+    "stage",
+    "substage",
+    "step",
+    "steps",
+)
+
+
 class _RunIdFilter(logging.Filter):
     def __init__(self, run_id: str) -> None:
         super().__init__()
@@ -32,7 +46,14 @@ class _StructuredFormatter(logging.Formatter):
         payload.setdefault("level", record.levelname)
         payload.setdefault("logger", record.name)
         payload.setdefault("timestamp", self.formatTime(record, self.datefmt))
-        return json.dumps(payload, default=str, sort_keys=True)
+        ordered_payload: dict[str, Any] = {}
+        for key in _LOG_KEY_ORDER:
+            if key in payload:
+                ordered_payload[key] = payload[key]
+        for key in sorted(payload):
+            if key not in ordered_payload:
+                ordered_payload[key] = payload[key]
+        return json.dumps(ordered_payload, default=str)
 
 
 def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logging.Logger:

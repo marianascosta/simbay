@@ -65,6 +65,7 @@ def modify_object_properties(model, data, body_name, props):
         logger.error(
             {
                 "event": "mujoco_body_not_found",
+                "msg": f"Could not find MuJoCo body '{body_name}'.",
                 "body_name": body_name,
             }
         )

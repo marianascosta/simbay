@@ -78,11 +78,18 @@ class FrankaMJXEnv(ParticleEnvironment):
                 extend_logging_data(
                     self.logging_data,
                     event="mjx_jit_warmup_start",
+                    msg=f"Started warming up MJX JIT execution with {n} particles.",
                     particles=n,
                 )
             )
             self._batch.warmup()
-            self.logger.info(extend_logging_data(self.logging_data, event="mjx_jit_warmup_done"))
+            self.logger.info(
+                extend_logging_data(
+                    self.logging_data,
+                    event="mjx_jit_warmup_done",
+                    msg="Finished warming up MJX JIT execution.",
+                )
+            )
 
             self._step_count = 0
 
@@ -221,6 +228,7 @@ class FrankaMJXEnv(ParticleEnvironment):
                 extend_logging_data(
                     self.logging_data,
                     event="mjx_runtime_rollout_warmup_done",
+                    msg="Finished warming up MJX rollout execution.",
                     particles=self._num_particles,
                     rollout_lengths=normalized_lengths,
                 )

@@ -24,7 +24,7 @@ except ImportError:
     logger.warning(
         {
             "event": "ros_libraries_unavailable",
-            "message": "RealRobot will not work, but SimRobot is fine.",
+            "msg": "ROS libraries are unavailable, so the real robot interface cannot be used.",
         }
     )
 
@@ -53,10 +53,10 @@ class RealRobot(BaseRobot):
         self.pub1 = self.node1.create_publisher(JointTrajectory, "/fr3_arm_controller/joint_trajectory", 10)
         self.sub1 = self.node1.create_subscription(JointState, "/joint_states", self.jointstate_callback, 10)
         
-        logger.info({"event": "robot_connection_waiting"})
+        logger.info({"event": "robot_connection_waiting", "msg": "Waiting for the robot connection."})
         while self.current_joints is None:
             rclpy.spin_once(self.node1, timeout_sec=0.1)
-        logger.info({"event": "robot_connected"})
+        logger.info({"event": "robot_connected", "msg": "Connected to the robot."})
 
     def jointstate_callback(self, msg):
         if len(msg.name) >= 7:
@@ -95,6 +95,7 @@ class RealRobot(BaseRobot):
         logger.info(
             {
                 "event": "real_robot_move_to_pos",
+                "msg": f"Moved the real robot to the requested position in {duration:.2f} seconds.",
                 "duration_s": duration,
             }
         )
@@ -106,6 +107,7 @@ class RealRobot(BaseRobot):
         logger.info(
             {
                 "event": "mock_gripper_open",
+                "msg": "Opened the mock gripper.",
                 "hardware_online": False,
             }
         )
@@ -115,6 +117,7 @@ class RealRobot(BaseRobot):
         logger.info(
             {
                 "event": "mock_gripper_close",
+                "msg": "Closed the mock gripper.",
                 "hardware_online": False,
             }
         )

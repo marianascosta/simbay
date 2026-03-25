@@ -50,6 +50,7 @@ class ParticleFilter:
             extend_logging_data(
                 self.logging_data,
                 event="particle_filter_initialized",
+                msg=f"Initialised the particle filter with {self.N} particles.",
                 particles=self.N,
                 state_bytes_total=self.state_bytes_total,
                 state_bytes_per_particle=self.state_bytes_per_particle,

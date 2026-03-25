@@ -68,6 +68,7 @@ class WarpBatch:
             extend_logging_data(
                 self.logging_data,
                 event="warp_batch_init",
+                msg=f"Initialised the Warp batch with {self._size} worlds.",
                 nworld=self._size,
                 body_id=body_id,
                 nconmax=nconmax,
@@ -99,6 +100,7 @@ class WarpBatch:
             extend_logging_data(
                 self.logging_data,
                 event="warp_batch_init_complete",
+                msg=f"Finished setting up the Warp batch with {self._size} worlds.",
                 nworld=self._size,
             )
         )
@@ -116,6 +118,7 @@ class WarpBatch:
             extend_logging_data(
                 self.logging_data,
                 event="warp_batch_warmup_done",
+                msg=f"Finished warming up the Warp batch for {self._size} worlds.",
                 nworld=self._size,
             )
         )
@@ -132,6 +135,7 @@ class WarpBatch:
             extend_logging_data(
                 self.logging_data,
                 event="warp_batch_rollout_warmup_done",
+                msg=f"Finished Warp rollout warm-up over {steps} steps.",
                 steps=steps,
             )
         )
