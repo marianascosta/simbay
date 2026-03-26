@@ -72,9 +72,6 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     logger.setLevel(level)
     logger.propagate = False
 
-    log_path = Path(log_dir)
-    log_path.mkdir(parents=True, exist_ok=True)
-
     formatter = _StructuredFormatter(
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
@@ -85,17 +82,47 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(run_id_filter)
 
-    file_handler = RotatingFileHandler(
-        log_path / "simbay.log",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
-    )
+    preferred_log_path = Path(log_dir)
+    fallback_log_path = Path(os.getenv("SIMBAY_LOG_FALLBACK_DIR", "/tmp/simbay-logs"))
+    fallback_log_path = fallback_log_path / str(run_id)
+    file_handler: RotatingFileHandler | None = None
+    file_target: Path | None = None
+
+    for candidate in (preferred_log_path, fallback_log_path):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            file_target = candidate / "simbay.log"
+            file_handler = RotatingFileHandler(
+                file_target,
+                maxBytes=5 * 1024 * 1024,
+                backupCount=5,
+            )
+            break
+        except OSError:
+            file_handler = None
+            file_target = None
+
+    if file_handler is None or file_target is None:
+        raise RuntimeError(
+            "Failed to initialize file logging. "
+            f"Tried {preferred_log_path / 'simbay.log'} and {fallback_log_path / 'simbay.log'}."
+        )
+
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     file_handler.addFilter(run_id_filter)
 
     logger.addHandler(stream_handler)
     logger.addHandler(file_handler)
+    if file_target.parent != preferred_log_path:
+        logger.warning(
+            {
+                "event": "logging_fallback",
+                "msg": "Primary logs directory is not writable; using fallback log path.",
+                "requested_log_dir": str(preferred_log_path),
+                "fallback_log_file": str(file_target),
+            }
+        )
     return logger
 
 
