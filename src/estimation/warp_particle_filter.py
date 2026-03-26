@@ -12,9 +12,9 @@ import numpy as np
 
 from src.utils.constants import DEFAULT_OBJECT_PROPS
 from src.utils.logging_utils import extend_logging_data
-from src.utils.mjx_utils import prepare_model_for_mjx
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
+from src.utils.mujoco_utils import prepare_model_for_warp
 from src.utils.profiling import annotate
 
 from .base import ParticleEnvironment
@@ -43,7 +43,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
         self._mj_model, self._mj_data = load_mujoco_model(xml_path)
         modify_object_properties(self._mj_model, self._mj_data, "object", DEFAULT_OBJECT_PROPS)
-        prepare_model_for_mjx(self._mj_model)
+        prepare_model_for_warp(self._mj_model)
 
         self.block_body_id = mujoco.mj_name2id(
             self._mj_model,

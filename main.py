@@ -9,12 +9,6 @@ import signal
 import time
 from typing import Any
 
-# Apply JAX/XLA settings before importing modules that may load JAX.
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["XLA_FLAGS"] = "--xla_gpu_enable_triton_gemm=false"
-
 import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
@@ -151,7 +145,7 @@ def _log_setup_summary(
         ),
     )
 
-    if backend_name in {"cpu", "warp"}:
+    if backend_name == "mujoco-warp":
         logger.info(
             extend_logging_data(
                 common_data,
@@ -398,7 +392,6 @@ logger = setup_logging(run_id=run_id)
 _log_stage_started(base_logging_data, "setup")
 with tracing_span(_tracer, "setup"):
     headless = os.getenv("SIMBAY_HEADLESS", "true").lower() in {"1", "true", "yes", "on"}
-    use_mjx = os.getenv("SIMBAY_USE_MJX", "true").lower() in {"1", "true", "yes", "on"}
     mass_series_enabled = os.getenv("SIMBAY_MASS_TIMESERIES_ENABLED", "1").lower() in {
         "1",
         "true",
@@ -406,42 +399,16 @@ with tracing_span(_tracer, "setup"):
         "on",
     }
     _backend_env = os.getenv("SIMBAY_BACKEND", "").lower()
-    if _backend_env in {"cpu", "warp"}:
-        backend = _backend_env
-    elif use_mjx:
+    if _backend_env in {"", "cpu"}:
         backend = "cpu"
+    elif _backend_env == "mujoco-warp":
+        backend = "mujoco-warp"
     else:
-        backend = "mujoco"
+        raise SystemExit(
+            "Unsupported backend. Set SIMBAY_BACKEND to `cpu` or `mujoco-warp`."
+        )
 
-    use_batched_backend = backend in {"cpu", "warp"}
-
-    if backend == "cpu":
-        import jax
-
-        from src.estimation.mjx_filter import MJXParticleFilter
-        from src.estimation.mjx_particle_filter import FrankaMJXEnv
-
-        try:
-            device = jax.devices("gpu")[0]
-            memory_stats = device.memory_stats() or {}
-            logger.info(
-                extend_logging_data(
-                    base_logging_data,
-                    event="gpu_memory_stats",
-                    msg=f"Collected GPU memory statistics for {device}.",
-                    device=str(device),
-                    stats=memory_stats,
-                )
-            )
-        except Exception as exc:
-            logger.warning(
-                extend_logging_data(
-                    base_logging_data,
-                    event="gpu_memory_stats_unavailable",
-                    msg="Could not collect GPU memory statistics.",
-                    error=str(exc),
-                )
-            )
+    use_batched_backend = backend == "mujoco-warp"
     # Setup "real" robot
     real_robot = initialize_mujoco_env()
     viewer = None
@@ -455,7 +422,7 @@ with tracing_span(_tracer, "setup"):
 
     num_particles = int(os.getenv("SIMBAY_PARTICLES", "100"))
     limits = ((0.0, 3.0))
-    if backend == "warp":
+    if backend == "mujoco-warp":
         try:
             from src.estimation.warp_filter import _uniform_weight_metrics
             from src.estimation.warp_filter import _update_and_optionally_resample
@@ -472,11 +439,10 @@ with tracing_span(_tracer, "setup"):
         env = FrankaWarpEnv(limits, num_particles, logging_data=base_logging_data)
         particle_filter = WarpParticleFilter(env, logging_data=base_logging_data)
     elif backend == "cpu":
-        env = FrankaMJXEnv(limits, num_particles, logging_data=base_logging_data)
-        particle_filter = MJXParticleFilter(env, logging_data=base_logging_data)
-    else:
         env = FrankaMuJoCoEnv(limits, num_particles)
         particle_filter = ParticleFilter(env, logging_data=base_logging_data)
+    else:
+        raise AssertionError(f"Unexpected backend: {backend}")
     memory_profile = particle_filter.memory_profile()
     env_memory_profile = env.memory_profile()
     cpu_cores = os.cpu_count() or 1
@@ -499,7 +465,7 @@ with tracing_span(_tracer, "setup"):
     metrics.set_particle_count(num_particles)
     metrics.set_backend(backend, execution_device)
     metrics.set_run_info(backend=backend, particles=num_particles, control_dt=dt)
-    if backend == "warp":
+    if backend == "mujoco-warp":
         metrics.update_warp_memory(
             stage="setup",
             bytes_in_use=int(env_memory_profile["bytes_in_use"]),
@@ -677,7 +643,7 @@ with tracing_span(_tracer, "phase_1_approach"):
             particle_filter.N,
             pf_replay_duration,
         )
-    if backend == "warp":
+    if backend == "mujoco-warp":
         env_memory_profile = env.memory_profile()
         metrics.update_warp_memory(
             stage="phase_1_approach",
@@ -768,7 +734,7 @@ with tracing_span(_tracer, "phase_2_descend"):
             particle_filter.N,
             pf_replay_duration,
         )
-    if backend == "warp":
+    if backend == "mujoco-warp":
         env_memory_profile = env.memory_profile()
         metrics.update_warp_memory(
             stage="phase_2_descend",
@@ -859,7 +825,7 @@ with tracing_span(_tracer, "phase_3_grip"):
             particle_filter.N,
             pf_replay_duration,
         )
-    if backend == "warp":
+    if backend == "mujoco-warp":
         env_memory_profile = env.memory_profile()
         metrics.update_warp_memory(
             stage="phase_3_grip",
@@ -889,7 +855,7 @@ with tracing_span(_tracer, "phase_4_lift"):
     mass_series_sample_interval = int(
         os.getenv(
             "SIMBAY_MASS_TIMESERIES_INTERVAL",
-            "1" if backend in {"warp", "mujoco"} else "10",
+            "1" if backend == "mujoco-warp" else "10",
         )
     )
     mass_series_flush_snapshots = int(os.getenv("SIMBAY_MASS_TIMESERIES_FLUSH_SNAPSHOTS", "64"))
@@ -989,10 +955,10 @@ with tracing_span(_tracer, "phase_4_lift"):
                 {
                     "simbay.step": step,
                     "simbay.execution_mode": (
-                        "batched_parallel" if backend in {"cpu", "warp"} else "sequential"
+                        "batched_parallel" if backend == "mujoco-warp" else "sequential"
                     ),
                     "simbay.batched_particle_updates": (
-                        particle_filter.N if backend in {"cpu", "warp"} else 1
+                        particle_filter.N if backend == "mujoco-warp" else 1
                     ),
                 }
             )
@@ -1025,10 +991,10 @@ with tracing_span(_tracer, "phase_4_lift"):
                         "simbay.backend": backend,
                         "simbay.previous_mass_estimate_kg": previous_mass_estimate,
                         "simbay.execution_mode": (
-                            "batched_parallel" if backend in {"cpu", "warp"} else "sequential"
+                            "batched_parallel" if backend == "mujoco-warp" else "sequential"
                         ),
                         "simbay.parallel_units": (
-                            particle_filter.N if backend in {"cpu", "warp"} else 1
+                            particle_filter.N if backend == "mujoco-warp" else 1
                         ),
                     }
                 )
@@ -1039,7 +1005,7 @@ with tracing_span(_tracer, "phase_4_lift"):
                 real_ft_reading = measurements
                 noisy_ft_reading = real_ft_reading + np.random.normal(0, 0.5, size=3)
 
-                if backend == "warp":
+                if backend == "mujoco-warp":
                     with annotate("phase4_particle_filter_step"):
                         if not phase_4_bootstrap_applied:
                             last_result = None
@@ -1104,12 +1070,10 @@ with tracing_span(_tracer, "phase_4_lift"):
                 )
 
         particles_snapshot = None
-        if backend == "warp":
+        if backend == "mujoco-warp":
             particles_snapshot = particle_filter.particles.copy()
-        elif backend == "mujoco":
+        elif backend == "cpu":
             particles_snapshot = particle_filter.particles.copy()
-        elif mass_series.should_record(step, force=step == len(traj4) - 1):
-            particles_snapshot = particle_filter.particles_host().copy()
         if particles_snapshot is not None:
             latest_particles_snapshot = particles_snapshot
             if mass_series.record(step, particles_snapshot, force=step == len(traj4) - 1):
@@ -1211,7 +1175,7 @@ with tracing_span(_tracer, "phase_4_lift"):
                 weight_entropy_normalized=weight_entropy_normalized,
                 weight_perplexity=weight_perplexity,
             )
-        if backend == "warp":
+        if backend == "mujoco-warp":
             diagnostics = step_result.get("diagnostics", {})
             phase_4_invalid_sensor_events = max(
                 phase_4_invalid_sensor_events,
@@ -1289,7 +1253,7 @@ with tracing_span(_tracer, "phase_4_lift"):
                 "simbay.step_wall_ms": step_wall_duration * 1000.0,
             }
         )
-    if backend == "warp":
+    if backend == "mujoco-warp":
         env_memory_profile = env.memory_profile()
         metrics.update_warp_memory(
             stage="phase_4_lift",
@@ -1377,14 +1341,33 @@ if backend == "cpu":
             final_rss_bytes=get_process_memory_bytes(),
             final_rss=format_bytes(get_process_memory_bytes()),
             backend="cpu",
-            execution_platform=env_memory_profile["execution_platform"],
-            execution_device=env_memory_profile["execution_device"],
-            default_jax_platform=env_memory_profile["default_jax_platform"],
-            default_jax_device=env_memory_profile["default_jax_device"],
-            device_fallback_applied=env_memory_profile["device_fallback_applied"],
+            mujoco_model_buffer_per_particle_bytes=(
+                env_memory_profile["model_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_model_buffer_per_particle=format_bytes(
+                env_memory_profile["model_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_buffer_per_particle_bytes=(
+                env_memory_profile["data_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_buffer_per_particle=format_bytes(
+                env_memory_profile["data_nbuffer_bytes_per_robot"]
+            ),
+            mujoco_data_arena_per_particle_bytes=(
+                env_memory_profile["data_narena_bytes_per_robot"]
+            ),
+            mujoco_data_arena_per_particle=format_bytes(
+                env_memory_profile["data_narena_bytes_per_robot"]
+            ),
+            mujoco_native_memory_per_particle_bytes=env_memory_profile["native_bytes_per_robot"],
+            mujoco_native_memory_per_particle=format_bytes(
+                env_memory_profile["native_bytes_per_robot"]
+            ),
+            mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
+            mujoco_native_memory_total=format_bytes(env_memory_profile["native_bytes_total"]),
         )
     )
-elif backend == "warp":
+elif backend == "mujoco-warp":
     env_memory_profile = env.memory_profile()
     logger.info(
         extend_logging_data(
@@ -1403,7 +1386,7 @@ elif backend == "warp":
             final_error_pct=abs(true_mass - particle_filter.estimate()) * 100,
             final_rss_bytes=get_process_memory_bytes(),
             final_rss=format_bytes(get_process_memory_bytes()),
-            backend="warp",
+            backend="mujoco-warp",
             execution_platform=env_memory_profile["execution_platform"],
             execution_device=env_memory_profile["execution_device"],
             invalid_sensor_events=phase_4_invalid_sensor_events,
@@ -1568,16 +1551,7 @@ with tracing_span(_tracer, "plot_generation"):
 plot_duration = metrics.finish_stage(plot_stage)
 _log_stage_finished(base_logging_data, "plot_generation", plot_duration)
 
-if backend == "cpu":
-    jax.clear_caches()
-    gc.collect()
-    logger.info(
-        extend_logging_data(
-            base_logging_data,
-            event="jax_cleanup_complete",
-            msg="Finished cleaning up JAX caches.",
-        )
-    )
+gc.collect()
 
 logger.info(
     extend_logging_data(

@@ -111,6 +111,24 @@ def modify_object_properties(model, data, body_name, props):
     mujoco.mj_forward(model, data) # type: ignore
 
 
+@trace_call("simbay.mujoco_utils", "mujoco.prepare_model_for_warp")
+def prepare_model_for_warp(model) -> None:
+    """Patch MuJoCo model for the simplified batched Warp collision path."""
+    model.opt.noslip_iterations = 0
+    model.geom_margin[:] = 0.0
+    model.geom_gap[:] = 0.0
+
+    # Preserve the previous batched-backend collision model: only the floor,
+    # fingertip-pad boxes, and the object participate in contact. Mesh and
+    # sphere geoms are disabled to keep Warp aligned with the prior runtime
+    # behavior and force signal characteristics.
+    for geom_index in range(model.ngeom):
+        geom_type = model.geom_type[geom_index]
+        if geom_type in (mujoco.mjtGeom.mjGEOM_MESH, mujoco.mjtGeom.mjGEOM_SPHERE):
+            model.geom_contype[geom_index] = 0
+            model.geom_conaffinity[geom_index] = 0
+
+
 # ==========================================
 # 4. FACTORY
 # ==========================================
