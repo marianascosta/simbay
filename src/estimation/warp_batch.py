@@ -2,7 +2,7 @@
 MuJoCo Warp batch backend.
 
 This module owns the nworld-batched simulation state for all N particles.
-It replaces the JAX-based MJXBatch for the warp backend path.
+It is the batched simulation backend used by the MuJoCo Warp flow.
 """
 
 from __future__ import annotations

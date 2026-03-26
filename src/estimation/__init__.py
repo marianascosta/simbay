@@ -9,8 +9,6 @@ from .particle_filter import ParticleFilter
 
 __all__ = [
     "ParticleEnvironment",
-    "MJXParticleFilter",
-    "FrankaMJXEnv",
     "FrankaMuJoCoEnv",
     "ParticleFilter",
     "FrankaWarpEnv",
@@ -19,16 +17,6 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"MJXParticleFilter", "FrankaMJXEnv"}:
-        from .mjx_filter import MJXParticleFilter
-        from .mjx_particle_filter import FrankaMJXEnv
-
-        exports = {
-            "MJXParticleFilter": MJXParticleFilter,
-            "FrankaMJXEnv": FrankaMJXEnv,
-        }
-        return exports[name]
-
     if name in {"WarpParticleFilter", "FrankaWarpEnv"}:
         from .warp_filter import WarpParticleFilter
         from .warp_particle_filter import FrankaWarpEnv
