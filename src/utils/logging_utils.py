@@ -20,6 +20,8 @@ _LOG_KEY_ORDER = (
     "steps",
 )
 
+logger = logging.getLogger("simbay")
+
 
 class _RunIdFilter(logging.Filter):
     def __init__(self, run_id: str) -> None:
@@ -59,7 +61,6 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     """
     Configure application logging for both stdout and a rotating file.
     """
-    logger = logging.getLogger("simbay")
     if logger.handlers:
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
