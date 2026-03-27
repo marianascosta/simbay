@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 
-from .logging_utils import format_bytes
 from .logging_utils import logger as simbay_logger
 from .logging_utils import setup_logging
 from .metrics import init_metrics
@@ -202,62 +201,16 @@ def substage_span_attrs(
 def log_setup_summary(
     logger: Any,
     backend_name: str,
-    env_memory_profile: dict[str, Any],
-    memory_profile: dict[str, Any],
-    dt: float,
-    true_mass: float,
-    num_particles: int,
-    cpu_cores: int,
     headless: bool,
     **log_data: object,
 ) -> None:
-    common_data = {
-        **log_data,
-        "event": "simulation_setup",
-        "msg": f"Completed simulation setup for the {backend_name} backend with {num_particles} particles.",
-        "dt": dt,
-        "true_mass": true_mass,
-        "particles": num_particles,
-        "cpu_cores": cpu_cores,
-        "headless": headless,
-        "backend": backend_name,
-        "state_memory_total_bytes": memory_profile["state_bytes_total"],
-        "state_memory_total": format_bytes(memory_profile["state_bytes_total"]),
-        "state_memory_per_particle_bytes": memory_profile["state_bytes_per_particle"],
-        "state_memory_per_particle": format_bytes(memory_profile["state_bytes_per_particle"]),
-        "process_memory_per_particle_estimate_bytes": memory_profile["process_memory_per_particle_estimate_bytes"],
-        "process_memory_per_particle_estimate": format_bytes(
-            memory_profile["process_memory_per_particle_estimate_bytes"]
-        ),
-    }
-    if backend_name == "mujoco-warp":
-        logger.info(
-            {
-                **common_data,
-                "execution_platform": env_memory_profile["execution_platform"],
-                "execution_device": env_memory_profile["execution_device"],
-                "default_jax_platform": env_memory_profile["default_jax_platform"],
-                "default_jax_device": env_memory_profile["default_jax_device"],
-                "device_fallback_applied": env_memory_profile["device_fallback_applied"],
-                "bytes_in_use": env_memory_profile["bytes_in_use"],
-                "peak_bytes_in_use": env_memory_profile["peak_bytes_in_use"],
-                "bytes_limit": env_memory_profile["bytes_limit"],
-            }
-        )
-        return
     logger.info(
         {
-            **common_data,
-            "mujoco_model_buffer_per_particle_bytes": env_memory_profile["model_nbuffer_bytes_per_robot"],
-            "mujoco_model_buffer_per_particle": format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
-            "mujoco_data_buffer_per_particle_bytes": env_memory_profile["data_nbuffer_bytes_per_robot"],
-            "mujoco_data_buffer_per_particle": format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
-            "mujoco_data_arena_per_particle_bytes": env_memory_profile["data_narena_bytes_per_robot"],
-            "mujoco_data_arena_per_particle": format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
-            "mujoco_native_memory_per_particle_bytes": env_memory_profile["native_bytes_per_robot"],
-            "mujoco_native_memory_per_particle": format_bytes(env_memory_profile["native_bytes_per_robot"]),
-            "mujoco_native_memory_total_bytes": env_memory_profile["native_bytes_total"],
-            "mujoco_native_memory_total": format_bytes(env_memory_profile["native_bytes_total"]),
+            **log_data,
+            "event": "simulation_setup",
+            "msg": "Completed simulation setup.",
+            "backend": backend_name,
+            "headless": headless,
         }
     )
 
@@ -269,8 +222,6 @@ def log_stage_started(logger: Any, stage: str, *, steps: int | None = None, **lo
         "msg": f"Started {stage.replace('_', ' ')}.",
         "stage": stage,
     }
-    if steps is not None:
-        payload["steps"] = steps
     logger.info(payload)
 
 
@@ -279,9 +230,8 @@ def log_stage_finished(logger: Any, stage: str, duration_seconds: float, **log_d
         {
             **log_data,
             "event": "stage_finished",
-            "msg": f"Finished {stage.replace('_', ' ')} in {duration_seconds:.2f} seconds.",
+            "msg": f"Finished {stage.replace('_', ' ')}.",
             "stage": stage,
-            "duration_ms": duration_seconds * 1000.0,
         }
     )
 
@@ -291,13 +241,9 @@ def log_substage_started(logger: Any, phase: str, substage: str, *, steps: int, 
         {
             **log_data,
             "event": "substage_started",
-            "msg": (
-                f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')} "
-                f"over {steps} {'step' if steps == 1 else 'steps'}."
-            ),
+            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
             "phase": phase,
             "substage": substage,
-            "steps": steps,
         }
     )
 
@@ -321,42 +267,46 @@ def log_substage_duration(
         "pf_replay": "particle filter replay",
         "pf_update": "particle filter update",
     }
-    step_label = "step" if steps == 1 else "steps"
     logger.info(
         {
             **log_data,
             "event": "substage_finished",
             "msg": (
                 f"Finished {substage_labels.get(substage, substage.replace('_', ' '))} "
-                f"for {phase_labels.get(phase, phase.replace('_', ' '))} "
-                f"in {duration_seconds:.2f} seconds over {steps} {step_label}."
+                f"for {phase_labels.get(phase, phase.replace('_', ' '))}."
             ),
             "phase": phase,
             "substage": substage,
-            "steps": steps,
-            "duration_ms": duration_seconds * 1000.0,
         }
     )
 
 
-def log_run_metadata(
-    logger: Any,
+def update_setup_metrics(
+    metrics_obj: Any,
     backend_name: str,
-    execution_device: str,
-    num_particles: int,
-    dt: float,
-    **log_data: object,
+    env_memory_profile: dict[str, Any],
+    memory_profile: dict[str, Any],
 ) -> None:
-    logger.info(
-        {
-            **log_data,
-            "event": "run_metadata",
-            "msg": f"Recorded run configuration for the {backend_name} backend with {num_particles} particles at dt {dt}.",
-            "backend": backend_name,
-            "device": execution_device,
-            "particles": num_particles,
-            "control_dt": dt,
-        }
+    metrics_obj.set_memory_profile(
+        state_bytes_total=int(memory_profile["state_bytes_total"]),
+        state_bytes_per_particle=int(memory_profile["state_bytes_per_particle"]),
+        process_memory_per_particle_estimate_bytes=int(memory_profile["process_memory_per_particle_estimate_bytes"]),
+    )
+    if backend_name == "mujoco-warp":
+        metrics_obj.set_runtime_environment(
+            execution_platform=str(env_memory_profile["execution_platform"]),
+            execution_device=str(env_memory_profile["execution_device"]),
+            default_jax_platform=str(env_memory_profile["default_jax_platform"]),
+            default_jax_device=str(env_memory_profile["default_jax_device"]),
+            device_fallback_applied=bool(env_memory_profile["device_fallback_applied"]),
+        )
+        return
+    metrics_obj.set_mujoco_memory_profile(
+        model_nbuffer_bytes_per_robot=int(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+        data_nbuffer_bytes_per_robot=int(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+        data_narena_bytes_per_robot=int(env_memory_profile["data_narena_bytes_per_robot"]),
+        native_bytes_per_robot=int(env_memory_profile["native_bytes_per_robot"]),
+        native_bytes_total=int(env_memory_profile["native_bytes_total"]),
     )
 
 

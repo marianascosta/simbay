@@ -1,5 +1,4 @@
 import gc
-import math
 import os
 from pathlib import Path
 
@@ -10,12 +9,14 @@ import numpy as np
 
 from src.estimation.mujoco_particle_filter import FrankaMuJoCoEnv
 from src.estimation.particle_filter import ParticleFilter
+from src.estimation.warp_filter import _uniform_weight_metrics
+from src.estimation.warp_filter import _update_and_optionally_resample
+from src.estimation.warp_filter import WarpParticleFilter
+from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
 from src.utils.constants import DEFAULT_OBJECT_PROPS
 from src.utils.constants import FRANKA_HOME_QPOS
-from src.utils.logging_utils import format_bytes
-from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
 from src.utils.settings import HEADLESS
@@ -27,7 +28,6 @@ from src.utils.workflow import get_shutdown_signal_name
 from src.utils.workflow import init_runtime
 from src.utils.workflow import install_signal_handlers
 from src.utils.workflow import is_shutdown_requested
-from src.utils.workflow import log_run_metadata
 from src.utils.workflow import log_setup_summary
 from src.utils.workflow import log_stage_finished
 from src.utils.workflow import log_stage_started
@@ -37,6 +37,7 @@ from src.utils.workflow import run_phase_3_grip
 from src.utils.workflow import run_phase_4_lift
 from src.utils.workflow import shutdown_runtime
 from src.utils.workflow import stage_span_attrs
+from src.utils.workflow import update_setup_metrics
 from src.utils.workflow import update_warp_memory_metrics
 from src.utils.workflow import RuntimeContext
 
@@ -70,18 +71,6 @@ def main(runtime: RuntimeContext) -> None:
         limits = (0.0, 3.0)
 
         if backend == "mujoco-warp":
-            try:
-                from src.estimation.warp_filter import _uniform_weight_metrics
-                from src.estimation.warp_filter import _update_and_optionally_resample
-                from src.estimation.warp_filter import WarpParticleFilter
-                from src.estimation.warp_particle_filter import FrankaWarpEnv
-            except ModuleNotFoundError as exc:
-                if exc.name in {"mujoco_warp", "warp"}:
-                    raise SystemExit(
-                        "Warp backend requires optional dependencies. Run "
-                        "`poetry install --extras warp` or `make install-warp` first."
-                    ) from exc
-                raise
             env = FrankaWarpEnv(limits, num_particles, logging_data=log_data)
             particle_filter = WarpParticleFilter(env, logging_data=log_data)
         elif backend == "cpu":
@@ -104,29 +93,21 @@ def main(runtime: RuntimeContext) -> None:
                 "simbay.particles": num_particles,
                 "simbay.control_dt": dt,
                 "simbay.execution_device": execution_device,
-                "simbay.cpu_cores": cpu_cores,
-                "simbay.headless": headless,
                 "simbay.true_mass": float(true_mass),
             }
         )
         metrics.set_particle_count(num_particles)
         metrics.set_backend(backend, execution_device)
         metrics.set_run_info(backend=backend, particles=num_particles, control_dt=dt)
+        update_setup_metrics(metrics, backend, env_memory_profile, memory_profile)
         if backend == "mujoco-warp":
             update_warp_memory_metrics(env, metrics, stage="setup")
         log_setup_summary(
             logger,
             backend,
-            env_memory_profile,
-            memory_profile,
-            dt,
-            true_mass,
-            num_particles,
-            cpu_cores,
             headless,
             **log_data,
         )
-        log_run_metadata(logger, backend, execution_device, num_particles, dt, **log_data)
     setup_duration = metrics.finish_stage(setup_stage)
     log_stage_finished(logger, "setup", setup_duration, **log_data)
 
@@ -174,9 +155,8 @@ def main(runtime: RuntimeContext) -> None:
                 {
                     **log_data,
                     "event": "backend_runtime_warmup_summary",
-                    "msg": f"Finished backend runtime warm-up for the {backend} backend with {particle_filter.N} particles.",
+                    "msg": f"Finished backend runtime warm-up for the {backend} backend.",
                     "backend": backend,
-                    "particles": particle_filter.N,
                     "rollout_lengths": warmed_rollout_lengths,
                     "phase4_step_warmup": 1,
                 }
@@ -228,12 +208,6 @@ def main(runtime: RuntimeContext) -> None:
     )
 
     history_estimates = lift_result.history_estimates
-    pf_wall_durations = lift_result.pf_wall_durations
-    pf_cpu_durations = lift_result.pf_cpu_durations
-    avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
-    avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
-    avg_step_rate_hz = 1.0 / avg_wall_duration if avg_wall_duration > 0 else 0.0
-    avg_cpu_equivalent_cores = avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
 
     if backend == "cpu":
         env_memory_profile = env.memory_profile()
@@ -247,62 +221,19 @@ def main(runtime: RuntimeContext) -> None:
         logger.info(
             {
                 **log_data,
-                "event": "particle_filter_summary",
-                "msg": (
-                    f"Finished the particle filter run over {len(pf_wall_durations)} steps "
-                    f"with a final estimate of {float(particle_filter.estimate()):.3f} kg."
-                ),
-                "steps": len(pf_wall_durations),
-                "avg_wall_ms": avg_wall_duration * 1000.0,
-                "avg_step_rate_hz": avg_step_rate_hz,
-                "avg_cpu_ms": avg_cpu_duration * 1000.0,
-                "avg_cpu_equivalent_cores": avg_cpu_equivalent_cores,
-                "final_estimate": float(particle_filter.estimate()),
-                "final_error_pct": abs(true_mass - particle_filter.estimate()) * 100,
-                "final_rss_bytes": get_process_memory_bytes(),
-                "final_rss": format_bytes(get_process_memory_bytes()),
+                "event": "particle_filter_completed",
+                "msg": "Finished the particle filter run.",
                 "backend": "cpu",
-                "mujoco_model_buffer_per_particle_bytes": env_memory_profile["model_nbuffer_bytes_per_robot"],
-                "mujoco_model_buffer_per_particle": format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
-                "mujoco_data_buffer_per_particle_bytes": env_memory_profile["data_nbuffer_bytes_per_robot"],
-                "mujoco_data_buffer_per_particle": format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
-                "mujoco_data_arena_per_particle_bytes": env_memory_profile["data_narena_bytes_per_robot"],
-                "mujoco_data_arena_per_particle": format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
-                "mujoco_native_memory_per_particle_bytes": env_memory_profile["native_bytes_per_robot"],
-                "mujoco_native_memory_per_particle": format_bytes(env_memory_profile["native_bytes_per_robot"]),
-                "mujoco_native_memory_total_bytes": env_memory_profile["native_bytes_total"],
-                "mujoco_native_memory_total": format_bytes(env_memory_profile["native_bytes_total"]),
             }
         )
     elif backend == "mujoco-warp":
-        env_memory_profile = env.memory_profile()
         update_warp_memory_metrics(env, metrics, stage="phase_4_lift")
         logger.info(
             {
                 **log_data,
-                "event": "particle_filter_summary",
-                "msg": (
-                    f"Finished the particle filter run over {len(pf_wall_durations)} steps "
-                    f"with a final estimate of {float(particle_filter.estimate()):.3f} kg."
-                ),
-                "steps": len(pf_wall_durations),
-                "avg_wall_ms": avg_wall_duration * 1000.0,
-                "avg_step_rate_hz": avg_step_rate_hz,
-                "avg_cpu_ms": avg_cpu_duration * 1000.0,
-                "avg_cpu_equivalent_cores": avg_cpu_equivalent_cores,
-                "final_estimate": float(particle_filter.estimate()),
-                "final_error_pct": abs(true_mass - particle_filter.estimate()) * 100,
-                "final_rss_bytes": get_process_memory_bytes(),
-                "final_rss": format_bytes(get_process_memory_bytes()),
+                "event": "particle_filter_completed",
+                "msg": "Finished the particle filter run.",
                 "backend": "mujoco-warp",
-                "execution_platform": env_memory_profile["execution_platform"],
-                "execution_device": env_memory_profile["execution_device"],
-                "invalid_sensor_events": lift_result.invalid_sensor_events,
-                "invalid_state_events": lift_result.invalid_state_events,
-                "skipped_invalid_updates": lift_result.skipped_invalid_updates,
-                "first_invalid_sensor_step": lift_result.first_invalid_sensor_step,
-                "first_invalid_state_step": lift_result.first_invalid_state_step,
-                "max_repaired_world_count": lift_result.max_repaired_world_count,
             }
         )
 
@@ -336,25 +267,7 @@ def main(runtime: RuntimeContext) -> None:
         {
             **log_data,
             "event": "prediction_ready",
-            "msg": f"The prediction is ready after {time_to_prediction_seconds:.2f} seconds.",
-            "total_wall_s": time_to_prediction_seconds,
-            "final_mass_prediction_kg": final_prediction,
-        }
-    )
-    logger.info(
-        {
-            **log_data,
-            "event": "final_mass_prediction",
-            "msg": f"Recorded the final mass prediction as {final_prediction:.3f} kg.",
-            "final_mass_prediction_kg": final_prediction,
-        }
-    )
-    logger.info(
-        {
-            **log_data,
-            "event": "final_error",
-            "msg": "Recorded the final percentage error for the mass prediction.",
-            "final_error_pct": abs(true_mass - final_prediction) * 100,
+            "msg": "The prediction is ready.",
         }
     )
 

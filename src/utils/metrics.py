@@ -1,3 +1,4 @@
+import os
 import subprocess
 import threading
 import time
@@ -242,6 +243,90 @@ class SimbayMetrics:
             "simbay_particle_count",
             particles,
             "Configured particle count for the current run.",
+        )
+
+    def set_memory_profile(
+        self,
+        *,
+        state_bytes_total: int,
+        state_bytes_per_particle: int,
+        process_memory_per_particle_estimate_bytes: int,
+    ) -> None:
+        self._store.set_gauge(
+            "simbay_state_memory_total_bytes",
+            state_bytes_total,
+            "Estimated total bytes used by particle state storage.",
+        )
+        self._store.set_gauge(
+            "simbay_state_memory_per_particle_bytes",
+            state_bytes_per_particle,
+            "Estimated bytes used by particle state storage per particle.",
+        )
+        self._store.set_gauge(
+            "simbay_process_memory_per_particle_estimate_bytes",
+            process_memory_per_particle_estimate_bytes,
+            "Estimated process memory usage attributable to each particle.",
+        )
+
+    def set_mujoco_memory_profile(
+        self,
+        *,
+        model_nbuffer_bytes_per_robot: int,
+        data_nbuffer_bytes_per_robot: int,
+        data_narena_bytes_per_robot: int,
+        native_bytes_per_robot: int,
+        native_bytes_total: int,
+    ) -> None:
+        self._store.set_gauge(
+            "simbay_mujoco_model_buffer_per_particle_bytes",
+            model_nbuffer_bytes_per_robot,
+            "MuJoCo model buffer bytes per particle.",
+        )
+        self._store.set_gauge(
+            "simbay_mujoco_data_buffer_per_particle_bytes",
+            data_nbuffer_bytes_per_robot,
+            "MuJoCo data buffer bytes per particle.",
+        )
+        self._store.set_gauge(
+            "simbay_mujoco_data_arena_per_particle_bytes",
+            data_narena_bytes_per_robot,
+            "MuJoCo data arena bytes per particle.",
+        )
+        self._store.set_gauge(
+            "simbay_mujoco_native_memory_per_particle_bytes",
+            native_bytes_per_robot,
+            "Estimated native MuJoCo memory per particle.",
+        )
+        self._store.set_gauge(
+            "simbay_mujoco_native_memory_total_bytes",
+            native_bytes_total,
+            "Estimated total native MuJoCo memory across all particles.",
+        )
+
+    def set_runtime_environment(
+        self,
+        *,
+        execution_platform: str,
+        execution_device: str,
+        default_jax_platform: str,
+        default_jax_device: str,
+        device_fallback_applied: bool,
+    ) -> None:
+        self._store.set_gauge(
+            "simbay_runtime_environment_info",
+            1.0,
+            "Resolved execution runtime environment for the current run.",
+            {
+                "execution_platform": execution_platform,
+                "execution_device": execution_device,
+                "default_jax_platform": default_jax_platform,
+                "default_jax_device": default_jax_device,
+            },
+        )
+        self._store.set_gauge(
+            "simbay_device_fallback_applied",
+            1.0 if device_fallback_applied else 0.0,
+            "Whether runtime device fallback was applied during setup.",
         )
 
     def start_stage(self, stage: str) -> StageToken:
