@@ -19,13 +19,13 @@ from src.estimation.warp_filter import WarpParticleFilter
 from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
-from src.utils.constants import DEFAULT_OBJECT_PROPS
-from src.utils.constants import FRANKA_HOME_QPOS
 from src.utils.logging_utils import setup_logging
 from src.utils.metrics import init_metrics
 from src.utils.metrics import shutdown_metrics
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
+from src.utils.settings import DEFAULT_OBJECT_PROPS
+from src.utils.settings import FRANKA_HOME_QPOS
 from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
 from src.utils.settings import RUN_ID

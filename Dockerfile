@@ -3,8 +3,7 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    MPLBACKEND=Agg
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
@@ -29,8 +28,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    MPLBACKEND=Agg
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
@@ -55,7 +53,7 @@ RUN python -m pip install --upgrade pip setuptools wheel poetry
 RUN python -m pip install nsight-python
 
 COPY pyproject.toml poetry.lock README.md ./
-RUN poetry install --no-interaction --no-ansi --extras warp --extras tracing
+RUN poetry install --no-interaction --no-ansi
 
 COPY assets ./assets
 COPY src ./src

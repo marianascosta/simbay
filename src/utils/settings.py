@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -19,3 +21,15 @@ LOG_LEVEL_NAME = "INFO"
 LOG_FALLBACK_DIR = Path("/tmp/simbay-logs")
 SYSTEM_METRICS_INTERVAL_SECONDS = 1.0
 OTEL_ENDPOINT = "http://tempo:4317"
+MATPLOTLIB_BACKEND = "Agg"
+os.environ.setdefault("MPLBACKEND", MATPLOTLIB_BACKEND)
+
+DEFAULT_OBJECT_PROPS = {
+    "type": "box",
+    "pos": (0.3, 0.1, 0.022),
+    "size": (0.02, 0.02, 0.02),
+    "mass": 2.50,
+    "friction": (5.0, 0.5, 0.001),
+}
+
+FRANKA_HOME_QPOS = np.array([0.0, 0.0, 0.0, -1.57079, 0.0, 1.57079, -0.7853])

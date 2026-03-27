@@ -69,14 +69,6 @@ python scripts/plot_step_rate_profile.py --run-dir <run_dir> --output temp/step_
 python scripts/plot_vram_profile.py --run-dir <run_dir> --output temp/vram_profile.png
 ```
 
-### Mass timeseries from NPZ artifacts
-
-This one reads mass snapshot artifacts written to `temp/mass_timeseries/<run_id>/`.
-
-```bash
-python scripts/plot_mass_timeseries.py --run-dir temp/mass_timeseries/<run_id> --output temp/mass_timeseries.png
-```
-
 ## Quick full example
 
 ```bash

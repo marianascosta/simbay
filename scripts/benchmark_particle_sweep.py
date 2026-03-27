@@ -19,6 +19,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 DEFAULT_PARTICLE_COUNTS = (1, 10, 50, 100, 250, 500)
+DEFAULT_METRICS_PORT = 8000
 SYSTEM_METRIC_NAMES = (
     "simbay_host_cpu_utilization_pct",
     "simbay_process_cpu_utilization_pct",
@@ -75,12 +76,6 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Metrics scrape interval in seconds. Defaults to 0.5.",
-    )
-    parser.add_argument(
-        "--metrics-port-base",
-        type=int,
-        default=9100,
-        help="Base Prometheus port. Each run increments from this value.",
     )
     parser.add_argument(
         "--python",
@@ -449,7 +444,6 @@ def _run_single_benchmark(
     particles: int,
     backend: str,
     output_dir: Path,
-    metrics_port: int,
     sample_interval: float,
     python_executable: str,
 ) -> dict[str, object]:
@@ -465,11 +459,8 @@ def _run_single_benchmark(
     env["SIMBAY_BACKEND"] = backend
     env["SIMBAY_PARTICLES"] = str(particles)
     env["SIMBAY_HEADLESS"] = env.get("SIMBAY_HEADLESS", "1")
-    env["SIMBAY_MASS_TIMESERIES_ENABLED"] = "0"
     env["SIMBAY_SKIP_MAIN_PLOT"] = "1"
     env["SIMBAY_RUN_ID"] = run_id
-    env["SIMBAY_METRICS_ENABLED"] = "1"
-    env["SIMBAY_METRICS_PORT"] = str(metrics_port)
     env["SIMBAY_SYSTEM_METRICS_INTERVAL_SECONDS"] = str(sample_interval)
 
     samples: list[MetricSample] = []
@@ -478,7 +469,7 @@ def _run_single_benchmark(
 
     def sampler() -> None:
         while not stop_event.is_set():
-            scraped = _scrape_metrics(metrics_port)
+            scraped = _scrape_metrics(DEFAULT_METRICS_PORT)
             if scraped is not None:
                 samples.append(
                     MetricSample(
@@ -506,7 +497,7 @@ def _run_single_benchmark(
     stop_event.set()
     sampler_thread.join()
 
-    final_scrape = _scrape_metrics(metrics_port)
+    final_scrape = _scrape_metrics(DEFAULT_METRICS_PORT)
     if final_scrape is not None:
         samples.append(
             MetricSample(
@@ -715,17 +706,15 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     summaries: list[dict[str, object]] = []
-    for index, particles in enumerate(particle_counts):
-        metrics_port = args.metrics_port_base + index
+    for particles in particle_counts:
         print(
-            f"Running backend={args.backend} particles={particles} metrics_port={metrics_port}",
+            f"Running backend={args.backend} particles={particles} metrics_port={DEFAULT_METRICS_PORT}",
             flush=True,
         )
         summary = _run_single_benchmark(
             particles=particles,
             backend=args.backend,
             output_dir=output_dir,
-            metrics_port=metrics_port,
             sample_interval=args.sample_interval,
             python_executable=args.python,
         )

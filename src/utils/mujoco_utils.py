@@ -11,8 +11,8 @@ from src.robots import MujocoRobot
 from src.utils.tracing import set_span_attributes
 from src.utils.tracing import trace_call
 
-from .constants import DEFAULT_OBJECT_PROPS
-from .constants import FRANKA_HOME_QPOS
+from .settings import DEFAULT_OBJECT_PROPS
+from .settings import FRANKA_HOME_QPOS
 
 logger = logging.getLogger("simbay.mujoco_utils")
 

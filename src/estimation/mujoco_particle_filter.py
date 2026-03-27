@@ -2,7 +2,7 @@ import mujoco
 import numpy as np
 
 from src.robots import MujocoRobot
-from src.utils.constants import DEFAULT_OBJECT_PROPS
+from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.tracing import trace_public_methods
 

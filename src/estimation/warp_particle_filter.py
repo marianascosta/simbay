@@ -10,7 +10,7 @@ import os
 import mujoco
 import numpy as np
 
-from src.utils.constants import DEFAULT_OBJECT_PROPS
+from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.logging_utils import extend_logging_data
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
