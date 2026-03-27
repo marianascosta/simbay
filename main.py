@@ -347,6 +347,22 @@ def _log_run_metadata(
     )
 
 
+def _update_warp_memory_metrics(
+    env: Any,
+    metrics_obj: Any,
+    *,
+    stage: str,
+) -> None:
+    env_memory_profile = env.memory_profile()
+    metrics_obj.update_warp_memory(
+        stage=stage,
+        bytes_in_use=int(env_memory_profile["bytes_in_use"]),
+        peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
+        bytes_limit=int(env_memory_profile["bytes_limit"]),
+        state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
+    )
+
+
 signal.signal(signal.SIGINT, _handle_shutdown_signal)
 signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
@@ -466,13 +482,7 @@ with tracing_span(_tracer, "setup"):
     metrics.set_backend(backend, execution_device)
     metrics.set_run_info(backend=backend, particles=num_particles, control_dt=dt)
     if backend == "mujoco-warp":
-        metrics.update_warp_memory(
-            stage="setup",
-            bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-            peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-            bytes_limit=int(env_memory_profile["bytes_limit"]),
-            state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-        )
+        _update_warp_memory_metrics(env, metrics, stage="setup")
     _log_setup_summary(
         base_logging_data,
         backend,
@@ -644,14 +654,7 @@ with tracing_span(_tracer, "phase_1_approach"):
             pf_replay_duration,
         )
     if backend == "mujoco-warp":
-        env_memory_profile = env.memory_profile()
-        metrics.update_warp_memory(
-            stage="phase_1_approach",
-            bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-            peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-            bytes_limit=int(env_memory_profile["bytes_limit"]),
-            state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-        )
+        _update_warp_memory_metrics(env, metrics, stage="phase_1_approach")
 approach_duration = metrics.finish_stage(approach_stage)
 _log_stage_finished(base_logging_data, "phase_1_approach", approach_duration)
 
@@ -735,14 +738,7 @@ with tracing_span(_tracer, "phase_2_descend"):
             pf_replay_duration,
         )
     if backend == "mujoco-warp":
-        env_memory_profile = env.memory_profile()
-        metrics.update_warp_memory(
-            stage="phase_2_descend",
-            bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-            peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-            bytes_limit=int(env_memory_profile["bytes_limit"]),
-            state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-        )
+        _update_warp_memory_metrics(env, metrics, stage="phase_2_descend")
 descend_duration = metrics.finish_stage(descend_stage)
 _log_stage_finished(base_logging_data, "phase_2_descend", descend_duration)
 
@@ -826,14 +822,7 @@ with tracing_span(_tracer, "phase_3_grip"):
             pf_replay_duration,
         )
     if backend == "mujoco-warp":
-        env_memory_profile = env.memory_profile()
-        metrics.update_warp_memory(
-            stage="phase_3_grip",
-            bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-            peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-            bytes_limit=int(env_memory_profile["bytes_limit"]),
-            state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-        )
+        _update_warp_memory_metrics(env, metrics, stage="phase_3_grip")
 grip_duration = metrics.finish_stage(grip_stage)
 _log_stage_finished(base_logging_data, "phase_3_grip", grip_duration)
 
@@ -1254,14 +1243,7 @@ with tracing_span(_tracer, "phase_4_lift"):
             }
         )
     if backend == "mujoco-warp":
-        env_memory_profile = env.memory_profile()
-        metrics.update_warp_memory(
-            stage="phase_4_lift",
-            bytes_in_use=int(env_memory_profile["bytes_in_use"]),
-            peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
-            bytes_limit=int(env_memory_profile["bytes_limit"]),
-            state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
-        )
+        _update_warp_memory_metrics(env, metrics, stage="phase_4_lift")
     metrics.set_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total)
     metrics.set_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total)
     _log_substage_started(
@@ -1369,6 +1351,7 @@ if backend == "cpu":
     )
 elif backend == "mujoco-warp":
     env_memory_profile = env.memory_profile()
+    _update_warp_memory_metrics(env, metrics, stage="phase_4_lift")
     logger.info(
         extend_logging_data(
             base_logging_data,
