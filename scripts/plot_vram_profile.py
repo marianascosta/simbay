@@ -18,9 +18,7 @@ class MetricSample:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Show GPU frame-buffer usage for a recorded benchmark run."
-    )
+    parser = argparse.ArgumentParser(description="Show GPU frame-buffer usage for a recorded benchmark run.")
     parser.add_argument(
         "--run-dir",
         required=True,

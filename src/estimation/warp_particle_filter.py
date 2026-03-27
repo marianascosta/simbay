@@ -95,9 +95,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             extend_logging_data(
                 self.logging_data,
                 event="warp_runtime_warmup_start",
-                msg=(
-                    f"Started warming up the Warp runtime with {self._num_particles} particles."
-                ),
+                msg=(f"Started warming up the Warp runtime with {self._num_particles} particles."),
                 particles=self._num_particles,
             )
         )
@@ -139,9 +137,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         if controls.size == 0:
             return self._masses.copy()
 
-        noise = self._rng.standard_normal((controls.shape[0], self._num_particles)).astype(
-            np.float32
-        ) * self.std_dev
+        noise = self._rng.standard_normal((controls.shape[0], self._num_particles)).astype(np.float32) * self.std_dev
         mass_trajectory = np.clip(
             np.cumsum(noise, axis=0) + self._masses[np.newaxis, :],
             self.min,
@@ -180,14 +176,8 @@ class FrankaWarpEnv(ParticleEnvironment):
         valid_force_particle = np.isfinite(sim_forces).all(axis=1)
         sim_force_nonfinite_count = int(sim_forces.size - np.count_nonzero(sim_force_finite))
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
-        likelihood_nonfinite_count = int(
-            likelihoods.size - np.count_nonzero(likelihood_finite)
-        )
-        sensor_invalid_now = (
-            sim_force_nonfinite_count > 0
-            or diff_nonfinite_count > 0
-            or likelihood_nonfinite_count > 0
-        )
+        likelihood_nonfinite_count = int(likelihoods.size - np.count_nonzero(likelihood_finite))
+        sensor_invalid_now = sim_force_nonfinite_count > 0 or diff_nonfinite_count > 0 or likelihood_nonfinite_count > 0
         sensor_invalid_transition = sensor_invalid_now and not self._sensor_invalid_active
         if sensor_invalid_transition:
             self._invalid_sensor_events += 1
@@ -212,20 +202,14 @@ class FrankaWarpEnv(ParticleEnvironment):
             self._state_invalid_active = state_invalid_now
         else:
             state_invalid_transition = False
-        contact_counts = (
-            self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
-        )
+        contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
 
         force_norms = np.linalg.norm(sim_forces, axis=1)
         diff_norms = np.linalg.norm(diff, axis=1)
-        sim_force_signal_particle_ratio = (
-            float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
-        )
+        sim_force_signal_particle_ratio = float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
         contact_metric_available = float(contact_counts.size > 0)
         contact_force_mismatch = float(
-            contact_counts.size > 0
-            and float(np.max(contact_counts)) == 0.0
-            and sim_force_signal_particle_ratio > 0.0
+            contact_counts.size > 0 and float(np.max(contact_counts)) == 0.0 and sim_force_signal_particle_ratio > 0.0
         )
 
         if sensor_invalid_transition:
@@ -265,9 +249,7 @@ class FrankaWarpEnv(ParticleEnvironment):
                 extend_logging_data(
                     self.logging_data,
                     event="warp_repaired_invalid_worlds",
-                    msg=(
-                        f"Repaired invalid Warp worlds at step {self._step_count}."
-                    ),
+                    msg=(f"Repaired invalid Warp worlds at step {self._step_count}."),
                     step=self._step_count,
                     repaired_world_count=int(np.count_nonzero(repaired_worlds)),
                 )
@@ -289,18 +271,12 @@ class FrankaWarpEnv(ParticleEnvironment):
             "diff_norm_mean": float(np.mean(diff_norms)),
             "sim_force_finite_ratio": float(np.mean(sim_force_finite)) if sim_force_finite.size else 0.0,
             "diff_finite_ratio": float(np.mean(diff_finite)) if diff_finite.size else 0.0,
-            "likelihood_finite_ratio": (
-                float(np.mean(likelihood_finite)) if likelihood_finite.size else 0.0
-            ),
-            "valid_force_particle_ratio": (
-                float(np.mean(valid_force_particle)) if valid_force_particle.size else 0.0
-            ),
+            "likelihood_finite_ratio": (float(np.mean(likelihood_finite)) if likelihood_finite.size else 0.0),
+            "valid_force_particle_ratio": (float(np.mean(valid_force_particle)) if valid_force_particle.size else 0.0),
             "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
             "contact_count_mean": float(np.mean(contact_counts)) if contact_counts.size else 0.0,
             "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,
-            "active_contact_particle_ratio": (
-                float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0
-            ),
+            "active_contact_particle_ratio": (float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0),
             "contact_metric_available": contact_metric_available,
             "contact_force_mismatch": contact_force_mismatch,
             "sim_force_nonfinite_count": float(sim_force_nonfinite_count),
@@ -309,20 +285,14 @@ class FrankaWarpEnv(ParticleEnvironment):
             "invalid_sensor_events": float(self._invalid_sensor_events),
             "invalid_state_events": float(self._invalid_state_events),
             "first_invalid_sensor_step": float(
-                self._first_invalid_sensor_step
-                if self._first_invalid_sensor_step is not None
-                else -1
+                self._first_invalid_sensor_step if self._first_invalid_sensor_step is not None else -1
             ),
             "first_invalid_state_step": float(
-                self._first_invalid_state_step
-                if self._first_invalid_state_step is not None
-                else -1
+                self._first_invalid_state_step if self._first_invalid_state_step is not None else -1
             ),
             "qpos_nonfinite_count": float(state_nonfinite_counts["qpos_nonfinite_count"]),
             "qvel_nonfinite_count": float(state_nonfinite_counts["qvel_nonfinite_count"]),
-            "sensordata_nonfinite_count": float(
-                state_nonfinite_counts["sensordata_nonfinite_count"]
-            ),
+            "sensordata_nonfinite_count": float(state_nonfinite_counts["sensordata_nonfinite_count"]),
             "ctrl_nonfinite_count": float(state_nonfinite_counts["ctrl_nonfinite_count"]),
             "repaired_world_count": float(np.count_nonzero(repaired_worlds)),
             "likelihood_min": float(np.min(likelihoods)),

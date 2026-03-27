@@ -42,7 +42,9 @@ temp/
 *.qpos
 *.qvel
 Backups/
+backup
 
 # --- OS Specific ---
 .DS_Store
 Thumbs.db
+

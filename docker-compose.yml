@@ -9,7 +9,7 @@ services:
       - tempo
     environment:
       MPLBACKEND: Agg
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-500}"
       SIMBAY_HEADLESS: "1"
       SIMBAY_USE_MJX: "1"
       SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"

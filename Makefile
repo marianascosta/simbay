@@ -1,4 +1,4 @@
-.PHONY: install install-warp shell run run-warp run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
+.PHONY: install install-warp shell run run-warp run-macos run-local-observability check format lint docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 

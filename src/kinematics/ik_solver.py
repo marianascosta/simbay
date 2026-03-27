@@ -7,13 +7,11 @@ from src.utils.tracing import trace_call
 
 from .base import IKProblem
 
-
 logger = logging.getLogger("simbay.ik_solver")
 
 
 @trace_call("simbay.ik_solver", "ik.solve")
-def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
-                       tol: float = 1e-6, max_iter: int = 500):
+def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray, tol: float = 1e-6, max_iter: int = 500):
     """
     Generic Iterative Inverse Kinematics Solver.
 
@@ -46,11 +44,11 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         set_span_attributes({"ik.iteration": i})
         # 1. Compute Forward Kinematics
         s = problem.get_s(theta)
-        
+
         # 2. Compute Error
         e = problem.get_e(s, t)
         error = np.linalg.norm(e)
-        
+
         # 3. Check Convergence
         if error < tol:
             set_span_attributes(
@@ -74,11 +72,11 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray,
         J = problem.get_jacobian(s, theta)
         delta_theta = problem.step(J, e)
         theta += delta_theta
-        
+
         # 5. Enforce Limits
         theta = problem.clamp_to_limits(theta)
-    
-    # NOTE: If we reach max_iter, the returned 'error' corresponds to the 
+
+    # NOTE: If we reach max_iter, the returned 'error' corresponds to the
     # second-to-last position. This is acceptable for failed/non-converged states.
     logger.info(
         {

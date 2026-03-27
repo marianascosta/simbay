@@ -7,7 +7,6 @@ import numpy as np
 from .base import BaseRobot
 from src.utils.logging_utils import extend_logging_data
 
-
 logger = logging.getLogger("simbay.real_robot")
 
 # --- CONDITIONAL IMPORTS ---
@@ -18,6 +17,7 @@ try:
     from std_msgs.msg import Header
     from trajectory_msgs.msg import JointTrajectory
     from trajectory_msgs.msg import JointTrajectoryPoint
+
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
@@ -29,19 +29,23 @@ except ImportError:
     )
 
 
-
 class RealRobot(BaseRobot):
     def __init__(self):
         if not ROS_AVAILABLE:
             raise ImportError("Cannot use RealRobot: ROS libraries are missing!")
-        
+
         # 1. Setup
         self.joint_names = [
-            "fr3_joint1", "fr3_joint2", "fr3_joint3", 
-            "fr3_joint4", "fr3_joint5", "fr3_joint6", "fr3_joint7"
+            "fr3_joint1",
+            "fr3_joint2",
+            "fr3_joint3",
+            "fr3_joint4",
+            "fr3_joint5",
+            "fr3_joint6",
+            "fr3_joint7",
         ]
         self.current_joints = None
-        
+
         # 2. Connect
         self._setup_ros()
 
@@ -49,10 +53,10 @@ class RealRobot(BaseRobot):
         if not rclpy.ok():
             rclpy.init()
         self.node1 = rclpy.create_node("simbay_pick_test_node")
-        
+
         self.pub1 = self.node1.create_publisher(JointTrajectory, "/fr3_arm_controller/joint_trajectory", 10)
         self.sub1 = self.node1.create_subscription(JointState, "/joint_states", self.jointstate_callback, 10)
-        
+
         logger.info({"event": "robot_connection_waiting", "msg": "Waiting for the robot connection."})
         while self.current_joints is None:
             rclpy.spin_once(self.node1, timeout_sec=0.1)
@@ -75,19 +79,19 @@ class RealRobot(BaseRobot):
         start_pos = self.get_pos()
         distance = np.abs(target_pos - start_pos)
         duration = np.max(distance / max_velocity)
-        
+
         if duration < 0.1:
-            duration = 0.5 # Minimum safety time for real hardware
+            duration = 0.5  # Minimum safety time for real hardware
 
         # 2. Construct ROS Message
         msg = JointTrajectory()
         msg.joint_names = self.joint_names
-        
+
         point = JointTrajectoryPoint()
-        point.positions = list(target_pos) # Convert numpy to list
+        point.positions = list(target_pos)  # Convert numpy to list
         point.time_from_start.sec = int(duration)
         point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
-        
+
         msg.points = [point]
 
         # 3. Send and Wait
@@ -99,9 +103,9 @@ class RealRobot(BaseRobot):
                 "duration_s": duration,
             }
         )
-        
+
         # Blocking wait (Sleep) to match SimRobot behavior
-        time.sleep(duration + 0.1) 
+        time.sleep(duration + 0.1)
 
     def open_gripper(self):
         logger.info(

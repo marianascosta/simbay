@@ -37,15 +37,11 @@ def main() -> int:
     rss_bytes = metric_series(samples, "simbay_process_memory_rss_bytes")
     host_bytes = metric_series(samples, "simbay_host_memory_used_bytes")
     warp_used_bytes = [
-        float("nan")
-        if value is None
-        else float(value)
+        float("nan") if value is None else float(value)
         for value in (metric_max_across_labels(sample, "simbay_warp_bytes_in_use") for sample in samples)
     ]
     warp_peak_bytes = [
-        float("nan")
-        if value is None
-        else float(value)
+        float("nan") if value is None else float(value)
         for value in (metric_max_across_labels(sample, "simbay_warp_peak_bytes_in_use") for sample in samples)
     ]
 

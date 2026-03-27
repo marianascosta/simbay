@@ -18,7 +18,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-
 DEFAULT_PARTICLE_COUNTS = (1, 10, 50, 100, 250, 500)
 SYSTEM_METRIC_NAMES = (
     "simbay_host_cpu_utilization_pct",
@@ -54,10 +53,7 @@ class MetricSample:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run a particle-count benchmark sweep using Simbay's existing logs and "
-            "Prometheus metrics."
-        ),
+        description=("Run a particle-count benchmark sweep using Simbay's existing logs and " "Prometheus metrics."),
     )
     parser.add_argument(
         "--backend",
@@ -295,12 +291,8 @@ def _summarize_run(
             "gpu_fb_used_bytes": _series_stats(
                 _collect_metric_series(samples, "simbay_gpu_fb_used_bytes", stage=stage)
             ),
-            "gpu_power_watts": _series_stats(
-                _collect_metric_series(samples, "simbay_gpu_power_watts", stage=stage)
-            ),
-            "gpu_temp_celsius": _series_stats(
-                _collect_metric_series(samples, "simbay_gpu_temp_celsius", stage=stage)
-            ),
+            "gpu_power_watts": _series_stats(_collect_metric_series(samples, "simbay_gpu_power_watts", stage=stage)),
+            "gpu_temp_celsius": _series_stats(_collect_metric_series(samples, "simbay_gpu_temp_celsius", stage=stage)),
             "warp_bytes_in_use": _snapshot_value(
                 snapshot,
                 "simbay_warp_bytes_in_use",
@@ -358,10 +350,7 @@ def _summarize_run(
             }
         substage_metrics[phase] = phase_substages
 
-    system_summary = {
-        name: _series_stats(_collect_metric_series(samples, name))
-        for name in SYSTEM_METRIC_NAMES
-    }
+    system_summary = {name: _series_stats(_collect_metric_series(samples, name)) for name in SYSTEM_METRIC_NAMES}
 
     launch_stage = stage_metrics["setup"]
     phase4_pf_update = substage_metrics["phase_4_lift"]["pf_update"]
@@ -372,9 +361,7 @@ def _summarize_run(
         "particles": particles,
         "log_path": str(log_path),
         "sample_count": len(samples),
-        "sample_interval_seconds": (
-            float(samples[1].timestamp - samples[0].timestamp) if len(samples) > 1 else 0.0
-        ),
+        "sample_interval_seconds": (float(samples[1].timestamp - samples[0].timestamp) if len(samples) > 1 else 0.0),
         "run_metadata": run_metadata,
         "hardware": {
             "gpu_device": setup_event.get("execution_device", run_metadata.get("device", "unknown")),
@@ -388,9 +375,7 @@ def _summarize_run(
             "execution_device": setup_event.get("execution_device", run_metadata.get("device", "unknown")),
             "execution_platform": setup_event.get("execution_platform", "unknown"),
             "state_memory_total_bytes": float(setup_event.get("state_memory_total_bytes", 0.0)),
-            "state_memory_per_particle_bytes": float(
-                setup_event.get("state_memory_per_particle_bytes", 0.0)
-            ),
+            "state_memory_per_particle_bytes": float(setup_event.get("state_memory_per_particle_bytes", 0.0)),
             "process_memory_per_particle_estimate_bytes": float(
                 setup_event.get("process_memory_per_particle_estimate_bytes", 0.0)
             ),
@@ -407,70 +392,38 @@ def _summarize_run(
             "final_estimate_kg": float(pf_summary.get("final_estimate", 0.0)),
             "final_error_pct": float(pf_summary.get("final_error_pct", 0.0)),
             "final_rss_bytes": float(pf_summary.get("final_rss_bytes", 0.0)),
-            "pf_update_particle_steps_per_second": float(
-                phase4_pf_update["particle_steps_per_second"]
-            ),
+            "pf_update_particle_steps_per_second": float(phase4_pf_update["particle_steps_per_second"]),
             "pf_update_ms_per_particle_step": float(phase4_pf_update["ms_per_particle_step"]),
             "ess_final": _snapshot_value(snapshot, "simbay_effective_sample_size"),
             "resample_count": _snapshot_value(snapshot, "simbay_resample_count"),
             "resample_rate": _snapshot_value(snapshot, "simbay_resample_rate"),
-            "credible_interval_50_width_kg": _snapshot_value(
-                snapshot, "simbay_credible_interval_50_width_kg"
-            ),
-            "credible_interval_90_width_kg": _snapshot_value(
-                snapshot, "simbay_credible_interval_90_width_kg"
-            ),
+            "credible_interval_50_width_kg": _snapshot_value(snapshot, "simbay_credible_interval_50_width_kg"),
+            "credible_interval_90_width_kg": _snapshot_value(snapshot, "simbay_credible_interval_90_width_kg"),
             "weight_entropy": _snapshot_value(snapshot, "simbay_weight_entropy"),
-            "weight_entropy_normalized": _snapshot_value(
-                snapshot, "simbay_weight_entropy_normalized"
-            ),
+            "weight_entropy_normalized": _snapshot_value(snapshot, "simbay_weight_entropy_normalized"),
             "weight_perplexity": _snapshot_value(snapshot, "simbay_weight_perplexity"),
         },
         "accuracy": {
             "prediction_ready_seconds": float(prediction_ready.get("total_wall_s", 0.0)),
             "final_error_pct": float(final_error.get("final_error_pct", 0.0)),
-            "convergence_time_to_5pct_seconds": _snapshot_value(
-                snapshot, "simbay_convergence_time_to_5pct_seconds"
-            ),
-            "convergence_time_to_10pct_seconds": _snapshot_value(
-                snapshot, "simbay_convergence_time_to_10pct_seconds"
-            ),
-            "time_to_first_estimate_seconds": _snapshot_value(
-                snapshot, "simbay_time_to_first_estimate_seconds"
-            ),
+            "convergence_time_to_5pct_seconds": _snapshot_value(snapshot, "simbay_convergence_time_to_5pct_seconds"),
+            "convergence_time_to_10pct_seconds": _snapshot_value(snapshot, "simbay_convergence_time_to_10pct_seconds"),
+            "time_to_first_estimate_seconds": _snapshot_value(snapshot, "simbay_time_to_first_estimate_seconds"),
             "phase4_mae_kg": _snapshot_value(snapshot, "simbay_phase4_mae_kg"),
             "phase4_rmse_kg": _snapshot_value(snapshot, "simbay_phase4_rmse_kg"),
         },
         "warp_health": {
-            "invalid_sensor_events_total": _snapshot_value(
-                snapshot, "simbay_invalid_sensor_events_total"
-            ),
-            "invalid_state_events_total": _snapshot_value(
-                snapshot, "simbay_invalid_state_events_total"
-            ),
-            "skipped_invalid_updates_total": _snapshot_value(
-                snapshot, "simbay_skipped_invalid_updates_total"
-            ),
-            "first_invalid_sensor_step": _snapshot_value(
-                snapshot, "simbay_first_invalid_sensor_step"
-            ),
-            "first_invalid_state_step": _snapshot_value(
-                snapshot, "simbay_first_invalid_state_step"
-            ),
+            "invalid_sensor_events_total": _snapshot_value(snapshot, "simbay_invalid_sensor_events_total"),
+            "invalid_state_events_total": _snapshot_value(snapshot, "simbay_invalid_state_events_total"),
+            "skipped_invalid_updates_total": _snapshot_value(snapshot, "simbay_skipped_invalid_updates_total"),
+            "first_invalid_sensor_step": _snapshot_value(snapshot, "simbay_first_invalid_sensor_step"),
+            "first_invalid_state_step": _snapshot_value(snapshot, "simbay_first_invalid_state_step"),
             "contact_count_mean": _snapshot_value(snapshot, "simbay_contact_count_mean"),
             "contact_count_max": _snapshot_value(snapshot, "simbay_contact_count_max"),
-            "active_contact_particle_ratio": _snapshot_value(
-                snapshot, "simbay_active_contact_particle_ratio"
-            ),
-            "force_signal_particle_ratio": _snapshot_value(
-                snapshot, "simbay_force_signal_particle_ratio"
-            ),
-            "likelihood_finite_ratio": _snapshot_value(
-                snapshot, "simbay_likelihood_finite_ratio"
-            ),
-            "likelihood_collapsed_to_uniform": _snapshot_value(
-                snapshot, "simbay_likelihood_collapsed_to_uniform"
-            ),
+            "active_contact_particle_ratio": _snapshot_value(snapshot, "simbay_active_contact_particle_ratio"),
+            "force_signal_particle_ratio": _snapshot_value(snapshot, "simbay_force_signal_particle_ratio"),
+            "likelihood_finite_ratio": _snapshot_value(snapshot, "simbay_likelihood_finite_ratio"),
+            "likelihood_collapsed_to_uniform": _snapshot_value(snapshot, "simbay_likelihood_collapsed_to_uniform"),
         },
         "system_summary": system_summary,
     }
@@ -625,10 +578,7 @@ def _plot_run_timeseries(
     cpu_hardware = str(hardware.get("cpu_hardware", "unknown"))
     cpu_machine = str(hardware.get("cpu_machine", "unknown"))
     execution_platform = str(hardware.get("execution_platform", summary["setup"].get("execution_platform", "unknown")))
-    setup_stage = [
-        1.0 if (sample.active_stage or "") == "setup" else 0.0
-        for sample in samples
-    ]
+    setup_stage = [1.0 if (sample.active_stage or "") == "setup" else 0.0 for sample in samples]
     launch_rate_series = [launch_rate if is_setup >= 0.5 else float("nan") for is_setup in setup_stage]
 
     figure, axes = plt.subplots(3, 2, figsize=(13, 10), sharex=True)
@@ -654,10 +604,14 @@ def _plot_run_timeseries(
         0.98,
         0.95,
         (
-            f"Peak VRAM: {max(gpu_fb_valid):.2f} GiB\n"
-            f"Peak GPU util: {max(gpu_util_valid):.1f}%\n"
-            f"Peak RSS: {max(rss_valid):.2f} GiB"
-        ) if (gpu_fb_valid and gpu_util_valid and rss_valid) else "GPU metrics unavailable",
+            (
+                f"Peak VRAM: {max(gpu_fb_valid):.2f} GiB\n"
+                f"Peak GPU util: {max(gpu_util_valid):.1f}%\n"
+                f"Peak RSS: {max(rss_valid):.2f} GiB"
+            )
+            if (gpu_fb_valid and gpu_util_valid and rss_valid)
+            else "GPU metrics unavailable"
+        ),
         transform=axes[0, 1].transAxes,
         ha="right",
         va="top",
@@ -676,10 +630,7 @@ def _plot_run_timeseries(
     )
 
     figure.suptitle(
-        (
-            f"Run Time-Series: backend={summary['backend']} "
-            f"particles={summary['particles']}"
-        ),
+        (f"Run Time-Series: backend={summary['backend']} " f"particles={summary['particles']}"),
         fontsize=14,
         fontweight="bold",
     )
@@ -724,10 +675,8 @@ def _write_markdown_report(
                 throughput=float(item["phase4"]["pf_update_particle_steps_per_second"]),
                 error=float(item["accuracy"]["final_error_pct"]),
                 ready=float(item["accuracy"]["prediction_ready_seconds"]),
-                rss=float(item["system_summary"]["simbay_process_memory_rss_bytes"]["max"])
-                / (1024.0**3),
-                gpu=float(item["system_summary"]["simbay_gpu_fb_used_bytes"]["max"])
-                / (1024.0**3),
+                rss=float(item["system_summary"]["simbay_process_memory_rss_bytes"]["max"]) / (1024.0**3),
+                gpu=float(item["system_summary"]["simbay_gpu_fb_used_bytes"]["max"]) / (1024.0**3),
             )
         )
 

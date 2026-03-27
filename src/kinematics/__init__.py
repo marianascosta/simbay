@@ -1,5 +1,5 @@
 """
-Kinematics module providing Inverse Kinematics (IK) solvers, 
+Kinematics module providing Inverse Kinematics (IK) solvers,
 numerical stepping engines, and MuJoCo-specific implementations.
 """
 

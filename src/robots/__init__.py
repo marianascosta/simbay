@@ -1,5 +1,5 @@
 """
-Robots module providing a unified interface for Franka FR3 control 
+Robots module providing a unified interface for Franka FR3 control
 across different simulation engines and real-world hardware.
 """
 
@@ -11,5 +11,5 @@ from .real_robot import RealRobot
 __all__ = [
     "BaseRobot",
     "MujocoRobot",
-    "RealRobot",   
+    "RealRobot",
 ]

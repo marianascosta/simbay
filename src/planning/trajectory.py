@@ -9,9 +9,9 @@ def plan_linear_trajectory(start_pos, target_pos, max_velocity, dt, settle_time=
     """
     Calculates a straight-line trajectory in joint space.
     Returns a NumPy array of intermediate steps.
-    
+
     Args:
-        settle_time (float): Time in seconds to hold the final position 
+        settle_time (float): Time in seconds to hold the final position
                              so the physical PD controllers can stabilize.
     """
     set_span_attributes(
@@ -25,11 +25,11 @@ def plan_linear_trajectory(start_pos, target_pos, max_velocity, dt, settle_time=
     )
     start_pos = np.array(start_pos)
     target_pos = np.array(target_pos)
-    
+
     # Calculate distance and bottleneck time
     distance = np.abs(target_pos - start_pos)
     duration = np.max(distance / max_velocity)
-    
+
     # Use CEIL to ensure any fractional step rounds UP to a full step
     total_steps = int(np.ceil(duration / dt))
     set_span_attributes(

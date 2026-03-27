@@ -77,14 +77,12 @@ class _MetricsStore:
     ) -> str:
         if not label_items:
             return f"{name} {value}"
+
         def escape_label(raw_value: str) -> str:
             escaped = raw_value.replace("\\", "\\\\")
             return escaped.replace('"', '\\"')
 
-        labels = ",".join(
-            f'{key}="{escape_label(label_value)}"'
-            for key, label_value in label_items
-        )
+        labels = ",".join(f'{key}="{escape_label(label_value)}"' for key, label_value in label_items)
         return f"{name}{{{labels}}} {value}"
 
 
@@ -292,9 +290,7 @@ class SimbayMetrics:
         step_rate = float(steps / duration_seconds) if duration_seconds > 0 else 0.0
         particle_step_rate = particle_steps / duration_seconds if duration_seconds > 0 else 0.0
         ms_per_step = (duration_seconds * 1000.0 / steps) if steps > 0 else 0.0
-        ms_per_particle_step = (
-            duration_seconds * 1000.0 / particle_steps if particle_steps > 0 else 0.0
-        )
+        ms_per_particle_step = duration_seconds * 1000.0 / particle_steps if particle_steps > 0 else 0.0
         self._store.set_gauge(
             "simbay_substage_steps",
             steps,

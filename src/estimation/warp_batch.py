@@ -15,7 +15,6 @@ import warp as wp
 
 from src.utils.logging_utils import extend_logging_data
 
-
 logger = logging.getLogger("simbay.warp_batch")
 
 _RESAMPLE_STATE_FIELDS = ("qpos", "qvel", "act", "ctrl", "qacc_warmstart")
@@ -176,9 +175,7 @@ class WarpBatch:
                 counts[f"{field_name}_nonfinite_count"] = 0
                 continue
             np_array = np.asarray(array.numpy())
-            counts[f"{field_name}_nonfinite_count"] = int(
-                np_array.size - np.count_nonzero(np.isfinite(np_array))
-            )
+            counts[f"{field_name}_nonfinite_count"] = int(np_array.size - np.count_nonzero(np.isfinite(np_array)))
         return counts
 
     def invalid_world_mask(self) -> np.ndarray:

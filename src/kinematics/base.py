@@ -7,11 +7,11 @@ import numpy as np
 class IKProblem(ABC):
     """
     Abstract Base Class defining the interface for a generic IK problem.
-    
-    Any specific robot implementation (MuJoCo, PyBullet, etc.) must inherit 
+
+    Any specific robot implementation (MuJoCo, PyBullet, etc.) must inherit
     from this class and implement these methods.
     """
-    
+
     @abstractmethod
     def get_s(self, theta: np.ndarray) -> np.ndarray:
         """
@@ -30,10 +30,10 @@ class IKProblem(ABC):
         """
         Computes the error vector between the current state and the target.
 
-        This method abstracts the error calculation logic. 
+        This method abstracts the error calculation logic.
         - For Position IK: It might simply be (target - current).
-        - For Orientation IK: It must handle quaternion differences or axis-angle 
-          errors to ensure the result is a rotation vector (radians), not just 
+        - For Orientation IK: It must handle quaternion differences or axis-angle
+          errors to ensure the result is a rotation vector (radians), not just
           subtracted components.
 
         Args:

@@ -115,11 +115,7 @@ def stage_segments(samples: list[MetricSample], times: list[float]) -> list[tupl
 
 
 def metric_max_across_labels(sample: MetricSample, metric_name: str) -> float | None:
-    values = [
-        float(value)
-        for (name, _labels), value in sample.metrics.items()
-        if name == metric_name
-    ]
+    values = [float(value) for (name, _labels), value in sample.metrics.items() if name == metric_name]
     if not values:
         return None
     return max(values)

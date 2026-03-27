@@ -121,9 +121,7 @@ class WarpParticleFilter:
                 particles=self.N,
                 state_bytes_total=self.state_bytes_total,
                 state_bytes_per_particle=self.state_bytes_per_particle,
-                process_memory_per_particle_estimate_bytes=(
-                    self.process_memory_per_particle_estimate
-                ),
+                process_memory_per_particle_estimate_bytes=(self.process_memory_per_particle_estimate),
             )
         )
 
@@ -212,10 +210,7 @@ class WarpParticleFilter:
             extend_logging_data(
                 self.logging_data,
                 event="warp_invalid_update_skipped",
-                msg=(
-                    f"Skipped an invalid Warp update at step {self._step_index} "
-                    f"on attempt {attempt}."
-                ),
+                msg=(f"Skipped an invalid Warp update at step {self._step_index} " f"on attempt {attempt}."),
                 step=self._step_index,
                 attempt=attempt,
                 restored=restored,
@@ -223,20 +218,14 @@ class WarpParticleFilter:
                 likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 0.0),
                 sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
                 diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                likelihood_nonfinite_count=int(
-                    diagnostics.get("likelihood_nonfinite_count", 0.0)
-                ),
+                likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
                 qpos_nonfinite_count=int(diagnostics.get("qpos_nonfinite_count", 0.0)),
                 qvel_nonfinite_count=int(diagnostics.get("qvel_nonfinite_count", 0.0)),
-                sensordata_nonfinite_count=int(
-                    diagnostics.get("sensordata_nonfinite_count", 0.0)
-                ),
+                sensordata_nonfinite_count=int(diagnostics.get("sensordata_nonfinite_count", 0.0)),
                 ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
             )
         )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         result = {
             "ess": float(self._ess),
             "resampled": False,
@@ -277,9 +266,7 @@ class WarpParticleFilter:
                 sim_force_axis_std_z=diagnostics.get("sim_force_axis_std_z", 0.0),
             )
         )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         result = {
             "ess": float(self._ess),
             "resampled": False,
@@ -343,9 +330,7 @@ class WarpParticleFilter:
                 self.env.resample_states(indexes)
             self._resample_count += 1
         self._save_last_good_snapshot()
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         if collapsed_to_uniform and (
             diagnostics.get("invalid_sensor_events", 0.0) > 0.0
             or diagnostics.get("invalid_state_events", 0.0) > 0.0
@@ -355,26 +340,15 @@ class WarpParticleFilter:
                 extend_logging_data(
                     self.logging_data,
                     event="warp_weight_update_uninformative",
-                    msg=(
-                        f"Detected an uninformative Warp weight update at step "
-                        f"{self._step_index}."
-                    ),
+                    msg=(f"Detected an uninformative Warp weight update at step " f"{self._step_index}."),
                     step=self._step_index,
                     ess=float(self._ess),
                     likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 1.0),
-                    sim_force_nonfinite_count=int(
-                        diagnostics.get("sim_force_nonfinite_count", 0.0)
-                    ),
+                    sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
                     diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                    likelihood_nonfinite_count=int(
-                        diagnostics.get("likelihood_nonfinite_count", 0.0)
-                    ),
-                    first_invalid_sensor_step=int(
-                        diagnostics.get("first_invalid_sensor_step", -1.0)
-                    ),
-                    first_invalid_state_step=int(
-                        diagnostics.get("first_invalid_state_step", -1.0)
-                    ),
+                    likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
+                    first_invalid_sensor_step=int(diagnostics.get("first_invalid_sensor_step", -1.0)),
+                    first_invalid_state_step=int(diagnostics.get("first_invalid_state_step", -1.0)),
                 )
             )
         self._step_index += 1

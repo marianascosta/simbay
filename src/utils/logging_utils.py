@@ -7,7 +7,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-
 _LOG_KEY_ORDER = (
     "timestamp",
     "level",

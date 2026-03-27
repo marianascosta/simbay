@@ -37,7 +37,6 @@ from src.utils.tracing import setup_tracing
 from src.utils.tracing import shutdown_tracing
 from src.utils.tracing import span as tracing_span
 
-
 shutdown_requested = False
 shutdown_signal_name: str | None = None
 logger = None
@@ -123,10 +122,7 @@ def _log_setup_summary(
     common_data = extend_logging_data(
         logging_data,
         event="simulation_setup",
-        msg=(
-            f"Completed simulation setup for the {backend_name} backend "
-            f"with {num_particles} particles."
-        ),
+        msg=(f"Completed simulation setup for the {backend_name} backend " f"with {num_particles} particles."),
         dt=dt,
         true_mass=true_mass,
         particles=num_particles,
@@ -137,12 +133,8 @@ def _log_setup_summary(
         state_memory_total=format_bytes(memory_profile["state_bytes_total"]),
         state_memory_per_particle_bytes=memory_profile["state_bytes_per_particle"],
         state_memory_per_particle=format_bytes(memory_profile["state_bytes_per_particle"]),
-        process_memory_per_particle_estimate_bytes=(
-            memory_profile["process_memory_per_particle_estimate_bytes"]
-        ),
-        process_memory_per_particle_estimate=format_bytes(
-            memory_profile["process_memory_per_particle_estimate_bytes"]
-        ),
+        process_memory_per_particle_estimate_bytes=(memory_profile["process_memory_per_particle_estimate_bytes"]),
+        process_memory_per_particle_estimate=format_bytes(memory_profile["process_memory_per_particle_estimate_bytes"]),
     )
 
     if backend_name == "mujoco-warp":
@@ -164,28 +156,14 @@ def _log_setup_summary(
     logger.info(
         extend_logging_data(
             common_data,
-            mujoco_model_buffer_per_particle_bytes=(
-                env_memory_profile["model_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_model_buffer_per_particle=format_bytes(
-                env_memory_profile["model_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_buffer_per_particle_bytes=(
-                env_memory_profile["data_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_buffer_per_particle=format_bytes(
-                env_memory_profile["data_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_arena_per_particle_bytes=(
-                env_memory_profile["data_narena_bytes_per_robot"]
-            ),
-            mujoco_data_arena_per_particle=format_bytes(
-                env_memory_profile["data_narena_bytes_per_robot"]
-            ),
+            mujoco_model_buffer_per_particle_bytes=(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+            mujoco_model_buffer_per_particle=format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+            mujoco_data_buffer_per_particle_bytes=(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+            mujoco_data_buffer_per_particle=format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+            mujoco_data_arena_per_particle_bytes=(env_memory_profile["data_narena_bytes_per_robot"]),
+            mujoco_data_arena_per_particle=format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
             mujoco_native_memory_per_particle_bytes=env_memory_profile["native_bytes_per_robot"],
-            mujoco_native_memory_per_particle=format_bytes(
-                env_memory_profile["native_bytes_per_robot"]
-            ),
+            mujoco_native_memory_per_particle=format_bytes(env_memory_profile["native_bytes_per_robot"]),
             mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
             mujoco_native_memory_total=format_bytes(env_memory_profile["native_bytes_total"]),
         )
@@ -203,10 +181,7 @@ def _handle_shutdown_signal(signum, _frame) -> None:
             extend_logging_data(
                 base_logging_data,
                 event="shutdown_requested",
-                msg=(
-                    f"Received {shutdown_signal_name} and will finish the current run "
-                    "before shutting down."
-                ),
+                msg=(f"Received {shutdown_signal_name} and will finish the current run " "before shutting down."),
                 signal=shutdown_signal_name,
                 mode="graceful",
                 action="finish_current_run",
@@ -216,10 +191,7 @@ def _handle_shutdown_signal(signum, _frame) -> None:
         logging.getLogger("simbay").info(
             {
                 "event": "shutdown_requested",
-                "msg": (
-                    f"Received {shutdown_signal_name} and will finish the current run "
-                    "before shutting down."
-                ),
+                "msg": (f"Received {shutdown_signal_name} and will finish the current run " "before shutting down."),
                 "run_id": base_logging_data.get("run_id", "unknown"),
                 "signal": shutdown_signal_name,
                 "mode": "graceful",
@@ -292,10 +264,7 @@ def _log_stage_finished(
         extend_logging_data(
             logging_data,
             event="stage_finished",
-            msg=(
-                f"Finished {stage.replace('_', ' ')} "
-                f"in {duration_seconds:.2f} seconds."
-            ),
+            msg=(f"Finished {stage.replace('_', ' ')} " f"in {duration_seconds:.2f} seconds."),
             stage=stage,
             duration_ms=duration_seconds * 1000.0,
         )
@@ -420,9 +389,7 @@ with tracing_span(_tracer, "setup"):
     elif _backend_env == "mujoco-warp":
         backend = "mujoco-warp"
     else:
-        raise SystemExit(
-            "Unsupported backend. Set SIMBAY_BACKEND to `cpu` or `mujoco-warp`."
-        )
+        raise SystemExit("Unsupported backend. Set SIMBAY_BACKEND to `cpu` or `mujoco-warp`.")
 
     use_batched_backend = backend == "mujoco-warp"
     # Setup "real" robot
@@ -437,7 +404,7 @@ with tracing_span(_tracer, "setup"):
     true_mass = DEFAULT_OBJECT_PROPS["mass"]
 
     num_particles = int(os.getenv("SIMBAY_PARTICLES", "100"))
-    limits = ((0.0, 3.0))
+    limits = (0.0, 3.0)
     if backend == "mujoco-warp":
         try:
             from src.estimation.warp_filter import _uniform_weight_metrics
@@ -508,9 +475,7 @@ with tracing_span(_tracer, "ik_planning"):
     target_quat = np.array([0.0, 1.0, 0.0, 0.0])
 
     pre_grasp_pos = obj_pos + np.array([0.0, 0.0, 0.15])
-    pre_grasp_q7 = FrankaSmartSolver.solve(
-        FRANKA_HOME_QPOS, np.concatenate([pre_grasp_pos, target_quat])
-    )
+    pre_grasp_q7 = FrankaSmartSolver.solve(FRANKA_HOME_QPOS, np.concatenate([pre_grasp_pos, target_quat]))
     grasp_q7 = FrankaSmartSolver.solve(pre_grasp_q7, np.concatenate([obj_pos, target_quat]))
 
     lift_pos = obj_pos + np.array([0.0, 0.0, 0.2])
@@ -943,12 +908,8 @@ with tracing_span(_tracer, "phase_4_lift"):
             set_span_attributes(
                 {
                     "simbay.step": step,
-                    "simbay.execution_mode": (
-                        "batched_parallel" if backend == "mujoco-warp" else "sequential"
-                    ),
-                    "simbay.batched_particle_updates": (
-                        particle_filter.N if backend == "mujoco-warp" else 1
-                    ),
+                    "simbay.execution_mode": ("batched_parallel" if backend == "mujoco-warp" else "sequential"),
+                    "simbay.batched_particle_updates": (particle_filter.N if backend == "mujoco-warp" else 1),
                 }
             )
 
@@ -979,12 +940,8 @@ with tracing_span(_tracer, "phase_4_lift"):
                         "simbay.substage": "pf_update",
                         "simbay.backend": backend,
                         "simbay.previous_mass_estimate_kg": previous_mass_estimate,
-                        "simbay.execution_mode": (
-                            "batched_parallel" if backend == "mujoco-warp" else "sequential"
-                        ),
-                        "simbay.parallel_units": (
-                            particle_filter.N if backend == "mujoco-warp" else 1
-                        ),
+                        "simbay.execution_mode": ("batched_parallel" if backend == "mujoco-warp" else "sequential"),
+                        "simbay.parallel_units": (particle_filter.N if backend == "mujoco-warp" else 1),
                     }
                 )
                 step_wall_start = time.perf_counter()
@@ -1007,16 +964,15 @@ with tracing_span(_tracer, "phase_4_lift"):
                                             extend_logging_data(
                                                 base_logging_data,
                                                 event="warp_first_update_recovered",
-                                                msg=(
-                                                    f"Recovered the first Warp update after "
-                                                    f"{attempt} attempts."
-                                                ),
+                                                msg=(f"Recovered the first Warp update after " f"{attempt} attempts."),
                                                 attempts=attempt,
                                                 step=particle_filter._step_index - 1,
                                             )
                                         )
                                     break
-                            step_result = last_result if last_result is not None else _warp_step(qpos, noisy_ft_reading, step)
+                            step_result = (
+                                last_result if last_result is not None else _warp_step(qpos, noisy_ft_reading, step)
+                            )
                             phase_4_bootstrap_applied = True
                         else:
                             step_result = _warp_step(qpos, noisy_ft_reading, step)
@@ -1091,13 +1047,9 @@ with tracing_span(_tracer, "phase_4_lift"):
         pf_wall_durations.append(step_wall_duration)
         pf_cpu_durations.append(step_cpu_duration)
 
-        cpu_equivalent_cores_used = (
-            step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
-        )
+        cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
         cpu_percent_single_core = cpu_equivalent_cores_used * 100.0
-        cpu_percent_total_machine = (
-            (cpu_equivalent_cores_used / cpu_cores) * 100.0 if cpu_cores > 0 else 0.0
-        )
+        cpu_percent_total_machine = (cpu_equivalent_cores_used / cpu_cores) * 100.0 if cpu_cores > 0 else 0.0
         step_rate_hz = 1.0 / step_wall_duration if step_wall_duration > 0 else 0.0
         _ = add_exemplar(run_id, step)
         metrics.update_filter_state(
@@ -1139,9 +1091,7 @@ with tracing_span(_tracer, "phase_4_lift"):
             safe_weights = np.clip(weights_snapshot, np.finfo(np.float64).tiny, 1.0)
             weight_entropy = float(-np.sum(safe_weights * np.log(safe_weights)))
             max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
-            weight_entropy_normalized = (
-                float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
-            )
+            weight_entropy_normalized = float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
             weight_perplexity = float(np.exp(weight_entropy))
             metrics.update_resample_state(
                 steps=step + 1,
@@ -1178,12 +1128,8 @@ with tracing_span(_tracer, "phase_4_lift"):
                 phase_4_skipped_invalid_updates,
                 int(step_result.get("skipped_invalid_updates", 0)),
             )
-            current_first_invalid_sensor_step = int(
-                diagnostics.get("first_invalid_sensor_step", -1.0)
-            )
-            current_first_invalid_state_step = int(
-                diagnostics.get("first_invalid_state_step", -1.0)
-            )
+            current_first_invalid_sensor_step = int(diagnostics.get("first_invalid_sensor_step", -1.0))
+            current_first_invalid_state_step = int(diagnostics.get("first_invalid_state_step", -1.0))
             if phase_4_first_invalid_sensor_step < 0 and current_first_invalid_sensor_step >= 0:
                 phase_4_first_invalid_sensor_step = current_first_invalid_sensor_step
             if phase_4_first_invalid_state_step < 0 and current_first_invalid_state_step >= 0:
@@ -1222,17 +1168,11 @@ with tracing_span(_tracer, "phase_4_lift"):
             metrics.update_contact_health(
                 contact_count_mean=float(diagnostics.get("contact_count_mean", 0.0)),
                 contact_count_max=float(diagnostics.get("contact_count_max", 0.0)),
-                active_contact_particle_ratio=float(
-                    diagnostics.get("active_contact_particle_ratio", 0.0)
-                ),
+                active_contact_particle_ratio=float(diagnostics.get("active_contact_particle_ratio", 0.0)),
                 contact_metric_available=bool(diagnostics.get("contact_metric_available", 0.0)),
                 contact_force_mismatch=bool(diagnostics.get("contact_force_mismatch", 0.0)),
-                valid_force_particle_ratio=float(
-                    diagnostics.get("valid_force_particle_ratio", 0.0)
-                ),
-                sim_force_signal_particle_ratio=float(
-                    diagnostics.get("sim_force_signal_particle_ratio", 0.0)
-                ),
+                valid_force_particle_ratio=float(diagnostics.get("valid_force_particle_ratio", 0.0)),
+                sim_force_signal_particle_ratio=float(diagnostics.get("sim_force_signal_particle_ratio", 0.0)),
             )
         set_span_attributes(
             {
@@ -1293,9 +1233,7 @@ force_flush_tracing()
 avg_wall_duration = sum(pf_wall_durations) / len(pf_wall_durations) if pf_wall_durations else 0.0
 avg_cpu_duration = sum(pf_cpu_durations) / len(pf_cpu_durations) if pf_cpu_durations else 0.0
 avg_step_rate_hz = 1.0 / avg_wall_duration if avg_wall_duration > 0 else 0.0
-avg_cpu_equivalent_cores = (
-    avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
-)
+avg_cpu_equivalent_cores = avg_cpu_duration / avg_wall_duration if avg_wall_duration > 0 else 0.0
 if backend == "cpu":
     env_memory_profile = env.memory_profile()
     metrics.update_warp_memory(
@@ -1323,28 +1261,14 @@ if backend == "cpu":
             final_rss_bytes=get_process_memory_bytes(),
             final_rss=format_bytes(get_process_memory_bytes()),
             backend="cpu",
-            mujoco_model_buffer_per_particle_bytes=(
-                env_memory_profile["model_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_model_buffer_per_particle=format_bytes(
-                env_memory_profile["model_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_buffer_per_particle_bytes=(
-                env_memory_profile["data_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_buffer_per_particle=format_bytes(
-                env_memory_profile["data_nbuffer_bytes_per_robot"]
-            ),
-            mujoco_data_arena_per_particle_bytes=(
-                env_memory_profile["data_narena_bytes_per_robot"]
-            ),
-            mujoco_data_arena_per_particle=format_bytes(
-                env_memory_profile["data_narena_bytes_per_robot"]
-            ),
+            mujoco_model_buffer_per_particle_bytes=(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+            mujoco_model_buffer_per_particle=format_bytes(env_memory_profile["model_nbuffer_bytes_per_robot"]),
+            mujoco_data_buffer_per_particle_bytes=(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+            mujoco_data_buffer_per_particle=format_bytes(env_memory_profile["data_nbuffer_bytes_per_robot"]),
+            mujoco_data_arena_per_particle_bytes=(env_memory_profile["data_narena_bytes_per_robot"]),
+            mujoco_data_arena_per_particle=format_bytes(env_memory_profile["data_narena_bytes_per_robot"]),
             mujoco_native_memory_per_particle_bytes=env_memory_profile["native_bytes_per_robot"],
-            mujoco_native_memory_per_particle=format_bytes(
-                env_memory_profile["native_bytes_per_robot"]
-            ),
+            mujoco_native_memory_per_particle=format_bytes(env_memory_profile["native_bytes_per_robot"]),
             mujoco_native_memory_total_bytes=env_memory_profile["native_bytes_total"],
             mujoco_native_memory_total=format_bytes(env_memory_profile["native_bytes_total"]),
         )
@@ -1432,9 +1356,7 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="prediction_ready",
-        msg=(
-            f"The prediction is ready after {time_to_prediction_seconds:.2f} seconds."
-        ),
+        msg=(f"The prediction is ready after {time_to_prediction_seconds:.2f} seconds."),
         total_wall_s=time_to_prediction_seconds,
         final_mass_prediction_kg=final_prediction,
     )
@@ -1451,9 +1373,7 @@ logger.info(
     extend_logging_data(
         base_logging_data,
         event="final_error",
-        msg=(
-            "Recorded the final percentage error for the mass prediction."
-        ),
+        msg=("Recorded the final percentage error for the mass prediction."),
         final_error_pct=abs(true_mass - final_prediction) * 100,
     )
 )
@@ -1465,8 +1385,7 @@ if mass_series_artifacts:
             base_logging_data,
             event="mass_timeseries_export_complete",
             msg=(
-                f"Exported {len(history_particles)} particle-mass snapshots to "
-                f"{mass_series_artifacts[0].parent}."
+                f"Exported {len(history_particles)} particle-mass snapshots to " f"{mass_series_artifacts[0].parent}."
             ),
             snapshots=len(history_particles),
             artifacts=len(mass_series_artifacts),

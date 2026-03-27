@@ -1,5 +1,5 @@
 """
-Planning module providing trajectory generation and 
+Planning module providing trajectory generation and
 high-level IK solvers for Franka robot motions.
 """
 

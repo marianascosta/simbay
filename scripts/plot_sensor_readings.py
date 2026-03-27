@@ -10,9 +10,7 @@ from plot_utils import ensure_run_dir, load_samples, metric_series, relative_tim
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Plot sensor-derived health metrics for one benchmark run."
-    )
+    parser = argparse.ArgumentParser(description="Plot sensor-derived health metrics for one benchmark run.")
     parser.add_argument("--run-dir", required=True, help="Benchmark run directory.")
     parser.add_argument("--output", default="sensor_readings.png", help="Destination PNG path.")
     parser.add_argument("--title", default="Sensor Readings Health", help="Plot title.")
