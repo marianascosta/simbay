@@ -2,8 +2,7 @@
 Simbay OpenTelemetry tracing integration.
 
 All interaction with the OTel SDK is isolated in this module.
-When SIMBAY_OTEL_ENABLED is not set to "1", "true", "yes", or "on",
-every function in this module is a documented no-op. The rest of the
+Tracing is configured centrally in this module. The rest of the
 codebase never imports opentelemetry directly.
 """
 
@@ -11,18 +10,19 @@ from __future__ import annotations
 
 import functools
 import inspect
-import os
 from contextlib import contextmanager
 from typing import Iterator
 from typing import Any
 
+from .settings import OTEL_ENDPOINT
+
 
 def _is_enabled() -> bool:
-    return os.getenv("SIMBAY_OTEL_ENABLED", "").lower() in {"1", "true", "yes", "on"}
+    return True
 
 
 def _otel_endpoint() -> str:
-    return os.getenv("SIMBAY_OTEL_ENDPOINT", "http://tempo:4317")
+    return OTEL_ENDPOINT
 
 
 def setup_tracing(run_id: str) -> None:

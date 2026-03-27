@@ -1,11 +1,13 @@
 import json
 import logging
-import os
 import resource
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+
+from .settings import LOG_FALLBACK_DIR
+from .settings import LOG_LEVEL_NAME
 
 _LOG_KEY_ORDER = (
     "timestamp",
@@ -66,8 +68,7 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
             logger.removeHandler(handler)
             handler.close()
 
-    level_name = os.getenv("SIMBAY_LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+    level = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
 
     logger.setLevel(level)
     logger.propagate = False
@@ -83,7 +84,7 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     stream_handler.addFilter(run_id_filter)
 
     preferred_log_path = Path(log_dir)
-    fallback_log_path = Path(os.getenv("SIMBAY_LOG_FALLBACK_DIR", "/tmp/simbay-logs"))
+    fallback_log_path = Path(LOG_FALLBACK_DIR)
     fallback_log_path = fallback_log_path / str(run_id)
     file_handler: RotatingFileHandler | None = None
     file_target: Path | None = None

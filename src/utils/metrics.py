@@ -1,4 +1,3 @@
-import os
 import subprocess
 import threading
 import time
@@ -9,6 +8,28 @@ from http.server import ThreadingHTTPServer
 from typing import Iterable
 
 from .logging_utils import get_process_memory_bytes
+from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
+
+DEFAULT_STAGE_NAMES: tuple[str, ...] = (
+    "setup",
+    "ik_planning",
+    "phase_1_approach",
+    "phase_2_descend",
+    "phase_3_grip",
+    "phase_4_lift",
+    "plot_generation",
+)
+
+DEFAULT_SUBSTAGE_NAMES: tuple[tuple[str, str], ...] = (
+    ("phase_1_approach", "robot_execute"),
+    ("phase_1_approach", "pf_replay"),
+    ("phase_2_descend", "robot_execute"),
+    ("phase_2_descend", "pf_replay"),
+    ("phase_3_grip", "robot_execute"),
+    ("phase_3_grip", "pf_replay"),
+    ("phase_4_lift", "robot_execute"),
+    ("phase_4_lift", "pf_update"),
+)
 
 
 @dataclass(frozen=True)
@@ -138,6 +159,15 @@ class SimbayMetrics:
         self._sample_system_metrics(previous_cpu_totals=None, previous_process_totals=None)
         self._system_thread = threading.Thread(target=self._run_system_sampler, daemon=True)
         self._system_thread.start()
+
+    def initialize_defaults(self) -> "SimbayMetrics":
+        self.register_stages(DEFAULT_STAGE_NAMES)
+        self.register_substages(DEFAULT_SUBSTAGE_NAMES)
+        return self
+
+    def start_runtime(self) -> "SimbayMetrics":
+        self.start()
+        return self
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -824,7 +854,7 @@ class SimbayMetrics:
         )
 
     def _run_system_sampler(self) -> None:
-        interval = float(os.getenv("SIMBAY_SYSTEM_METRICS_INTERVAL_SECONDS", "1.0"))
+        interval = SYSTEM_METRICS_INTERVAL_SECONDS
         previous_cpu_totals = self._read_host_cpu_totals()
         previous_process_totals = self._read_process_cpu_totals()
         while not self._stop_event.wait(interval):
@@ -997,10 +1027,12 @@ class SimbayMetrics:
         }
 
 
-def create_metrics_from_env(run_id: str = "unknown") -> SimbayMetrics:
-    enabled = os.getenv("SIMBAY_METRICS_ENABLED", "").lower() in {"1", "true", "yes", "on"}
-    port = int(os.getenv("SIMBAY_METRICS_PORT", "8000"))
-    return SimbayMetrics(enabled=enabled, port=port, run_id=run_id)
+def init_metrics(run_id: str = "unknown") -> SimbayMetrics:
+    return SimbayMetrics(
+        enabled=True,
+        port=8000,
+        run_id=run_id,
+    ).initialize_defaults().start_runtime()
 
 
 def shutdown_metrics(metrics: SimbayMetrics) -> None:
