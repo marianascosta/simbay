@@ -42,6 +42,19 @@ from src.utils.profiling import annotate
 shutdown_requested = False
 shutdown_signal_name: str | None = None
 
+PHASE_LOG_LABELS = {
+    "phase_1_approach": "phase 1 (approach)",
+    "phase_2_descend": "phase 2 (descent)",
+    "phase_3_grip": "phase 3 (grip)",
+    "phase_4_lift": "phase 4 (lift)",
+}
+
+SUBSTAGE_FINISHED_LABELS = {
+    "robot_execute": "robot motion",
+    "pf_replay": "particle filter replay",
+    "pf_update": "particle filter update",
+}
+
 
 def init_runtime(run_id: str = RUN_ID) -> dict[str, Any]:
     runtime_log_data = {"run_id": run_id}
@@ -163,42 +176,6 @@ def substage_span_attrs(
     return attrs
 
 
-def log_setup_summary(
-    logger: Any,
-    backend_name: str,
-    headless: bool,
-    **log_data: object,
-) -> None:
-    logger.info({**log_data, "event": "simulation_setup", "msg": "Completed simulation setup.", "backend": backend_name, "headless": headless})
-
-
-def log_stage_started(logger: Any, stage: str, **log_data: object) -> None:
-    logger.info({**log_data, "event": "stage_started", "msg": f"Started {stage.replace('_', ' ')}.", "stage": stage})
-
-
-def log_stage_finished(logger: Any, stage: str, **log_data: object) -> None:
-    logger.info({**log_data, "event": "stage_finished", "msg": f"Finished {stage.replace('_', ' ')}.", "stage": stage})
-
-
-def log_substage_started(logger: Any, phase: str, substage: str, **log_data: object) -> None:
-    logger.info({**log_data, "event": "substage_started", "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.", "phase": phase, "substage": substage})
-
-
-def log_substage_duration(logger: Any, phase: str, substage: str, **log_data: object) -> None:
-    phase_labels = {
-        "phase_1_approach": "phase 1 (approach)",
-        "phase_2_descend": "phase 2 (descent)",
-        "phase_3_grip": "phase 3 (grip)",
-        "phase_4_lift": "phase 4 (lift)",
-    }
-    substage_labels = {
-        "robot_execute": "robot motion",
-        "pf_replay": "particle filter replay",
-        "pf_update": "particle filter update",
-    }
-    logger.info({**log_data, "event": "substage_finished", "msg": f"Finished {substage_labels.get(substage, substage.replace('_', ' '))} for {phase_labels.get(phase, phase.replace('_', ' '))}.", "phase": phase, "substage": substage})
-
-
 def update_setup_metrics(
     metrics_obj: Any,
     backend_name: str,
@@ -299,8 +276,17 @@ def tracked_stage(stage_name: str):
     def decorator(func):
         def wrapper(ctx: dict[str, Any], *args, **kwargs):
             steps = kwargs.get("steps")
+            env = kwargs.get("env")
             stage_token = ctx["metrics"].start_stage(stage_name)
-            log_stage_started(ctx["logger"], stage_name, **ctx["log_data"])
+            stage_label = stage_name.replace("_", " ")
+            ctx["logger"].info(
+                {
+                    **ctx["log_data"],
+                    "event": "stage_started",
+                    "msg": f"Started {stage_label}.",
+                    "stage": stage_name,
+                }
+            )
             try:
                 with tracing_span(ctx["tracer"], stage_name):
                     set_span_attributes(
@@ -316,8 +302,17 @@ def tracked_stage(stage_name: str):
                     )
                     return func(ctx, *args, **kwargs)
             finally:
+                if ctx["backend"] == "mujoco-warp" and env is not None:
+                    update_warp_memory_metrics(env, ctx["metrics"], stage=stage_name)
                 ctx["metrics"].finish_stage(stage_token)
-                log_stage_finished(ctx["logger"], stage_name, **ctx["log_data"])
+                ctx["logger"].info(
+                    {
+                        **ctx["log_data"],
+                        "event": "stage_finished",
+                        "msg": f"Finished {stage_label}.",
+                        "stage": stage_name,
+                    }
+                )
 
         return wrapper
 
@@ -331,6 +326,8 @@ def run_robot_motion_substage(
     real_robot: Any,
     viewer: Any,
 ) -> float:
+    substage = "robot_execute"
+    phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
     with tracing_span(ctx["tracer"], "robot_execute"):
         set_span_attributes(
             substage_span_attrs(
@@ -340,21 +337,37 @@ def run_robot_motion_substage(
                 dt=ctx["dt"],
                 execution_device=ctx["execution_device"],
                 stage=phase,
-                substage="robot_execute",
+                substage=substage,
                 steps=len(trajectory),
                 execution_mode="sequential",
                 parallel_units=1,
             )
         )
-        stage_token = ctx["metrics"].start_substage(phase, "robot_execute")
-        log_substage_started(ctx["logger"], phase, "robot_execute", **ctx["log_data"])
+        stage_token = ctx["metrics"].start_substage(phase, substage)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "substage_started",
+                "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+                "phase": phase,
+                "substage": substage,
+            }
+        )
         for _, qpos in enumerate(trajectory):
             real_robot.move_joints(qpos)
             if viewer is not None:
                 viewer.sync()
         duration = ctx["metrics"].finish_substage(stage_token)
-        log_substage_duration(ctx["logger"], phase, "robot_execute", **ctx["log_data"])
-        ctx["metrics"].set_substage_workload(phase, "robot_execute", len(trajectory), 1, duration)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "substage_finished",
+                "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+                "phase": phase,
+                "substage": substage,
+            }
+        )
+        ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), 1, duration)
         return duration
 
 
@@ -365,6 +378,8 @@ def run_pf_replay_substage(
     particle_filter: Any,
     use_batched_backend: bool,
 ) -> float:
+    substage = "pf_replay"
+    phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
     with tracing_span(ctx["tracer"], "pf_replay"):
         set_span_attributes(
             substage_span_attrs(
@@ -374,22 +389,38 @@ def run_pf_replay_substage(
                 dt=ctx["dt"],
                 execution_device=ctx["execution_device"],
                 stage=phase,
-                substage="pf_replay",
+                substage=substage,
                 steps=len(trajectory),
                 execution_mode="batched_parallel" if use_batched_backend else "sequential",
                 parallel_units=particle_filter.N if use_batched_backend else 1,
             )
         )
-        stage_token = ctx["metrics"].start_substage(phase, "pf_replay")
-        log_substage_started(ctx["logger"], phase, "pf_replay", **ctx["log_data"])
+        stage_token = ctx["metrics"].start_substage(phase, substage)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "substage_started",
+                "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+                "phase": phase,
+                "substage": substage,
+            }
+        )
         if use_batched_backend:
             particle_filter.predict_trajectory(trajectory)
         else:
             for qpos in trajectory:
                 particle_filter.predict(qpos)
         duration = ctx["metrics"].finish_substage(stage_token)
-        log_substage_duration(ctx["logger"], phase, "pf_replay", **ctx["log_data"])
-        ctx["metrics"].set_substage_workload(phase, "pf_replay", len(trajectory), particle_filter.N, duration)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "substage_finished",
+                "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+                "phase": phase,
+                "substage": substage,
+            }
+        )
+        ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), particle_filter.N, duration)
         return duration
 
 
@@ -407,8 +438,6 @@ def run_phase_1_approach(
 ) -> None:
     run_robot_motion_substage(ctx, "phase_1_approach", trajectory, real_robot, viewer)
     run_pf_replay_substage(ctx, "phase_1_approach", trajectory, particle_filter, use_batched_backend)
-    if ctx["backend"] == "mujoco-warp":
-        update_warp_memory_metrics(env, ctx["metrics"], stage="phase_1_approach")
 
 
 @tracked_stage("phase_2_descend")
@@ -425,8 +454,6 @@ def run_phase_2_descend(
 ) -> None:
     run_robot_motion_substage(ctx, "phase_2_descend", trajectory, real_robot, viewer)
     run_pf_replay_substage(ctx, "phase_2_descend", trajectory, particle_filter, use_batched_backend)
-    if ctx["backend"] == "mujoco-warp":
-        update_warp_memory_metrics(env, ctx["metrics"], stage="phase_2_descend")
 
 
 @tracked_stage("phase_3_grip")
@@ -443,8 +470,6 @@ def run_phase_3_grip(
 ) -> None:
     run_robot_motion_substage(ctx, "phase_3_grip", trajectory, real_robot, viewer)
     run_pf_replay_substage(ctx, "phase_3_grip", trajectory, particle_filter, use_batched_backend)
-    if ctx["backend"] == "mujoco-warp":
-        update_warp_memory_metrics(env, ctx["metrics"], stage="phase_3_grip")
 
 
 @tracked_stage("phase_4_lift")
@@ -753,14 +778,48 @@ def run_phase_4_lift(
                 "simbay.step_wall_ms": step_wall_duration * 1000.0,
             }
         )
-    if ctx["backend"] == "mujoco-warp":
-        update_warp_memory_metrics(env, ctx["metrics"], stage="phase_4_lift")
     ctx["metrics"].set_substage_duration("phase_4_lift", "robot_execute", phase_4_robot_execute_total)
     ctx["metrics"].set_substage_duration("phase_4_lift", "pf_update", phase_4_pf_update_total)
-    log_substage_started(ctx["logger"], "phase_4_lift", "robot_execute", **ctx["log_data"])
-    log_substage_duration(ctx["logger"], "phase_4_lift", "robot_execute", **ctx["log_data"])
-    log_substage_started(ctx["logger"], "phase_4_lift", "pf_update", **ctx["log_data"])
-    log_substage_duration(ctx["logger"], "phase_4_lift", "pf_update", **ctx["log_data"])
+    phase = "phase_4_lift"
+    phase_label = PHASE_LOG_LABELS[phase]
+    substage = "robot_execute"
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_started",
+            "msg": "Started robot execute for phase 4 lift.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_finished",
+            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    substage = "pf_update"
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_started",
+            "msg": "Started pf update for phase 4 lift.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_finished",
+            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
     ctx["metrics"].set_substage_workload("phase_4_lift", "robot_execute", len(trajectory), 1, phase_4_robot_execute_total)
     ctx["metrics"].set_substage_workload("phase_4_lift", "pf_update", len(trajectory), particle_filter.N, phase_4_pf_update_total)
     force_flush_tracing()
@@ -785,7 +844,7 @@ def main(runtime: dict[str, Any]) -> None:
     run_id = runtime["run_id"]
 
     setup_stage = metrics.start_stage("setup")
-    log_stage_started(logger, "setup", **log_data)
+    logger.info({**log_data, "event": "stage_started", "msg": "Started setup.", "stage": "setup"})
     with tracing_span(tracer, "setup"):
         headless = HEADLESS
         backend = BACKEND
@@ -829,14 +888,9 @@ def main(runtime: dict[str, Any]) -> None:
             env_memory_profile=env_memory_profile,
             memory_profile=memory_profile,
         )
-        log_setup_summary(
-            logger,
-            backend,
-            headless,
-            **log_data,
-        )
+        logger.info({**log_data, "event": "simulation_setup", "msg": "Completed simulation setup.", "backend": backend, "headless": headless})
     metrics.finish_stage(setup_stage)
-    log_stage_finished(logger, "setup", **log_data)
+    logger.info({**log_data, "event": "stage_finished", "msg": "Finished setup.", "stage": "setup"})
 
     ctx = {
         "run_id": run_id,
@@ -852,7 +906,7 @@ def main(runtime: dict[str, Any]) -> None:
     }
 
     planning_stage = metrics.start_stage("ik_planning")
-    log_stage_started(logger, "ik_planning", **log_data)
+    logger.info({**log_data, "event": "stage_started", "msg": "Started ik planning.", "stage": "ik_planning"})
     with tracing_span(tracer, "ik_planning"):
         set_span_attributes(
             stage_span_attrs(
@@ -893,7 +947,7 @@ def main(runtime: dict[str, Any]) -> None:
             warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
             logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend, "rollout_lengths": warmed_rollout_lengths, "phase4_step_warmup": 1})
     metrics.finish_stage(planning_stage)
-    log_stage_finished(logger, "ik_planning", **log_data)
+    logger.info({**log_data, "event": "stage_finished", "msg": "Finished ik planning.", "stage": "ik_planning"})
 
     run_phase_1_approach(
         ctx,
@@ -951,7 +1005,6 @@ def main(runtime: dict[str, Any]) -> None:
         )
         logger.info({**log_data, "event": "particle_filter_completed", "msg": "Finished the particle filter run.", "backend": "cpu"})
     elif backend == "mujoco-warp":
-        update_warp_memory_metrics(env, metrics, stage="phase_4_lift")
         logger.info({**log_data, "event": "particle_filter_completed", "msg": "Finished the particle filter run.", "backend": "mujoco-warp"})
 
     logger.info({**log_data, "event": "sequence_complete", "msg": "Finished the execution sequence.", "awaiting_user_input": not headless})
