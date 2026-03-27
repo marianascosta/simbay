@@ -54,8 +54,6 @@ def main(runtime: RuntimeContext) -> None:
     with tracing_span(tracer, "setup"):
         headless = HEADLESS
         backend = BACKEND
-        if backend not in {"cpu", "mujoco-warp"}:
-            raise SystemExit("Unsupported backend. Set SIMBAY_BACKEND to `cpu` or `mujoco-warp`.")
 
         use_batched_backend = backend == "mujoco-warp"
         real_robot = initialize_mujoco_env()
@@ -151,16 +149,7 @@ def main(runtime: RuntimeContext) -> None:
         )
         if use_batched_backend:
             warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
-            logger.info(
-                {
-                    **log_data,
-                    "event": "backend_runtime_warmup_summary",
-                    "msg": f"Finished backend runtime warm-up for the {backend} backend.",
-                    "backend": backend,
-                    "rollout_lengths": warmed_rollout_lengths,
-                    "phase4_step_warmup": 1,
-                }
-            )
+            logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend, "rollout_lengths": warmed_rollout_lengths, "phase4_step_warmup": 1})
     planning_duration = metrics.finish_stage(planning_stage)
     log_stage_finished(logger, "ik_planning", planning_duration, **log_data)
 
@@ -218,44 +207,16 @@ def main(runtime: RuntimeContext) -> None:
             bytes_limit=int(env_memory_profile["bytes_limit"]),
             state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
         )
-        logger.info(
-            {
-                **log_data,
-                "event": "particle_filter_completed",
-                "msg": "Finished the particle filter run.",
-                "backend": "cpu",
-            }
-        )
+        logger.info({**log_data, "event": "particle_filter_completed", "msg": "Finished the particle filter run.", "backend": "cpu"})
     elif backend == "mujoco-warp":
         update_warp_memory_metrics(env, metrics, stage="phase_4_lift")
-        logger.info(
-            {
-                **log_data,
-                "event": "particle_filter_completed",
-                "msg": "Finished the particle filter run.",
-                "backend": "mujoco-warp",
-            }
-        )
+        logger.info({**log_data, "event": "particle_filter_completed", "msg": "Finished the particle filter run.", "backend": "mujoco-warp"})
 
-    logger.info(
-        {
-            **log_data,
-            "event": "sequence_complete",
-            "msg": "Finished the execution sequence.",
-            "awaiting_user_input": not headless,
-        }
-    )
+    logger.info({**log_data, "event": "sequence_complete", "msg": "Finished the execution sequence.", "awaiting_user_input": not headless})
     if not headless and not is_shutdown_requested():
         input()
     elif not headless and is_shutdown_requested():
-        logger.info(
-            {
-                **log_data,
-                "event": "sequence_complete_skipping_user_input",
-                "msg": "Skipped waiting for user input because shutdown was requested.",
-                "signal": get_shutdown_signal_name(),
-            }
-        )
+        logger.info({**log_data, "event": "sequence_complete_skipping_user_input", "msg": "Skipped waiting for user input because shutdown was requested.", "signal": get_shutdown_signal_name()})
 
     final_prediction = float(particle_filter.estimate())
     time_to_prediction_seconds = runtime.elapsed_seconds()
@@ -263,53 +224,27 @@ def main(runtime: RuntimeContext) -> None:
         total_wall_seconds=time_to_prediction_seconds,
         final_error_pct=abs(true_mass - final_prediction) * 100,
     )
-    logger.info(
-        {
-            **log_data,
-            "event": "prediction_ready",
-            "msg": "The prediction is ready.",
-        }
-    )
+    logger.info({**log_data, "event": "prediction_ready", "msg": "The prediction is ready."})
 
-    plot_stage = metrics.start_stage("plot_generation")
-    log_stage_started(logger, "plot_generation", **log_data)
     logger.info({**log_data, "event": "plot_generation_start", "msg": "Started generating the output plots."})
-    with tracing_span(tracer, "plot_generation"):
-        set_span_attributes(
-            {
-                **stage_span_attrs(ctx, "plot_generation", steps=len(history_estimates)),
-                "history_estimates": len(history_estimates),
-                "true_mass": float(true_mass),
-            }
-        )
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
-        plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-        plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
-        plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-        plt.ylabel("Estimated Mass (kg)", fontsize=12)
-        plt.ylim(env.min, env.max)
-        plt.legend(loc="upper right")
-        plt.grid(True, linestyle=":", alpha=0.7)
-        output_dir = Path("temp")
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / "particle_filter_evolution.png"
-        plt.savefig(output_path, dpi=150, bbox_inches="tight")
-        plt.close()
-        logger.info({**log_data, "event": "plot_saved", "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
-    plot_duration = metrics.finish_stage(plot_stage)
-    log_stage_finished(logger, "plot_generation", plot_duration, **log_data)
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
+    plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
+    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
+    plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    plt.ylabel("Estimated Mass (kg)", fontsize=12)
+    plt.ylim(env.min, env.max)
+    plt.legend(loc="upper right")
+    plt.grid(True, linestyle=":", alpha=0.7)
+    output_dir = Path("temp")
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / "particle_filter_evolution.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    logger.info({**log_data, "event": "plot_saved", "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 
     gc.collect()
-    logger.info(
-        {
-            **log_data,
-            "event": "goodbye",
-            "msg": "Finished the run and shut down cleanly.",
-            "shutdown_requested": is_shutdown_requested(),
-            "signal": get_shutdown_signal_name() or "none",
-        }
-    )
+    logger.info({**log_data, "event": "goodbye", "msg": "Finished the run and shut down cleanly.", "shutdown_requested": is_shutdown_requested(), "signal": get_shutdown_signal_name() or "none"})
 
 
 if __name__ == "__main__":

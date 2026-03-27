@@ -124,16 +124,7 @@ def install_signal_handlers(logger: Any, log_data: dict[str, object]) -> None:
 
         shutdown_requested = True
         shutdown_signal_name = signal.Signals(signum).name
-        logger.info(
-            {
-                **log_data,
-                "event": "shutdown_requested",
-                "msg": f"Received {shutdown_signal_name} and will finish the current run before shutting down.",
-                "signal": shutdown_signal_name,
-                "mode": "graceful",
-                "action": "finish_current_run",
-            }
-        )
+        logger.info({**log_data, "event": "shutdown_requested", "msg": f"Received {shutdown_signal_name} and will finish the current run before shutting down.", "signal": shutdown_signal_name, "mode": "graceful", "action": "finish_current_run"})
 
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
@@ -204,15 +195,7 @@ def log_setup_summary(
     headless: bool,
     **log_data: object,
 ) -> None:
-    logger.info(
-        {
-            **log_data,
-            "event": "simulation_setup",
-            "msg": "Completed simulation setup.",
-            "backend": backend_name,
-            "headless": headless,
-        }
-    )
+    logger.info({**log_data, "event": "simulation_setup", "msg": "Completed simulation setup.", "backend": backend_name, "headless": headless})
 
 
 def log_stage_started(logger: Any, stage: str, *, steps: int | None = None, **log_data: object) -> None:
@@ -226,26 +209,11 @@ def log_stage_started(logger: Any, stage: str, *, steps: int | None = None, **lo
 
 
 def log_stage_finished(logger: Any, stage: str, duration_seconds: float, **log_data: object) -> None:
-    logger.info(
-        {
-            **log_data,
-            "event": "stage_finished",
-            "msg": f"Finished {stage.replace('_', ' ')}.",
-            "stage": stage,
-        }
-    )
+    logger.info({**log_data, "event": "stage_finished", "msg": f"Finished {stage.replace('_', ' ')}.", "stage": stage})
 
 
 def log_substage_started(logger: Any, phase: str, substage: str, *, steps: int, **log_data: object) -> None:
-    logger.info(
-        {
-            **log_data,
-            "event": "substage_started",
-            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
-            "phase": phase,
-            "substage": substage,
-        }
-    )
+    logger.info({**log_data, "event": "substage_started", "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.", "phase": phase, "substage": substage})
 
 
 def log_substage_duration(
@@ -267,18 +235,7 @@ def log_substage_duration(
         "pf_replay": "particle filter replay",
         "pf_update": "particle filter update",
     }
-    logger.info(
-        {
-            **log_data,
-            "event": "substage_finished",
-            "msg": (
-                f"Finished {substage_labels.get(substage, substage.replace('_', ' '))} "
-                f"for {phase_labels.get(phase, phase.replace('_', ' '))}."
-            ),
-            "phase": phase,
-            "substage": substage,
-        }
-    )
+    logger.info({**log_data, "event": "substage_finished", "msg": f"Finished {substage_labels.get(substage, substage.replace('_', ' '))} for {phase_labels.get(phase, phase.replace('_', ' '))}.", "phase": phase, "substage": substage})
 
 
 def update_setup_metrics(
@@ -595,15 +552,7 @@ def run_phase_4_lift(
                                 last_result = step_result
                                 if not bool(step_result.get("skipped_invalid_update", False)):
                                     if attempt > 1:
-                                        ctx.logger.info(
-                                            {
-                                                **ctx.log_data,
-                                                "event": "warp_first_update_recovered",
-                                                "msg": f"Recovered the first Warp update after {attempt} attempts.",
-                                                "attempts": attempt,
-                                                "step": particle_filter._step_index - 1,
-                                            }
-                                        )
+                                        ctx.logger.info({**ctx.log_data, "event": "warp_first_update_recovered", "msg": f"Recovered the first Warp update after {attempt} attempts.", "attempts": attempt, "step": particle_filter._step_index - 1})
                                     break
                             step_result = last_result if last_result is not None else _warp_step(
                                 qpos, noisy_ft_reading, step
