@@ -4,9 +4,15 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
+from socketserver import ThreadingMixIn
+from typing import Any
 from typing import Iterable
+from wsgiref.simple_server import WSGIServer
+from wsgiref.simple_server import make_server
+
+from prometheus_client import CollectorRegistry
+from prometheus_client import Gauge
+from prometheus_client import make_wsgi_app
 
 from .logging_utils import get_process_memory_bytes
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
@@ -32,6 +38,10 @@ DEFAULT_SUBSTAGE_NAMES: tuple[tuple[str, str], ...] = (
     ("phase_4_lift", "pf_update"),
 )
 
+COMMON_LABELS = ("run_id",)
+STAGE_LABELS = ("run_id", "stage")
+SUBSTAGE_LABELS = ("run_id", "phase", "substage")
+
 
 @dataclass(frozen=True)
 class StageToken:
@@ -46,69 +56,7 @@ class SubstageToken:
     started_at: float
 
 
-class _MetricsStore:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._values: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
-        self._help: dict[str, str] = {}
-        self._types: dict[str, str] = {}
-        self._common_labels: dict[str, str] = {}
-
-    def set_common_labels(self, labels: dict[str, str]) -> None:
-        with self._lock:
-            self._common_labels = dict(labels)
-
-    def set_gauge(
-        self,
-        name: str,
-        value: float,
-        help_text: str,
-        labels: dict[str, str] | None = None,
-    ) -> None:
-        merged_labels = dict(self._common_labels)
-        if labels:
-            merged_labels.update(labels)
-        label_items = tuple(sorted(merged_labels.items()))
-        with self._lock:
-            self._help[name] = help_text
-            self._types[name] = "gauge"
-            self._values[(name, label_items)] = float(value)
-
-    def render(self) -> bytes:
-        lines: list[str] = []
-        with self._lock:
-            metric_names = sorted(self._help)
-            for name in metric_names:
-                lines.append(f"# HELP {name} {self._help[name]}")
-                lines.append(f"# TYPE {name} {self._types[name]}")
-                samples = [
-                    (label_items, value)
-                    for (metric_name, label_items), value in self._values.items()
-                    if metric_name == name
-                ]
-                for label_items, value in sorted(samples):
-                    lines.append(self._format_sample(name, label_items, value))
-        lines.append("")
-        return "\n".join(lines).encode("utf-8")
-
-    @staticmethod
-    def _format_sample(
-        name: str,
-        label_items: tuple[tuple[str, str], ...],
-        value: float,
-    ) -> str:
-        if not label_items:
-            return f"{name} {value}"
-
-        def escape_label(raw_value: str) -> str:
-            escaped = raw_value.replace("\\", "\\\\")
-            return escaped.replace('"', '\\"')
-
-        labels = ",".join(f'{key}="{escape_label(label_value)}"' for key, label_value in label_items)
-        return f"{name}{{{labels}}} {value}"
-
-
-class _ThreadedHTTPServer(ThreadingHTTPServer):
+class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 
@@ -117,46 +65,691 @@ class SimbayMetrics:
         self.enabled = enabled
         self.port = port
         self.run_id = run_id
-        self._store = _MetricsStore()
-        self._store.set_common_labels({"run_id": self.run_id})
-        self._server: _ThreadedHTTPServer | None = None
-        self._thread: threading.Thread | None = None
+        self.registry = CollectorRegistry()
+        self._host_cpu_count = max(os.cpu_count() or 1, 1)
+        self._server = None
+        self._server_thread: threading.Thread | None = None
         self._system_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._host_cpu_count = max(os.cpu_count() or 1, 1)
         self._known_stages: set[str] = set()
         self._known_substages: set[tuple[str, str]] = set()
+
+        self.backend_info = Gauge(
+            "simbay_backend_info",
+            "Resolved simulation backend and execution device.",
+            (*COMMON_LABELS, "backend", "device"),
+            registry=self.registry,
+        )
+        self.run_info = Gauge(
+            "simbay_run_info",
+            "Metadata for the current run.",
+            (*COMMON_LABELS, "backend", "particles", "control_dt"),
+            registry=self.registry,
+        )
+        self.particle_count = Gauge(
+            "simbay_particle_count",
+            "Configured particle count for the current run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.runtime_environment_info = Gauge(
+            "simbay_runtime_environment_info",
+            "Resolved execution runtime environment for the current run.",
+            (*COMMON_LABELS, "execution_platform", "execution_device", "default_jax_platform", "default_jax_device"),
+            registry=self.registry,
+        )
+        self.device_fallback_applied = Gauge(
+            "simbay_device_fallback_applied",
+            "Whether runtime device fallback was applied during setup.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.state_memory_total_bytes = Gauge(
+            "simbay_state_memory_total_bytes",
+            "Estimated total bytes used by particle state storage.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.state_memory_per_particle_bytes = Gauge(
+            "simbay_state_memory_per_particle_bytes",
+            "Estimated bytes used by particle state storage per particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.process_memory_per_particle_estimate_bytes = Gauge(
+            "simbay_process_memory_per_particle_estimate_bytes",
+            "Estimated process memory usage attributable to each particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mujoco_model_buffer_per_particle_bytes = Gauge(
+            "simbay_mujoco_model_buffer_per_particle_bytes",
+            "MuJoCo model buffer bytes per particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mujoco_data_buffer_per_particle_bytes = Gauge(
+            "simbay_mujoco_data_buffer_per_particle_bytes",
+            "MuJoCo data buffer bytes per particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mujoco_data_arena_per_particle_bytes = Gauge(
+            "simbay_mujoco_data_arena_per_particle_bytes",
+            "MuJoCo data arena bytes per particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mujoco_native_memory_per_particle_bytes = Gauge(
+            "simbay_mujoco_native_memory_per_particle_bytes",
+            "Estimated native MuJoCo memory per particle.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mujoco_native_memory_total_bytes = Gauge(
+            "simbay_mujoco_native_memory_total_bytes",
+            "Estimated total native MuJoCo memory across all particles.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.stage_active = Gauge(
+            "simbay_stage_active",
+            "Whether a simulation stage is currently active.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.stage_duration_seconds = Gauge(
+            "simbay_stage_duration_seconds",
+            "Wall-clock duration for each simulation stage.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_active = Gauge(
+            "simbay_substage_active",
+            "Whether a simulation substage is currently active.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_duration_seconds = Gauge(
+            "simbay_substage_duration_seconds",
+            "Wall-clock duration for each simulation substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_steps = Gauge(
+            "simbay_substage_steps",
+            "Workload size in discrete control steps for each substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_step_rate_hz = Gauge(
+            "simbay_substage_step_rate_hz",
+            "Discrete control steps processed per second for each substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_ms_per_step = Gauge(
+            "simbay_substage_ms_per_step",
+            "Milliseconds spent per control step for each substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_particle_steps_per_second = Gauge(
+            "simbay_substage_particle_steps_per_second",
+            "Particle-steps processed per second for each substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.substage_ms_per_particle_step = Gauge(
+            "simbay_substage_ms_per_particle_step",
+            "Milliseconds spent per particle-step for each substage.",
+            SUBSTAGE_LABELS,
+            registry=self.registry,
+        )
+        self.process_rss_bytes = Gauge(
+            "simbay_process_rss_bytes",
+            "Resident set size of the Simbay process.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.effective_sample_size = Gauge(
+            "simbay_effective_sample_size",
+            "Current effective sample size of the particle filter.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_estimate_kg = Gauge(
+            "simbay_mass_estimate_kg",
+            "Current mass estimate in kilograms.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_step_wall_seconds = Gauge(
+            "simbay_phase4_step_wall_seconds",
+            "Wall-clock duration of the latest lift/update step.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_step_cpu_seconds = Gauge(
+            "simbay_phase4_step_cpu_seconds",
+            "CPU duration of the latest lift/update step.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_cpu_equivalent_cores = Gauge(
+            "simbay_phase4_cpu_equivalent_cores",
+            "Approximate CPU core usage during the latest lift/update step.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_step_rate_hz = Gauge(
+            "simbay_phase4_step_rate_hz",
+            "Lift/update control steps processed per second.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_particle_steps_per_second = Gauge(
+            "simbay_phase4_particle_steps_per_second",
+            "Lift/update particle-steps processed per second.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_ms_per_particle_step = Gauge(
+            "simbay_phase4_ms_per_particle_step",
+            "Milliseconds spent per particle-step during the latest lift/update step.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_abs_error_kg = Gauge(
+            "simbay_mass_abs_error_kg",
+            "Absolute difference between the current mass estimate and the true mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_rel_error_pct = Gauge(
+            "simbay_mass_rel_error_pct",
+            "Relative percent error of the current mass estimate.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_mae_kg = Gauge(
+            "simbay_phase4_mae_kg",
+            "Running mean absolute error across phase-4 updates.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.phase4_rmse_kg = Gauge(
+            "simbay_phase4_rmse_kg",
+            "Running root mean squared error across phase-4 updates.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_error_within_1pct = Gauge(
+            "simbay_mass_error_within_1pct",
+            "Whether the latest mass estimate is within 1 percent of the true mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_error_within_5pct = Gauge(
+            "simbay_mass_error_within_5pct",
+            "Whether the latest mass estimate is within 5 percent of the true mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.mass_error_within_10pct = Gauge(
+            "simbay_mass_error_within_10pct",
+            "Whether the latest mass estimate is within 10 percent of the true mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.convergence_time_to_5pct_seconds = Gauge(
+            "simbay_convergence_time_to_5pct_seconds",
+            "Time until the mass estimate first reached 5 percent relative error or better, or -1 if not reached.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.convergence_time_to_10pct_seconds = Gauge(
+            "simbay_convergence_time_to_10pct_seconds",
+            "Time until the mass estimate first reached 10 percent relative error or better, or -1 if not reached.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.time_to_first_estimate_seconds = Gauge(
+            "simbay_time_to_first_estimate_seconds",
+            "Time from run start until the first phase-4 estimate was produced.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.credible_interval_50_width_kg = Gauge(
+            "simbay_credible_interval_50_width_kg",
+            "Width of the central 50 percent credible interval over particle mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.credible_interval_90_width_kg = Gauge(
+            "simbay_credible_interval_90_width_kg",
+            "Width of the central 90 percent credible interval over particle mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.credible_interval_50_contains_truth = Gauge(
+            "simbay_credible_interval_50_contains_truth",
+            "Whether the true mass lies inside the central 50 percent credible interval.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.credible_interval_90_contains_truth = Gauge(
+            "simbay_credible_interval_90_contains_truth",
+            "Whether the true mass lies inside the central 90 percent credible interval.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.weight_entropy = Gauge(
+            "simbay_weight_entropy",
+            "Shannon entropy of the current particle-weight distribution.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.weight_entropy_normalized = Gauge(
+            "simbay_weight_entropy_normalized",
+            "Particle-weight entropy normalized by the maximum possible entropy.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.weight_perplexity = Gauge(
+            "simbay_weight_perplexity",
+            "Effective number of weight states implied by the current particle-weight distribution.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.resample_count = Gauge(
+            "simbay_resample_count",
+            "Total number of particle-filter resampling events in the current run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.resample_rate = Gauge(
+            "simbay_resample_rate",
+            "Fraction of particle-filter update steps that triggered resampling.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.last_step_resampled = Gauge(
+            "simbay_last_step_resampled",
+            "Whether the latest particle-filter update step triggered resampling.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_min_kg = Gauge(
+            "simbay_particle_mass_min_kg",
+            "Minimum particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_max_kg = Gauge(
+            "simbay_particle_mass_max_kg",
+            "Maximum particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_mean_kg = Gauge(
+            "simbay_particle_mass_mean_kg",
+            "Mean particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_std_kg = Gauge(
+            "simbay_particle_mass_std_kg",
+            "Standard deviation of particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_p10_kg = Gauge(
+            "simbay_particle_mass_p10_kg",
+            "10th percentile of particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_p50_kg = Gauge(
+            "simbay_particle_mass_p50_kg",
+            "50th percentile of particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.particle_mass_p90_kg = Gauge(
+            "simbay_particle_mass_p90_kg",
+            "90th percentile of particle mass in kilograms for the latest particle cloud.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.sim_force_finite_ratio = Gauge(
+            "simbay_sim_force_finite_ratio",
+            "Fraction of simulated force samples that are finite.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.measurement_residual_finite_ratio = Gauge(
+            "simbay_measurement_residual_finite_ratio",
+            "Fraction of measurement residual samples that are finite.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_finite_ratio = Gauge(
+            "simbay_likelihood_finite_ratio",
+            "Fraction of likelihood samples that are finite.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.sim_force_norm_mean = Gauge(
+            "simbay_sim_force_norm_mean",
+            "Mean norm of simulated force samples for the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.measurement_residual_norm_mean = Gauge(
+            "simbay_measurement_residual_norm_mean",
+            "Mean norm of measurement residuals for the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_min = Gauge(
+            "simbay_likelihood_min",
+            "Minimum particle likelihood from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_max = Gauge(
+            "simbay_likelihood_max",
+            "Maximum particle likelihood from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_mean = Gauge(
+            "simbay_likelihood_mean",
+            "Mean particle likelihood from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_std = Gauge(
+            "simbay_likelihood_std",
+            "Standard deviation of particle likelihoods from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.invalid_sensor_events_total = Gauge(
+            "simbay_invalid_sensor_events_total",
+            "Cumulative count of likelihood evaluations that produced non-finite sensor-derived values.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.invalid_state_events_total = Gauge(
+            "simbay_invalid_state_events_total",
+            "Cumulative count of Warp state snapshots with non-finite entries.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.skipped_invalid_updates_total = Gauge(
+            "simbay_skipped_invalid_updates_total",
+            "Cumulative count of Warp filter updates skipped because the likelihood batch or backend state was invalid.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.skipped_invalid_update = Gauge(
+            "simbay_skipped_invalid_update",
+            "Whether the latest Warp filter update was skipped because the likelihood batch or backend state was invalid.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.first_update_bootstrap_attempts = Gauge(
+            "simbay_first_update_bootstrap_attempts",
+            "Number of attempts used to obtain a valid first Warp phase-4 measurement update.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.first_invalid_sensor_step = Gauge(
+            "simbay_first_invalid_sensor_step",
+            "First Warp filter step index that produced a non-finite sensor-derived value, or -1 if none.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.first_invalid_state_step = Gauge(
+            "simbay_first_invalid_state_step",
+            "First Warp filter step index that produced a non-finite backend state value, or -1 if none.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.sim_force_nonfinite_count = Gauge(
+            "simbay_sim_force_nonfinite_count",
+            "Count of non-finite simulated force entries from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.measurement_residual_nonfinite_count = Gauge(
+            "simbay_measurement_residual_nonfinite_count",
+            "Count of non-finite measurement residual entries from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_nonfinite_count = Gauge(
+            "simbay_likelihood_nonfinite_count",
+            "Count of non-finite particle likelihoods from the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.qpos_nonfinite_count = Gauge(
+            "simbay_qpos_nonfinite_count",
+            "Count of non-finite Warp qpos entries in the latest sampled state snapshot.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.qvel_nonfinite_count = Gauge(
+            "simbay_qvel_nonfinite_count",
+            "Count of non-finite Warp qvel entries in the latest sampled state snapshot.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.sensordata_nonfinite_count = Gauge(
+            "simbay_sensordata_nonfinite_count",
+            "Count of non-finite Warp sensordata entries in the latest sampled state snapshot.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.ctrl_nonfinite_count = Gauge(
+            "simbay_ctrl_nonfinite_count",
+            "Count of non-finite Warp ctrl entries in the latest sampled state snapshot.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.contact_count_mean = Gauge(
+            "simbay_contact_count_mean",
+            "Mean contact count across Warp particles for the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.contact_count_max = Gauge(
+            "simbay_contact_count_max",
+            "Maximum contact count across Warp particles for the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.active_contact_particle_ratio = Gauge(
+            "simbay_active_contact_particle_ratio",
+            "Fraction of Warp particles with at least one active contact.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.contact_metric_available = Gauge(
+            "simbay_contact_metric_available",
+            "Whether Warp exposed a contact-count array for the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.contact_force_mismatch = Gauge(
+            "simbay_contact_force_mismatch",
+            "Whether the latest likelihood evaluation had non-zero force signal but zero reported contacts.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.valid_force_particle_ratio = Gauge(
+            "simbay_valid_force_particle_ratio",
+            "Fraction of particles with finite force vectors in the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.force_signal_particle_ratio = Gauge(
+            "simbay_force_signal_particle_ratio",
+            "Fraction of particles with non-trivial simulated force norm in the latest likelihood evaluation.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.uniform_weight_l1_distance = Gauge(
+            "simbay_uniform_weight_l1_distance",
+            "L1 distance between current particle weights and a perfectly uniform distribution.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.uniform_weight_max_deviation = Gauge(
+            "simbay_uniform_weight_max_deviation",
+            "Maximum per-particle absolute deviation from uniform weights.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.likelihood_collapsed_to_uniform = Gauge(
+            "simbay_likelihood_collapsed_to_uniform",
+            "Whether the latest particle-weight update remained effectively uniform.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.warp_bytes_in_use = Gauge(
+            "simbay_warp_bytes_in_use",
+            "Observed execution-device bytes used when Warp reports free/total memory, otherwise a tracked Warp state-byte estimate.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.warp_peak_bytes_in_use = Gauge(
+            "simbay_warp_peak_bytes_in_use",
+            "Peak observed execution-device bytes used during the run, or peak tracked Warp state-byte estimate when device memory usage is unavailable.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.warp_bytes_limit = Gauge(
+            "simbay_warp_bytes_limit",
+            "Warp execution-device total memory in bytes when available.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.warp_state_bytes_estimate = Gauge(
+            "simbay_warp_state_bytes_estimate",
+            "Tracked lower-bound byte estimate for Warp model/data arrays and recovery snapshots.",
+            STAGE_LABELS,
+            registry=self.registry,
+        )
+        self.prediction_ready_seconds = Gauge(
+            "simbay_prediction_ready_seconds",
+            "Total wall-clock time until a final prediction is available.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.final_error_pct = Gauge(
+            "simbay_final_error_pct",
+            "Final percent error of the predicted mass.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.process_memory_rss_bytes = Gauge(
+            "simbay_process_memory_rss_bytes",
+            "Resident set size of the Simbay process.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.host_memory_used_bytes = Gauge(
+            "simbay_host_memory_used_bytes",
+            "Host memory currently in use for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.host_cpu_utilization_pct = Gauge(
+            "simbay_host_cpu_utilization_pct",
+            "Host CPU utilisation percentage for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.process_cpu_utilization_pct = Gauge(
+            "simbay_process_cpu_utilization_pct",
+            "CPU utilisation percentage of the Simbay process, expressed relative to one full core.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.process_cpu_machine_pct = Gauge(
+            "simbay_process_cpu_machine_pct",
+            "CPU utilisation percentage of the Simbay process, expressed relative to total machine CPU capacity.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_utilization_pct = Gauge(
+            "simbay_gpu_utilization_pct",
+            "GPU utilisation percentage for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_fb_used_bytes = Gauge(
+            "simbay_gpu_fb_used_bytes",
+            "GPU frame-buffer memory currently in use for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_fb_utilization_pct = Gauge(
+            "simbay_gpu_fb_utilization_pct",
+            "GPU frame-buffer memory utilisation percentage for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_power_watts = Gauge(
+            "simbay_gpu_power_watts",
+            "GPU power draw in watts for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_temp_celsius = Gauge(
+            "simbay_gpu_temp_celsius",
+            "GPU temperature in degrees Celsius for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_sm_clock_hz = Gauge(
+            "simbay_gpu_sm_clock_hz",
+            "GPU SM clock frequency in hertz for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+        self.gpu_mem_clock_hz = Gauge(
+            "simbay_gpu_mem_clock_hz",
+            "GPU memory clock frequency in hertz for this benchmark run.",
+            COMMON_LABELS,
+            registry=self.registry,
+        )
+
+    def _common(self) -> tuple[str]:
+        return (self.run_id,)
+
+    def _stage(self, stage: str) -> tuple[str, str]:
+        return (self.run_id, stage)
+
+    def _substage(self, phase: str, substage: str) -> tuple[str, str, str]:
+        return (self.run_id, phase, substage)
 
     def start(self) -> None:
         if not self.enabled or self._server is not None:
             return
-
-        store = self._store
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802
-                if self.path != "/metrics":
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                payload = store.render()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; version=0.0.4")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, format: str, *args) -> None:  # noqa: A003
-                return
-
         try:
-            self._server = _ThreadedHTTPServer(("0.0.0.0", self.port), Handler)
+            app = make_wsgi_app(self.registry)
+            self._server = make_server("0.0.0.0", self.port, app, server_class=_ThreadingWSGIServer)
         except OSError:
             self._server = None
             return
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
         self._stop_event.clear()
+        self._server_thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._server_thread.start()
         self._sample_system_metrics(previous_cpu_totals=None, previous_process_totals=None)
         self._system_thread = threading.Thread(target=self._run_system_sampler, daemon=True)
         self._system_thread.start()
@@ -172,78 +765,37 @@ class SimbayMetrics:
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._server is None:
-            return
-        self._server.shutdown()
-        self._server.server_close()
-        if self._thread is not None:
-            self._thread.join()
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._server_thread is not None:
+            self._server_thread.join()
         if self._system_thread is not None:
             self._system_thread.join()
         self._server = None
-        self._thread = None
+        self._server_thread = None
         self._system_thread = None
 
     def register_stages(self, stages: Iterable[str]) -> None:
         for stage in stages:
             self._known_stages.add(stage)
-            self._store.set_gauge(
-                "simbay_stage_active",
-                0.0,
-                "Whether a simulation stage is currently active.",
-                {"stage": stage},
-            )
-            self._store.set_gauge(
-                "simbay_stage_duration_seconds",
-                0.0,
-                "Wall-clock duration for each simulation stage.",
-                {"stage": stage},
-            )
+            self.stage_active.labels(*self._stage(stage)).set(0.0)
+            self.stage_duration_seconds.labels(*self._stage(stage)).set(0.0)
 
     def register_substages(self, substages: Iterable[tuple[str, str]]) -> None:
         for phase, substage in substages:
-            key = (phase, substage)
-            self._known_substages.add(key)
-            labels = {"phase": phase, "substage": substage}
-            self._store.set_gauge(
-                "simbay_substage_active",
-                0.0,
-                "Whether a simulation substage is currently active.",
-                labels,
-            )
-            self._store.set_gauge(
-                "simbay_substage_duration_seconds",
-                0.0,
-                "Wall-clock duration for each simulation substage.",
-                labels,
-            )
+            self._known_substages.add((phase, substage))
+            self.substage_active.labels(*self._substage(phase, substage)).set(0.0)
+            self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(0.0)
 
     def set_backend(self, backend: str, device: str) -> None:
-        self._store.set_gauge(
-            "simbay_backend_info",
-            1.0,
-            "Resolved simulation backend and execution device.",
-            {"backend": backend, "device": device},
-        )
+        self.backend_info.labels(*self._common(), backend, device).set(1.0)
 
     def set_run_info(self, backend: str, particles: int, control_dt: float) -> None:
-        self._store.set_gauge(
-            "simbay_run_info",
-            1.0,
-            "Metadata for the current run.",
-            {
-                "backend": backend,
-                "particles": str(particles),
-                "control_dt": f"{control_dt:.6f}",
-            },
-        )
+        self.run_info.labels(*self._common(), backend, str(particles), f"{control_dt:.6f}").set(1.0)
 
     def set_particle_count(self, particles: int) -> None:
-        self._store.set_gauge(
-            "simbay_particle_count",
-            particles,
-            "Configured particle count for the current run.",
-        )
+        self.particle_count.labels(*self._common()).set(particles)
 
     def set_memory_profile(
         self,
@@ -252,21 +804,9 @@ class SimbayMetrics:
         state_bytes_per_particle: int,
         process_memory_per_particle_estimate_bytes: int,
     ) -> None:
-        self._store.set_gauge(
-            "simbay_state_memory_total_bytes",
-            state_bytes_total,
-            "Estimated total bytes used by particle state storage.",
-        )
-        self._store.set_gauge(
-            "simbay_state_memory_per_particle_bytes",
-            state_bytes_per_particle,
-            "Estimated bytes used by particle state storage per particle.",
-        )
-        self._store.set_gauge(
-            "simbay_process_memory_per_particle_estimate_bytes",
-            process_memory_per_particle_estimate_bytes,
-            "Estimated process memory usage attributable to each particle.",
-        )
+        self.state_memory_total_bytes.labels(*self._common()).set(state_bytes_total)
+        self.state_memory_per_particle_bytes.labels(*self._common()).set(state_bytes_per_particle)
+        self.process_memory_per_particle_estimate_bytes.labels(*self._common()).set(process_memory_per_particle_estimate_bytes)
 
     def set_mujoco_memory_profile(
         self,
@@ -277,31 +817,11 @@ class SimbayMetrics:
         native_bytes_per_robot: int,
         native_bytes_total: int,
     ) -> None:
-        self._store.set_gauge(
-            "simbay_mujoco_model_buffer_per_particle_bytes",
-            model_nbuffer_bytes_per_robot,
-            "MuJoCo model buffer bytes per particle.",
-        )
-        self._store.set_gauge(
-            "simbay_mujoco_data_buffer_per_particle_bytes",
-            data_nbuffer_bytes_per_robot,
-            "MuJoCo data buffer bytes per particle.",
-        )
-        self._store.set_gauge(
-            "simbay_mujoco_data_arena_per_particle_bytes",
-            data_narena_bytes_per_robot,
-            "MuJoCo data arena bytes per particle.",
-        )
-        self._store.set_gauge(
-            "simbay_mujoco_native_memory_per_particle_bytes",
-            native_bytes_per_robot,
-            "Estimated native MuJoCo memory per particle.",
-        )
-        self._store.set_gauge(
-            "simbay_mujoco_native_memory_total_bytes",
-            native_bytes_total,
-            "Estimated total native MuJoCo memory across all particles.",
-        )
+        self.mujoco_model_buffer_per_particle_bytes.labels(*self._common()).set(model_nbuffer_bytes_per_robot)
+        self.mujoco_data_buffer_per_particle_bytes.labels(*self._common()).set(data_nbuffer_bytes_per_robot)
+        self.mujoco_data_arena_per_particle_bytes.labels(*self._common()).set(data_narena_bytes_per_robot)
+        self.mujoco_native_memory_per_particle_bytes.labels(*self._common()).set(native_bytes_per_robot)
+        self.mujoco_native_memory_total_bytes.labels(*self._common()).set(native_bytes_total)
 
     def set_runtime_environment(
         self,
@@ -312,62 +832,34 @@ class SimbayMetrics:
         default_jax_device: str,
         device_fallback_applied: bool,
     ) -> None:
-        self._store.set_gauge(
-            "simbay_runtime_environment_info",
-            1.0,
-            "Resolved execution runtime environment for the current run.",
-            {
-                "execution_platform": execution_platform,
-                "execution_device": execution_device,
-                "default_jax_platform": default_jax_platform,
-                "default_jax_device": default_jax_device,
-            },
-        )
-        self._store.set_gauge(
-            "simbay_device_fallback_applied",
-            1.0 if device_fallback_applied else 0.0,
-            "Whether runtime device fallback was applied during setup.",
-        )
+        self.runtime_environment_info.labels(
+            *self._common(),
+            execution_platform,
+            execution_device,
+            default_jax_platform,
+            default_jax_device,
+        ).set(1.0)
+        self.device_fallback_applied.labels(*self._common()).set(1.0 if device_fallback_applied else 0.0)
 
     def start_stage(self, stage: str) -> StageToken:
         if stage not in self._known_stages:
             self.register_stages([stage])
         for known_stage in self._known_stages:
-            self._store.set_gauge(
-                "simbay_stage_active",
-                1.0 if known_stage == stage else 0.0,
-                "Whether a simulation stage is currently active.",
-                {"stage": known_stage},
-            )
+            self.stage_active.labels(*self._stage(known_stage)).set(1.0 if known_stage == stage else 0.0)
         self.update_process_rss(stage)
         return StageToken(stage=stage, started_at=time.perf_counter())
 
-    def finish_stage(self, token: StageToken) -> None:
+    def finish_stage(self, token: StageToken) -> float:
         duration = time.perf_counter() - token.started_at
-        self._store.set_gauge(
-            "simbay_stage_active",
-            0.0,
-            "Whether a simulation stage is currently active.",
-            {"stage": token.stage},
-        )
-        self._store.set_gauge(
-            "simbay_stage_duration_seconds",
-            duration,
-            "Wall-clock duration for each simulation stage.",
-            {"stage": token.stage},
-        )
+        self.stage_active.labels(*self._stage(token.stage)).set(0.0)
+        self.stage_duration_seconds.labels(*self._stage(token.stage)).set(duration)
         self.update_process_rss(token.stage)
         return duration
 
     def start_substage(self, phase: str, substage: str) -> SubstageToken:
         if (phase, substage) not in self._known_substages:
             self.register_substages([(phase, substage)])
-        self._store.set_gauge(
-            "simbay_substage_active",
-            1.0,
-            "Whether a simulation substage is currently active.",
-            {"phase": phase, "substage": substage},
-        )
+        self.substage_active.labels(*self._substage(phase, substage)).set(1.0)
         return SubstageToken(phase=phase, substage=substage, started_at=time.perf_counter())
 
     def finish_substage(self, token: SubstageToken) -> float:
@@ -378,591 +870,131 @@ class SimbayMetrics:
     def set_substage_duration(self, phase: str, substage: str, duration: float) -> None:
         if (phase, substage) not in self._known_substages:
             self.register_substages([(phase, substage)])
-        labels = {"phase": phase, "substage": substage}
-        self._store.set_gauge(
-            "simbay_substage_active",
-            0.0,
-            "Whether a simulation substage is currently active.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_substage_duration_seconds",
-            duration,
-            "Wall-clock duration for each simulation substage.",
-            labels,
-        )
+        self.substage_active.labels(*self._substage(phase, substage)).set(0.0)
+        self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(duration)
 
-    def set_substage_workload(
-        self,
-        phase: str,
-        substage: str,
-        steps: int,
-        particles: int,
-        duration_seconds: float,
-    ) -> None:
-        labels = {"phase": phase, "substage": substage}
+    def set_substage_workload(self, phase: str, substage: str, steps: int, particles: int, duration_seconds: float) -> None:
         particle_steps = float(steps * max(particles, 0))
         step_rate = float(steps / duration_seconds) if duration_seconds > 0 else 0.0
         particle_step_rate = particle_steps / duration_seconds if duration_seconds > 0 else 0.0
         ms_per_step = (duration_seconds * 1000.0 / steps) if steps > 0 else 0.0
         ms_per_particle_step = duration_seconds * 1000.0 / particle_steps if particle_steps > 0 else 0.0
-        self._store.set_gauge(
-            "simbay_substage_steps",
-            steps,
-            "Workload size in discrete control steps for each substage.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_substage_step_rate_hz",
-            step_rate,
-            "Discrete control steps processed per second for each substage.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_substage_ms_per_step",
-            ms_per_step,
-            "Milliseconds spent per control step for each substage.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_substage_particle_steps_per_second",
-            particle_step_rate,
-            "Particle-steps processed per second for each substage.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_substage_ms_per_particle_step",
-            ms_per_particle_step,
-            "Milliseconds spent per particle-step for each substage.",
-            labels,
-        )
+        labels = self._substage(phase, substage)
+        self.substage_steps.labels(*labels).set(steps)
+        self.substage_step_rate_hz.labels(*labels).set(step_rate)
+        self.substage_ms_per_step.labels(*labels).set(ms_per_step)
+        self.substage_particle_steps_per_second.labels(*labels).set(particle_step_rate)
+        self.substage_ms_per_particle_step.labels(*labels).set(ms_per_particle_step)
 
     def update_process_rss(self, stage: str) -> None:
-        self._store.set_gauge(
-            "simbay_process_rss_bytes",
-            get_process_memory_bytes(),
-            "Resident set size of the Simbay process.",
-            {"stage": stage},
-        )
+        self.process_rss_bytes.labels(*self._stage(stage)).set(get_process_memory_bytes())
 
-    def update_filter_state(
-        self,
-        ess: float,
-        estimate: float,
-        wall_seconds: float,
-        cpu_seconds: float,
-        cpu_equivalent_cores: float,
-        particles: int,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_effective_sample_size",
-            ess,
-            "Current effective sample size of the particle filter.",
-        )
-        self._store.set_gauge(
-            "simbay_mass_estimate_kg",
-            estimate,
-            "Current mass estimate in kilograms.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_step_wall_seconds",
-            wall_seconds,
-            "Wall-clock duration of the latest lift/update step.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_step_cpu_seconds",
-            cpu_seconds,
-            "CPU duration of the latest lift/update step.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_cpu_equivalent_cores",
-            cpu_equivalent_cores,
-            "Approximate CPU core usage during the latest lift/update step.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_step_rate_hz",
-            1.0 / wall_seconds if wall_seconds > 0 else 0.0,
-            "Lift/update control steps processed per second.",
-        )
+    def update_filter_state(self, ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
+        self.effective_sample_size.labels(*self._common()).set(ess)
+        self.mass_estimate_kg.labels(*self._common()).set(estimate)
+        self.phase4_step_wall_seconds.labels(*self._common()).set(wall_seconds)
+        self.phase4_step_cpu_seconds.labels(*self._common()).set(cpu_seconds)
+        self.phase4_cpu_equivalent_cores.labels(*self._common()).set(cpu_equivalent_cores)
+        self.phase4_step_rate_hz.labels(*self._common()).set(1.0 / wall_seconds if wall_seconds > 0 else 0.0)
         particle_steps = float(max(particles, 0))
-        self._store.set_gauge(
-            "simbay_phase4_particle_steps_per_second",
-            particle_steps / wall_seconds if wall_seconds > 0 else 0.0,
-            "Lift/update particle-steps processed per second.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_ms_per_particle_step",
-            (wall_seconds * 1000.0 / particle_steps) if particle_steps > 0 else 0.0,
-            "Milliseconds spent per particle-step during the latest lift/update step.",
-        )
+        self.phase4_particle_steps_per_second.labels(*self._common()).set(particle_steps / wall_seconds if wall_seconds > 0 else 0.0)
+        self.phase4_ms_per_particle_step.labels(*self._common()).set((wall_seconds * 1000.0 / particle_steps) if particle_steps > 0 else 0.0)
 
-    def update_accuracy_metrics(
-        self,
-        *,
-        mass_abs_error_kg: float,
-        mass_rel_error_pct: float,
-        phase4_mae_kg: float,
-        phase4_rmse_kg: float,
-        mass_error_within_1pct: bool,
-        mass_error_within_5pct: bool,
-        mass_error_within_10pct: bool,
-        convergence_time_to_5pct_seconds: float,
-        convergence_time_to_10pct_seconds: float,
-        time_to_first_estimate_seconds: float,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_mass_abs_error_kg",
-            mass_abs_error_kg,
-            "Absolute difference between the current mass estimate and the true mass.",
-        )
-        self._store.set_gauge(
-            "simbay_mass_rel_error_pct",
-            mass_rel_error_pct,
-            "Relative percent error of the current mass estimate.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_mae_kg",
-            phase4_mae_kg,
-            "Running mean absolute error across phase-4 updates.",
-        )
-        self._store.set_gauge(
-            "simbay_phase4_rmse_kg",
-            phase4_rmse_kg,
-            "Running root mean squared error across phase-4 updates.",
-        )
-        self._store.set_gauge(
-            "simbay_mass_error_within_1pct",
-            1.0 if mass_error_within_1pct else 0.0,
-            "Whether the latest mass estimate is within 1 percent of the true mass.",
-        )
-        self._store.set_gauge(
-            "simbay_mass_error_within_5pct",
-            1.0 if mass_error_within_5pct else 0.0,
-            "Whether the latest mass estimate is within 5 percent of the true mass.",
-        )
-        self._store.set_gauge(
-            "simbay_mass_error_within_10pct",
-            1.0 if mass_error_within_10pct else 0.0,
-            "Whether the latest mass estimate is within 10 percent of the true mass.",
-        )
-        self._store.set_gauge(
-            "simbay_convergence_time_to_5pct_seconds",
-            convergence_time_to_5pct_seconds,
-            "Time until the mass estimate first reached 5 percent relative error or better, or -1 if not reached.",
-        )
-        self._store.set_gauge(
-            "simbay_convergence_time_to_10pct_seconds",
-            convergence_time_to_10pct_seconds,
-            "Time until the mass estimate first reached 10 percent relative error or better, or -1 if not reached.",
-        )
-        self._store.set_gauge(
-            "simbay_time_to_first_estimate_seconds",
-            time_to_first_estimate_seconds,
-            "Time from run start until the first phase-4 estimate was produced.",
-        )
+    def update_accuracy_metrics(self, *, mass_abs_error_kg: float, mass_rel_error_pct: float, phase4_mae_kg: float, phase4_rmse_kg: float, mass_error_within_1pct: bool, mass_error_within_5pct: bool, mass_error_within_10pct: bool, convergence_time_to_5pct_seconds: float, convergence_time_to_10pct_seconds: float, time_to_first_estimate_seconds: float) -> None:
+        self.mass_abs_error_kg.labels(*self._common()).set(mass_abs_error_kg)
+        self.mass_rel_error_pct.labels(*self._common()).set(mass_rel_error_pct)
+        self.phase4_mae_kg.labels(*self._common()).set(phase4_mae_kg)
+        self.phase4_rmse_kg.labels(*self._common()).set(phase4_rmse_kg)
+        self.mass_error_within_1pct.labels(*self._common()).set(1.0 if mass_error_within_1pct else 0.0)
+        self.mass_error_within_5pct.labels(*self._common()).set(1.0 if mass_error_within_5pct else 0.0)
+        self.mass_error_within_10pct.labels(*self._common()).set(1.0 if mass_error_within_10pct else 0.0)
+        self.convergence_time_to_5pct_seconds.labels(*self._common()).set(convergence_time_to_5pct_seconds)
+        self.convergence_time_to_10pct_seconds.labels(*self._common()).set(convergence_time_to_10pct_seconds)
+        self.time_to_first_estimate_seconds.labels(*self._common()).set(time_to_first_estimate_seconds)
 
-    def update_uncertainty_metrics(
-        self,
-        *,
-        credible_interval_50_width_kg: float,
-        credible_interval_90_width_kg: float,
-        credible_interval_50_contains_truth: bool,
-        credible_interval_90_contains_truth: bool,
-        weight_entropy: float,
-        weight_entropy_normalized: float,
-        weight_perplexity: float,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_credible_interval_50_width_kg",
-            credible_interval_50_width_kg,
-            "Width of the central 50 percent credible interval over particle mass.",
-        )
-        self._store.set_gauge(
-            "simbay_credible_interval_90_width_kg",
-            credible_interval_90_width_kg,
-            "Width of the central 90 percent credible interval over particle mass.",
-        )
-        self._store.set_gauge(
-            "simbay_credible_interval_50_contains_truth",
-            1.0 if credible_interval_50_contains_truth else 0.0,
-            "Whether the true mass lies inside the central 50 percent credible interval.",
-        )
-        self._store.set_gauge(
-            "simbay_credible_interval_90_contains_truth",
-            1.0 if credible_interval_90_contains_truth else 0.0,
-            "Whether the true mass lies inside the central 90 percent credible interval.",
-        )
-        self._store.set_gauge(
-            "simbay_weight_entropy",
-            weight_entropy,
-            "Shannon entropy of the current particle-weight distribution.",
-        )
-        self._store.set_gauge(
-            "simbay_weight_entropy_normalized",
-            weight_entropy_normalized,
-            "Particle-weight entropy normalized by the maximum possible entropy.",
-        )
-        self._store.set_gauge(
-            "simbay_weight_perplexity",
-            weight_perplexity,
-            "Effective number of weight states implied by the current particle-weight distribution.",
-        )
+    def update_uncertainty_metrics(self, *, credible_interval_50_width_kg: float, credible_interval_90_width_kg: float, credible_interval_50_contains_truth: bool, credible_interval_90_contains_truth: bool, weight_entropy: float, weight_entropy_normalized: float, weight_perplexity: float) -> None:
+        self.credible_interval_50_width_kg.labels(*self._common()).set(credible_interval_50_width_kg)
+        self.credible_interval_90_width_kg.labels(*self._common()).set(credible_interval_90_width_kg)
+        self.credible_interval_50_contains_truth.labels(*self._common()).set(1.0 if credible_interval_50_contains_truth else 0.0)
+        self.credible_interval_90_contains_truth.labels(*self._common()).set(1.0 if credible_interval_90_contains_truth else 0.0)
+        self.weight_entropy.labels(*self._common()).set(weight_entropy)
+        self.weight_entropy_normalized.labels(*self._common()).set(weight_entropy_normalized)
+        self.weight_perplexity.labels(*self._common()).set(weight_perplexity)
 
-    def update_resample_state(
-        self,
-        *,
-        steps: int,
-        resample_count: int,
-        resampled: bool,
-        particle_min: float,
-        particle_max: float,
-        particle_mean: float,
-        particle_std: float,
-        particle_p10: float,
-        particle_p50: float,
-        particle_p90: float,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_resample_count",
-            resample_count,
-            "Total number of particle-filter resampling events in the current run.",
-        )
-        self._store.set_gauge(
-            "simbay_resample_rate",
-            (resample_count / steps) if steps > 0 else 0.0,
-            "Fraction of particle-filter update steps that triggered resampling.",
-        )
-        self._store.set_gauge(
-            "simbay_last_step_resampled",
-            1.0 if resampled else 0.0,
-            "Whether the latest particle-filter update step triggered resampling.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_min_kg",
-            particle_min,
-            "Minimum particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_max_kg",
-            particle_max,
-            "Maximum particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_mean_kg",
-            particle_mean,
-            "Mean particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_std_kg",
-            particle_std,
-            "Standard deviation of particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_p10_kg",
-            particle_p10,
-            "10th percentile of particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_p50_kg",
-            particle_p50,
-            "50th percentile of particle mass in kilograms for the latest particle cloud.",
-        )
-        self._store.set_gauge(
-            "simbay_particle_mass_p90_kg",
-            particle_p90,
-            "90th percentile of particle mass in kilograms for the latest particle cloud.",
-        )
+    def update_resample_state(self, *, steps: int, resample_count: int, resampled: bool, particle_min: float, particle_max: float, particle_mean: float, particle_std: float, particle_p10: float, particle_p50: float, particle_p90: float) -> None:
+        self.resample_count.labels(*self._common()).set(resample_count)
+        self.resample_rate.labels(*self._common()).set((resample_count / steps) if steps > 0 else 0.0)
+        self.last_step_resampled.labels(*self._common()).set(1.0 if resampled else 0.0)
+        self.particle_mass_min_kg.labels(*self._common()).set(particle_min)
+        self.particle_mass_max_kg.labels(*self._common()).set(particle_max)
+        self.particle_mass_mean_kg.labels(*self._common()).set(particle_mean)
+        self.particle_mass_std_kg.labels(*self._common()).set(particle_std)
+        self.particle_mass_p10_kg.labels(*self._common()).set(particle_p10)
+        self.particle_mass_p50_kg.labels(*self._common()).set(particle_p50)
+        self.particle_mass_p90_kg.labels(*self._common()).set(particle_p90)
 
-    def update_likelihood_health(
-        self,
-        *,
-        sim_force_finite_ratio: float,
-        diff_finite_ratio: float,
-        likelihood_finite_ratio: float,
-        sim_force_norm_mean: float,
-        diff_norm_mean: float,
-        likelihood_min: float,
-        likelihood_max: float,
-        likelihood_mean: float,
-        likelihood_std: float,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_sim_force_finite_ratio",
-            sim_force_finite_ratio,
-            "Fraction of simulated force samples that are finite.",
-        )
-        self._store.set_gauge(
-            "simbay_measurement_residual_finite_ratio",
-            diff_finite_ratio,
-            "Fraction of measurement residual samples that are finite.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_finite_ratio",
-            likelihood_finite_ratio,
-            "Fraction of likelihood samples that are finite.",
-        )
-        self._store.set_gauge(
-            "simbay_sim_force_norm_mean",
-            sim_force_norm_mean,
-            "Mean norm of simulated force samples for the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_measurement_residual_norm_mean",
-            diff_norm_mean,
-            "Mean norm of measurement residuals for the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_min",
-            likelihood_min,
-            "Minimum particle likelihood from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_max",
-            likelihood_max,
-            "Maximum particle likelihood from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_mean",
-            likelihood_mean,
-            "Mean particle likelihood from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_std",
-            likelihood_std,
-            "Standard deviation of particle likelihoods from the latest likelihood evaluation.",
-        )
+    def update_likelihood_health(self, *, sim_force_finite_ratio: float, diff_finite_ratio: float, likelihood_finite_ratio: float, sim_force_norm_mean: float, diff_norm_mean: float, likelihood_min: float, likelihood_max: float, likelihood_mean: float, likelihood_std: float) -> None:
+        self.sim_force_finite_ratio.labels(*self._common()).set(sim_force_finite_ratio)
+        self.measurement_residual_finite_ratio.labels(*self._common()).set(diff_finite_ratio)
+        self.likelihood_finite_ratio.labels(*self._common()).set(likelihood_finite_ratio)
+        self.sim_force_norm_mean.labels(*self._common()).set(sim_force_norm_mean)
+        self.measurement_residual_norm_mean.labels(*self._common()).set(diff_norm_mean)
+        self.likelihood_min.labels(*self._common()).set(likelihood_min)
+        self.likelihood_max.labels(*self._common()).set(likelihood_max)
+        self.likelihood_mean.labels(*self._common()).set(likelihood_mean)
+        self.likelihood_std.labels(*self._common()).set(likelihood_std)
 
-    def update_invalid_state_counts(
-        self,
-        *,
-        invalid_sensor_events: int,
-        invalid_state_events: int,
-        skipped_invalid_updates: int,
-        skipped_invalid_update: bool,
-        bootstrap_attempts: int,
-        first_invalid_sensor_step: int,
-        first_invalid_state_step: int,
-        sim_force_nonfinite_count: int,
-        diff_nonfinite_count: int,
-        likelihood_nonfinite_count: int,
-        qpos_nonfinite_count: int,
-        qvel_nonfinite_count: int,
-        sensordata_nonfinite_count: int,
-        ctrl_nonfinite_count: int,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_invalid_sensor_events_total",
-            invalid_sensor_events,
-            "Cumulative count of likelihood evaluations that produced non-finite sensor-derived values.",
-        )
-        self._store.set_gauge(
-            "simbay_invalid_state_events_total",
-            invalid_state_events,
-            "Cumulative count of Warp state snapshots with non-finite entries.",
-        )
-        self._store.set_gauge(
-            "simbay_skipped_invalid_updates_total",
-            skipped_invalid_updates,
-            "Cumulative count of Warp filter updates skipped because the likelihood batch or backend state was invalid.",
-        )
-        self._store.set_gauge(
-            "simbay_skipped_invalid_update",
-            1.0 if skipped_invalid_update else 0.0,
-            "Whether the latest Warp filter update was skipped because the likelihood batch or backend state was invalid.",
-        )
-        self._store.set_gauge(
-            "simbay_first_update_bootstrap_attempts",
-            bootstrap_attempts,
-            "Number of attempts used to obtain a valid first Warp phase-4 measurement update.",
-        )
-        self._store.set_gauge(
-            "simbay_first_invalid_sensor_step",
-            first_invalid_sensor_step,
-            "First Warp filter step index that produced a non-finite sensor-derived value, or -1 if none.",
-        )
-        self._store.set_gauge(
-            "simbay_first_invalid_state_step",
-            first_invalid_state_step,
-            "First Warp filter step index that produced a non-finite backend state value, or -1 if none.",
-        )
-        self._store.set_gauge(
-            "simbay_sim_force_nonfinite_count",
-            sim_force_nonfinite_count,
-            "Count of non-finite simulated force entries from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_measurement_residual_nonfinite_count",
-            diff_nonfinite_count,
-            "Count of non-finite measurement residual entries from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_nonfinite_count",
-            likelihood_nonfinite_count,
-            "Count of non-finite particle likelihoods from the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_qpos_nonfinite_count",
-            qpos_nonfinite_count,
-            "Count of non-finite Warp qpos entries in the latest sampled state snapshot.",
-        )
-        self._store.set_gauge(
-            "simbay_qvel_nonfinite_count",
-            qvel_nonfinite_count,
-            "Count of non-finite Warp qvel entries in the latest sampled state snapshot.",
-        )
-        self._store.set_gauge(
-            "simbay_sensordata_nonfinite_count",
-            sensordata_nonfinite_count,
-            "Count of non-finite Warp sensordata entries in the latest sampled state snapshot.",
-        )
-        self._store.set_gauge(
-            "simbay_ctrl_nonfinite_count",
-            ctrl_nonfinite_count,
-            "Count of non-finite Warp ctrl entries in the latest sampled state snapshot.",
-        )
+    def update_invalid_state_counts(self, *, invalid_sensor_events: int, invalid_state_events: int, skipped_invalid_updates: int, skipped_invalid_update: bool, bootstrap_attempts: int, first_invalid_sensor_step: int, first_invalid_state_step: int, sim_force_nonfinite_count: int, diff_nonfinite_count: int, likelihood_nonfinite_count: int, qpos_nonfinite_count: int, qvel_nonfinite_count: int, sensordata_nonfinite_count: int, ctrl_nonfinite_count: int) -> None:
+        self.invalid_sensor_events_total.labels(*self._common()).set(invalid_sensor_events)
+        self.invalid_state_events_total.labels(*self._common()).set(invalid_state_events)
+        self.skipped_invalid_updates_total.labels(*self._common()).set(skipped_invalid_updates)
+        self.skipped_invalid_update.labels(*self._common()).set(1.0 if skipped_invalid_update else 0.0)
+        self.first_update_bootstrap_attempts.labels(*self._common()).set(bootstrap_attempts)
+        self.first_invalid_sensor_step.labels(*self._common()).set(first_invalid_sensor_step)
+        self.first_invalid_state_step.labels(*self._common()).set(first_invalid_state_step)
+        self.sim_force_nonfinite_count.labels(*self._common()).set(sim_force_nonfinite_count)
+        self.measurement_residual_nonfinite_count.labels(*self._common()).set(diff_nonfinite_count)
+        self.likelihood_nonfinite_count.labels(*self._common()).set(likelihood_nonfinite_count)
+        self.qpos_nonfinite_count.labels(*self._common()).set(qpos_nonfinite_count)
+        self.qvel_nonfinite_count.labels(*self._common()).set(qvel_nonfinite_count)
+        self.sensordata_nonfinite_count.labels(*self._common()).set(sensordata_nonfinite_count)
+        self.ctrl_nonfinite_count.labels(*self._common()).set(ctrl_nonfinite_count)
 
-    def update_contact_health(
-        self,
-        *,
-        contact_count_mean: float,
-        contact_count_max: float,
-        active_contact_particle_ratio: float,
-        contact_metric_available: bool,
-        contact_force_mismatch: bool,
-        valid_force_particle_ratio: float,
-        sim_force_signal_particle_ratio: float,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_contact_count_mean",
-            contact_count_mean,
-            "Mean contact count across Warp particles for the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_contact_count_max",
-            contact_count_max,
-            "Maximum contact count across Warp particles for the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_active_contact_particle_ratio",
-            active_contact_particle_ratio,
-            "Fraction of Warp particles with at least one active contact.",
-        )
-        self._store.set_gauge(
-            "simbay_contact_metric_available",
-            1.0 if contact_metric_available else 0.0,
-            "Whether Warp exposed a contact-count array for the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_contact_force_mismatch",
-            1.0 if contact_force_mismatch else 0.0,
-            "Whether the latest likelihood evaluation had non-zero force signal but zero reported contacts.",
-        )
-        self._store.set_gauge(
-            "simbay_valid_force_particle_ratio",
-            valid_force_particle_ratio,
-            "Fraction of particles with finite force vectors in the latest likelihood evaluation.",
-        )
-        self._store.set_gauge(
-            "simbay_force_signal_particle_ratio",
-            sim_force_signal_particle_ratio,
-            "Fraction of particles with non-trivial simulated force norm in the latest likelihood evaluation.",
-        )
+    def update_contact_health(self, *, contact_count_mean: float, contact_count_max: float, active_contact_particle_ratio: float, contact_metric_available: bool, contact_force_mismatch: bool, valid_force_particle_ratio: float, sim_force_signal_particle_ratio: float) -> None:
+        self.contact_count_mean.labels(*self._common()).set(contact_count_mean)
+        self.contact_count_max.labels(*self._common()).set(contact_count_max)
+        self.active_contact_particle_ratio.labels(*self._common()).set(active_contact_particle_ratio)
+        self.contact_metric_available.labels(*self._common()).set(1.0 if contact_metric_available else 0.0)
+        self.contact_force_mismatch.labels(*self._common()).set(1.0 if contact_force_mismatch else 0.0)
+        self.valid_force_particle_ratio.labels(*self._common()).set(valid_force_particle_ratio)
+        self.force_signal_particle_ratio.labels(*self._common()).set(sim_force_signal_particle_ratio)
 
-    def update_weight_health(
-        self,
-        *,
-        uniform_weight_l1_distance: float,
-        uniform_weight_max_deviation: float,
-        collapsed_to_uniform: bool,
-    ) -> None:
-        self._store.set_gauge(
-            "simbay_uniform_weight_l1_distance",
-            uniform_weight_l1_distance,
-            "L1 distance between current particle weights and a perfectly uniform distribution.",
-        )
-        self._store.set_gauge(
-            "simbay_uniform_weight_max_deviation",
-            uniform_weight_max_deviation,
-            "Maximum per-particle absolute deviation from uniform weights.",
-        )
-        self._store.set_gauge(
-            "simbay_likelihood_collapsed_to_uniform",
-            1.0 if collapsed_to_uniform else 0.0,
-            "Whether the latest particle-weight update remained effectively uniform.",
-        )
+    def update_weight_health(self, *, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
+        self.uniform_weight_l1_distance.labels(*self._common()).set(uniform_weight_l1_distance)
+        self.uniform_weight_max_deviation.labels(*self._common()).set(uniform_weight_max_deviation)
+        self.likelihood_collapsed_to_uniform.labels(*self._common()).set(1.0 if collapsed_to_uniform else 0.0)
 
-    def update_warp_memory(
-        self,
-        *,
-        stage: str,
-        bytes_in_use: int,
-        peak_bytes_in_use: int,
-        bytes_limit: int,
-        state_bytes_estimate: int,
-    ) -> None:
-        labels = {"stage": stage}
-        self._store.set_gauge(
-            "simbay_warp_bytes_in_use",
-            bytes_in_use,
-            "Observed execution-device bytes used when Warp reports free/total memory, otherwise a tracked Warp state-byte estimate.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_warp_peak_bytes_in_use",
-            peak_bytes_in_use,
-            "Peak observed execution-device bytes used during the run, or peak tracked Warp state-byte estimate when device memory usage is unavailable.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_warp_bytes_limit",
-            bytes_limit,
-            "Warp execution-device total memory in bytes when available.",
-            labels,
-        )
-        self._store.set_gauge(
-            "simbay_warp_state_bytes_estimate",
-            state_bytes_estimate,
-            "Tracked lower-bound byte estimate for Warp model/data arrays and recovery snapshots.",
-            labels,
-        )
+    def update_warp_memory(self, *, stage: str, bytes_in_use: int, peak_bytes_in_use: int, bytes_limit: int, state_bytes_estimate: int) -> None:
+        labels = self._stage(stage)
+        self.warp_bytes_in_use.labels(*labels).set(bytes_in_use)
+        self.warp_peak_bytes_in_use.labels(*labels).set(peak_bytes_in_use)
+        self.warp_bytes_limit.labels(*labels).set(bytes_limit)
+        self.warp_state_bytes_estimate.labels(*labels).set(state_bytes_estimate)
 
     def set_prediction_ready(self, total_wall_seconds: float, final_error_pct: float) -> None:
-        self._store.set_gauge(
-            "simbay_prediction_ready_seconds",
-            total_wall_seconds,
-            "Total wall-clock time until a final prediction is available.",
-        )
-        self._store.set_gauge(
-            "simbay_final_error_pct",
-            final_error_pct,
-            "Final percent error of the predicted mass.",
-        )
+        self.prediction_ready_seconds.labels(*self._common()).set(total_wall_seconds)
+        self.final_error_pct.labels(*self._common()).set(final_error_pct)
 
     def _run_system_sampler(self) -> None:
         interval = SYSTEM_METRICS_INTERVAL_SECONDS
         previous_cpu_totals = self._read_host_cpu_totals()
         previous_process_totals = self._read_process_cpu_totals()
         while not self._stop_event.wait(interval):
-            previous_cpu_totals, previous_process_totals = self._sample_system_metrics(
-                previous_cpu_totals,
-                previous_process_totals,
-            )
+            previous_cpu_totals, previous_process_totals = self._sample_system_metrics(previous_cpu_totals, previous_process_totals)
 
-    def _sample_system_metrics(
-        self,
-        previous_cpu_totals: tuple[float, float] | None,
-        previous_process_totals: tuple[float, float] | None,
-    ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
-        self._store.set_gauge(
-            "simbay_process_memory_rss_bytes",
-            get_process_memory_bytes(),
-            "Resident set size of the Simbay process.",
-        )
-        self._store.set_gauge(
-            "simbay_host_memory_used_bytes",
-            self._read_host_memory_used_bytes(),
-            "Host memory currently in use for this benchmark run.",
-        )
+    def _sample_system_metrics(self, previous_cpu_totals: tuple[float, float] | None, previous_process_totals: tuple[float, float] | None) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+        self.process_memory_rss_bytes.labels(*self._common()).set(get_process_memory_bytes())
+        self.host_memory_used_bytes.labels(*self._common()).set(self._read_host_memory_used_bytes())
         current_cpu_totals = self._read_host_cpu_totals()
         if previous_cpu_totals is not None and current_cpu_totals is not None:
             previous_total, previous_idle = previous_cpu_totals
@@ -972,11 +1004,7 @@ class SimbayMetrics:
             cpu_percent = 0.0
             if total_delta > 0:
                 cpu_percent = max(0.0, min(100.0, 100.0 * (1.0 - (idle_delta / total_delta))))
-            self._store.set_gauge(
-                "simbay_host_cpu_utilization_pct",
-                cpu_percent,
-                "Host CPU utilisation percentage for this benchmark run.",
-            )
+            self.host_cpu_utilization_pct.labels(*self._common()).set(cpu_percent)
         current_process_totals = self._read_process_cpu_totals()
         if previous_process_totals is not None and current_process_totals is not None:
             previous_wall, previous_cpu = previous_process_totals
@@ -986,53 +1014,17 @@ class SimbayMetrics:
             process_cpu_percent = 0.0
             if wall_delta > 0:
                 process_cpu_percent = max(0.0, 100.0 * (cpu_delta / wall_delta))
-            self._store.set_gauge(
-                "simbay_process_cpu_utilization_pct",
-                process_cpu_percent,
-                "CPU utilisation percentage of the Simbay process, expressed relative to one full core.",
-            )
-            self._store.set_gauge(
-                "simbay_process_cpu_machine_pct",
-                process_cpu_percent / float(self._host_cpu_count),
-                "CPU utilisation percentage of the Simbay process, expressed relative to total machine CPU capacity.",
-            )
+            self.process_cpu_utilization_pct.labels(*self._common()).set(process_cpu_percent)
+            self.process_cpu_machine_pct.labels(*self._common()).set(process_cpu_percent / float(self._host_cpu_count))
         gpu_metrics = self._read_gpu_metrics()
         if gpu_metrics is not None:
-            self._store.set_gauge(
-                "simbay_gpu_utilization_pct",
-                gpu_metrics["utilization_pct"],
-                "GPU utilisation percentage for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_fb_used_bytes",
-                gpu_metrics["fb_used_bytes"],
-                "GPU frame-buffer memory currently in use for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_fb_utilization_pct",
-                gpu_metrics["fb_utilization_pct"],
-                "GPU frame-buffer memory utilisation percentage for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_power_watts",
-                gpu_metrics["power_watts"],
-                "GPU power draw in watts for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_temp_celsius",
-                gpu_metrics["temp_celsius"],
-                "GPU temperature in degrees Celsius for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_sm_clock_hz",
-                gpu_metrics["sm_clock_hz"],
-                "GPU SM clock frequency in hertz for this benchmark run.",
-            )
-            self._store.set_gauge(
-                "simbay_gpu_mem_clock_hz",
-                gpu_metrics["mem_clock_hz"],
-                "GPU memory clock frequency in hertz for this benchmark run.",
-            )
+            self.gpu_utilization_pct.labels(*self._common()).set(gpu_metrics["utilization_pct"])
+            self.gpu_fb_used_bytes.labels(*self._common()).set(gpu_metrics["fb_used_bytes"])
+            self.gpu_fb_utilization_pct.labels(*self._common()).set(gpu_metrics["fb_utilization_pct"])
+            self.gpu_power_watts.labels(*self._common()).set(gpu_metrics["power_watts"])
+            self.gpu_temp_celsius.labels(*self._common()).set(gpu_metrics["temp_celsius"])
+            self.gpu_sm_clock_hz.labels(*self._common()).set(gpu_metrics["sm_clock_hz"])
+            self.gpu_mem_clock_hz.labels(*self._common()).set(gpu_metrics["mem_clock_hz"])
         return current_cpu_totals, current_process_totals
 
     @staticmethod
@@ -1076,13 +1068,7 @@ class SimbayMetrics:
             "--format=csv,noheader,nounits",
         ]
         try:
-            completed = subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-            )
+            completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=2.0)
         except (OSError, subprocess.SubprocessError):
             return None
         lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
@@ -1113,11 +1099,7 @@ class SimbayMetrics:
 
 
 def init_metrics(run_id: str = "unknown") -> SimbayMetrics:
-    return SimbayMetrics(
-        enabled=True,
-        port=8000,
-        run_id=run_id,
-    ).initialize_defaults().start_runtime()
+    return SimbayMetrics(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
 
 
 def shutdown_metrics(metrics: SimbayMetrics) -> None:
