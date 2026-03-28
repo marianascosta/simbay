@@ -16,9 +16,16 @@ from typing import Any
 
 from .settings import OTEL_ENDPOINT
 
+_TRACING_ENABLED = True
+
 
 def _is_enabled() -> bool:
-    return True
+    return _TRACING_ENABLED
+
+
+def set_tracing_enabled(enabled: bool) -> None:
+    global _TRACING_ENABLED
+    _TRACING_ENABLED = bool(enabled)
 
 
 def _otel_endpoint() -> str:
@@ -144,6 +151,8 @@ def trace_call(
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            if not _is_enabled():
+                return func(*args, **kwargs)
             with span(tracer, resolved_span_name):
                 return func(*args, **kwargs)
 

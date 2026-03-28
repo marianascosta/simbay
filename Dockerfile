@@ -16,7 +16,7 @@ RUN pip install poetry
 COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --no-interaction --no-ansi
 
-COPY assets ./assets
+COPY models ./models
 COPY src ./src
 COPY main.py ./
 CMD ["python", "main.py"]
@@ -55,7 +55,7 @@ RUN python -m pip install nsight-python
 COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --no-interaction --no-ansi
 
-COPY assets ./assets
+COPY models ./models
 COPY src ./src
 COPY main.py ./
 CMD ["python", "main.py"]
