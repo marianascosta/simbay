@@ -32,6 +32,7 @@ from src.utils.settings import RUN_ID
 from src.utils.tracing import add_exemplar
 from src.utils.tracing import force_flush_tracing
 from src.utils.tracing import get_tracer
+from src.utils.tracing import trace_call
 from src.utils.tracing import set_span_attributes
 from src.utils.tracing import setup_tracing
 from src.utils.tracing import shutdown_tracing
@@ -63,7 +64,6 @@ def init_runtime(run_id: str = RUN_ID) -> dict[str, Any]:
     runtime_metrics = init_metrics(run_id=run_id)
     runtime_logger = setup_logging(run_id=run_id)
     exit_stack = ExitStack()
-    exit_stack.enter_context(tracing_span(runtime_tracer, "simbay.run"))
     exit_stack.callback(shutdown_tracing)
     exit_stack.callback(force_flush_tracing)
     exit_stack.callback(shutdown_metrics, runtime_metrics)
@@ -79,11 +79,6 @@ def init_runtime(run_id: str = RUN_ID) -> dict[str, Any]:
     }
 
 
-def shutdown_runtime(runtime: dict[str, Any] | None) -> None:
-    if runtime is not None:
-        runtime["exit_stack"].close()
-
-
 def install_signal_handlers(logger: Any, log_data: dict[str, object]) -> None:
     def _handle_shutdown_signal(signum, _frame) -> None:
         global shutdown_requested
@@ -95,18 +90,6 @@ def install_signal_handlers(logger: Any, log_data: dict[str, object]) -> None:
 
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
-
-
-def is_shutdown_requested() -> bool:
-    return shutdown_requested
-
-
-def get_shutdown_signal_name() -> str | None:
-    return shutdown_signal_name
-
-
-def elapsed_seconds(started_at: float) -> float:
-    return time.perf_counter() - started_at
 
 
 def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
@@ -123,6 +106,113 @@ def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) 
         return float(np.quantile(sorted_values, quantile))
     cumulative = np.cumsum(sorted_weights) / total_weight
     return float(np.interp(quantile, cumulative, sorted_values))
+
+
+@trace_call("simbay.main", span_name="setup")
+def setup(
+    *,
+    backend: str,
+    headless: bool,
+    log_data: dict[str, object],
+    logger: Any,
+    metrics: Any,
+    run_id: str,
+) -> dict[str, Any]:
+    real_robot = initialize_mujoco_env()
+    viewer = None
+    if not headless:
+        viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
+    real_robot.viewer = viewer
+    dt = real_robot.dt
+
+    obj_pos = DEFAULT_OBJECT_PROPS["pos"]
+    true_mass = DEFAULT_OBJECT_PROPS["mass"]
+    num_particles = NUM_PARTICLES
+    limits = (0.0, 3.0)
+
+    if backend == "mujoco-warp":
+        env = FrankaWarpEnv(limits, num_particles, logging_data=log_data)
+        particle_filter = WarpParticleFilter(env, logging_data=log_data)
+    elif backend == "cpu":
+        env = FrankaMuJoCoEnv(limits, num_particles)
+        particle_filter = ParticleFilter(env, logging_data=log_data)
+    else:
+        raise AssertionError(f"Unexpected backend: {backend}")
+
+    memory_profile = particle_filter.memory_profile()
+    env_memory_profile = env.memory_profile()
+    execution_device = str(env_memory_profile.get("execution_device", backend))
+    apply_setup_observability(
+        run_id=run_id,
+        metrics=metrics,
+        backend_name=backend,
+        num_particles=num_particles,
+        dt=dt,
+        execution_device=execution_device,
+        true_mass=true_mass,
+        env=env,
+        env_memory_profile=env_memory_profile,
+        memory_profile=memory_profile,
+    )
+    logger.info({**log_data, "event": "simulation_setup", "msg": "Completed simulation setup.", "backend": backend, "headless": headless})
+    return {
+        "obj_pos": obj_pos,
+        "true_mass": true_mass,
+        "num_particles": num_particles,
+        "limits": limits,
+        "real_robot": real_robot,
+        "viewer": viewer,
+        "dt": dt,
+        "env": env,
+        "particle_filter": particle_filter,
+        "execution_device": execution_device,
+    }
+
+
+@trace_call("simbay.main", span_name="ik_planning")
+def ik_planning(
+    *,
+    backend: str,
+    obj_pos: np.ndarray,
+    dt: float,
+    particle_filter: Any,
+    logger: Any,
+    log_data: dict[str, object],
+) -> dict[str, np.ndarray]:
+    target_quat = np.array([0.0, 1.0, 0.0, 0.0])
+
+    pre_grasp_pos = obj_pos + np.array([0.0, 0.0, 0.15])
+    pre_grasp_q7 = FrankaSmartSolver.solve(FRANKA_HOME_QPOS, np.concatenate([pre_grasp_pos, target_quat]))
+    grasp_q7 = FrankaSmartSolver.solve(pre_grasp_q7, np.concatenate([obj_pos, target_quat]))
+    lift_pos = obj_pos + np.array([0.0, 0.0, 0.2])
+    lift_q7 = FrankaSmartSolver.solve(grasp_q7, np.concatenate([lift_pos, target_quat]))
+
+    q_home = np.append(FRANKA_HOME_QPOS, 255)
+    q_pre_grasp = np.append(pre_grasp_q7, 255)
+    q_grasp_open = np.append(grasp_q7, 255)
+    q_grasp_closed = np.append(grasp_q7, 0)
+    q_lift_closed = np.append(lift_q7, 0)
+
+    traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
+    traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
+    traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
+    traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
+    set_span_attributes(
+        {
+            "ik.target_quat_dim": int(target_quat.shape[0]),
+            "ik.pre_grasp_height": float(pre_grasp_pos[2]),
+            "ik.lift_height": float(lift_pos[2]),
+        }
+    )
+    if backend == "mujoco-warp":
+        warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
+        logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend, "rollout_lengths": warmed_rollout_lengths, "phase4_step_warmup": 1})
+    return {
+        "traj1": traj1,
+        "traj2": traj2,
+        "traj3": traj3,
+        "traj4": traj4,
+    }
 
 
 def stage_span_attrs(
@@ -314,14 +404,14 @@ def update_phase_4_state(
     if hasattr(particle_filter, "particles"):
         state["latest_particles_snapshot"] = np.asarray(particle_filter.particles).copy()
     if state["time_to_first_estimate_seconds"] < 0.0:
-        state["time_to_first_estimate_seconds"] = elapsed_seconds(started_at)
+        state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
     rel_error_pct = (abs_error_kg / true_mass * 100.0) if true_mass != 0 else 0.0
     state["abs_error_sum"] += abs_error_kg
     state["squared_error_sum"] += abs_error_kg**2
     phase_4_mae_kg = state["abs_error_sum"] / (step + 1)
     phase_4_rmse_kg = math.sqrt(state["squared_error_sum"] / (step + 1))
-    elapsed_since_run_start = elapsed_seconds(started_at)
+    elapsed_since_run_start = time.perf_counter() - started_at
     if state["convergence_time_to_10pct_seconds"] < 0.0 and rel_error_pct <= 10.0:
         state["convergence_time_to_10pct_seconds"] = elapsed_since_run_start
     if state["convergence_time_to_5pct_seconds"] < 0.0 and rel_error_pct <= 5.0:
@@ -550,58 +640,8 @@ def finalize_phase_4_metrics(
     )
 
 
-def tracked_stage(stage_name: str):
-    def decorator(func):
-        def wrapper(ctx: dict[str, Any], *args, **kwargs):
-            steps = kwargs.get("steps")
-            env = kwargs.get("env")
-            stage_state = init_stage_state(stage_name)
-            if stage_state is not None:
-                ctx["stage_state"] = stage_state
-            stage_token = ctx["metrics"].start_stage(stage_name)
-            stage_label = stage_name.replace("_", " ")
-            ctx["logger"].info(
-                {
-                    **ctx["log_data"],
-                    "event": "stage_started",
-                    "msg": f"Started {stage_label}.",
-                    "stage": stage_name,
-                }
-            )
-            try:
-                with tracing_span(ctx["tracer"], stage_name):
-                    set_span_attributes(
-                        stage_span_attrs(
-                            run_id=ctx["run_id"],
-                            backend=ctx["backend"],
-                            num_particles=ctx["num_particles"],
-                            dt=ctx["dt"],
-                            execution_device=ctx["execution_device"],
-                            stage=stage_name,
-                            steps=steps,
-                        )
-                    )
-                    return func(ctx, *args, **kwargs)
-            finally:
-                if ctx["backend"] == "mujoco-warp" and env is not None:
-                    update_warp_memory_metrics(env, ctx["metrics"], stage=stage_name)
-                ctx["metrics"].finish_stage(stage_token)
-                ctx["logger"].info(
-                    {
-                        **ctx["log_data"],
-                        "event": "stage_finished",
-                        "msg": f"Finished {stage_label}.",
-                        "stage": stage_name,
-                    }
-                )
-                ctx.pop("stage_state", None)
-
-        return wrapper
-
-    return decorator
-
-
-def run_robot_motion_substage(
+@trace_call("simbay.main", span_name="robot_execute")
+def robot_execute(
     ctx: dict[str, Any],
     phase: str,
     trajectory: list[np.ndarray] | np.ndarray,
@@ -610,151 +650,100 @@ def run_robot_motion_substage(
 ) -> float:
     substage = "robot_execute"
     phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
-    with tracing_span(ctx["tracer"], "robot_execute"):
-        set_span_attributes(
-            substage_span_attrs(
-                run_id=ctx["run_id"],
-                backend=ctx["backend"],
-                num_particles=ctx["num_particles"],
-                dt=ctx["dt"],
-                execution_device=ctx["execution_device"],
-                stage=phase,
-                substage=substage,
-                steps=len(trajectory),
-                execution_mode="sequential",
-                parallel_units=1,
-            )
+    set_span_attributes(
+        substage_span_attrs(
+            run_id=ctx["run_id"],
+            backend=ctx["backend"],
+            num_particles=ctx["num_particles"],
+            dt=ctx["dt"],
+            execution_device=ctx["execution_device"],
+            stage=phase,
+            substage=substage,
+            steps=len(trajectory),
+            execution_mode="sequential",
+            parallel_units=1,
         )
-        stage_token = ctx["metrics"].start_substage(phase, substage)
-        ctx["logger"].info(
-            {
-                **ctx["log_data"],
-                "event": "substage_started",
-                "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
-                "phase": phase,
-                "substage": substage,
-            }
-        )
-        for _, qpos in enumerate(trajectory):
-            real_robot.move_joints(qpos)
-            if viewer is not None:
-                viewer.sync()
-        duration = ctx["metrics"].finish_substage(stage_token)
-        ctx["logger"].info(
-            {
-                **ctx["log_data"],
-                "event": "substage_finished",
-                "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
-                "phase": phase,
-                "substage": substage,
-            }
-        )
-        ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), 1, duration)
-        return duration
+    )
+    stage_token = ctx["metrics"].start_substage(phase, substage)
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_started",
+            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    for _, qpos in enumerate(trajectory):
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+    duration = ctx["metrics"].finish_substage(stage_token)
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_finished",
+            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), 1, duration)
+    return duration
 
 
-def run_pf_replay_substage(
+@trace_call("simbay.main", span_name="pf_replay")
+def pf_replay(
     ctx: dict[str, Any],
     phase: str,
     trajectory: list[np.ndarray] | np.ndarray,
     particle_filter: Any,
-    use_batched_backend: bool,
 ) -> float:
     substage = "pf_replay"
     phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
-    with tracing_span(ctx["tracer"], "pf_replay"):
-        set_span_attributes(
-            substage_span_attrs(
-                run_id=ctx["run_id"],
-                backend=ctx["backend"],
-                num_particles=ctx["num_particles"],
-                dt=ctx["dt"],
-                execution_device=ctx["execution_device"],
-                stage=phase,
-                substage=substage,
-                steps=len(trajectory),
-                execution_mode="batched_parallel" if use_batched_backend else "sequential",
-                parallel_units=particle_filter.N if use_batched_backend else 1,
-            )
+    set_span_attributes(
+        substage_span_attrs(
+            run_id=ctx["run_id"],
+            backend=ctx["backend"],
+            num_particles=ctx["num_particles"],
+            dt=ctx["dt"],
+            execution_device=ctx["execution_device"],
+            stage=phase,
+            substage=substage,
+            steps=len(trajectory),
+            execution_mode="batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential",
+            parallel_units=particle_filter.N if ctx["backend"] == "mujoco-warp" else 1,
         )
-        stage_token = ctx["metrics"].start_substage(phase, substage)
-        ctx["logger"].info(
-            {
-                **ctx["log_data"],
-                "event": "substage_started",
-                "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
-                "phase": phase,
-                "substage": substage,
-            }
-        )
-        if use_batched_backend:
-            particle_filter.predict_trajectory(trajectory)
-        else:
-            for qpos in trajectory:
-                particle_filter.predict(qpos)
-        duration = ctx["metrics"].finish_substage(stage_token)
-        ctx["logger"].info(
-            {
-                **ctx["log_data"],
-                "event": "substage_finished",
-                "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
-                "phase": phase,
-                "substage": substage,
-            }
-        )
-        ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), particle_filter.N, duration)
-        return duration
+    )
+    stage_token = ctx["metrics"].start_substage(phase, substage)
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_started",
+            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    if ctx["backend"] == "mujoco-warp":
+        particle_filter.predict_trajectory(trajectory)
+    else:
+        for qpos in trajectory:
+            particle_filter.predict(qpos)
+    duration = ctx["metrics"].finish_substage(stage_token)
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "substage_finished",
+            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "phase": phase,
+            "substage": substage,
+        }
+    )
+    ctx["metrics"].set_substage_workload(phase, substage, len(trajectory), particle_filter.N, duration)
+    return duration
 
 
-@tracked_stage("phase_1_approach")
-def run_phase_1_approach(
-    ctx: dict[str, Any],
-    *,
-    steps: int,
-    trajectory: list[np.ndarray] | np.ndarray,
-    real_robot: Any,
-    viewer: Any,
-    particle_filter: Any,
-    use_batched_backend: bool,
-    env: Any,
-) -> None:
-    run_robot_motion_substage(ctx, "phase_1_approach", trajectory, real_robot, viewer)
-    run_pf_replay_substage(ctx, "phase_1_approach", trajectory, particle_filter, use_batched_backend)
-
-
-@tracked_stage("phase_2_descend")
-def run_phase_2_descend(
-    ctx: dict[str, Any],
-    *,
-    steps: int,
-    trajectory: list[np.ndarray] | np.ndarray,
-    real_robot: Any,
-    viewer: Any,
-    particle_filter: Any,
-    use_batched_backend: bool,
-    env: Any,
-) -> None:
-    run_robot_motion_substage(ctx, "phase_2_descend", trajectory, real_robot, viewer)
-    run_pf_replay_substage(ctx, "phase_2_descend", trajectory, particle_filter, use_batched_backend)
-
-
-@tracked_stage("phase_3_grip")
-def run_phase_3_grip(
-    ctx: dict[str, Any],
-    *,
-    steps: int,
-    trajectory: list[np.ndarray] | np.ndarray,
-    real_robot: Any,
-    viewer: Any,
-    particle_filter: Any,
-    use_batched_backend: bool,
-    env: Any,
-) -> None:
-    run_robot_motion_substage(ctx, "phase_3_grip", trajectory, real_robot, viewer)
-    run_pf_replay_substage(ctx, "phase_3_grip", trajectory, particle_filter, use_batched_backend)
-
-
-@tracked_stage("phase_4_lift")
 def run_phase_4_lift(
     ctx: dict[str, Any],
     *,
@@ -768,158 +757,199 @@ def run_phase_4_lift(
     uniform_weight_metrics: Any,
     update_and_optionally_resample: Any,
 ) -> LiftPhaseResult:
-    stage_state = ctx["stage_state"]
-
-    def _warp_step(qpos, noisy_ft_reading, step: int, attempt: int = 1) -> dict[str, float | bool]:
-        particle_filter.particles = particle_filter.env.propagate(particle_filter.particles, qpos)
-        likelihoods = particle_filter.env.compute_likelihoods(particle_filter.particles, noisy_ft_reading)
-        diagnostics = particle_filter.env.last_measurement_diagnostics()
-        if not particle_filter._measurement_is_valid(diagnostics):
-            return particle_filter._skip_invalid_update(diagnostics, attempt=attempt)
-        if not particle_filter._measurement_is_informative(diagnostics):
-            return particle_filter._skip_uninformative_update(diagnostics)
-        offset = float(particle_filter._rng.uniform())
-        (
-            particle_filter.weights,
-            particle_filter.particles,
-            particle_filter._ess,
-            indexes,
-            did_resample,
-        ) = update_and_optionally_resample(
-            particle_filter.weights,
-            particle_filter.particles,
-            likelihoods,
-            offset,
-        )
-        if did_resample:
-            particle_filter.env.resample_states(indexes)
-            particle_filter._resample_count += 1
-        particle_filter._save_last_good_snapshot()
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = uniform_weight_metrics(
-            particle_filter.weights
-        )
-        particle_filter._step_index += 1
-        return {
-            "ess": float(particle_filter._ess),
-            "resampled": did_resample,
-            "resample_count": particle_filter._resample_count,
-            "uniform_weight_l1_distance": uniform_weight_l1,
-            "uniform_weight_max_deviation": uniform_weight_max_dev,
-            "collapsed_to_uniform": collapsed_to_uniform,
-            "diagnostics": diagnostics,
-            "skipped_invalid_update": False,
-            "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
-            "bootstrap_attempts": attempt,
-            "uninformative_update": False,
+    phase = "phase_4_lift"
+    stage_state = init_stage_state(phase)
+    if stage_state is not None:
+        ctx["stage_state"] = stage_state
+    stage_token = ctx["metrics"].start_stage(phase)
+    stage_label = phase.replace("_", " ")
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "stage_started",
+            "msg": f"Started {stage_label}.",
+            "stage": phase,
         }
-
-    for step, qpos in enumerate(trajectory):
-        with tracing_span(ctx["tracer"], "step"):
-            set_span_attributes(
-                {
-                    "simbay.run_id": ctx["run_id"],
-                    "simbay.stage": "phase_4_lift",
-                    "simbay.backend": ctx["backend"],
-                    "simbay.control_dt": ctx["dt"],
-                    "simbay.execution_device": ctx["execution_device"],
-                }
-            )
-            set_span_attributes(
-                {
-                    "simbay.step": step,
-                    "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
-                    "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
-                }
-            )
-            with tracing_span(ctx["tracer"], "robot_execute"):
-                set_span_attributes(
-                    {
-                        "simbay.run_id": ctx["run_id"],
-                        "simbay.stage": "phase_4_lift",
-                        "simbay.substage": "robot_execute",
-                        "simbay.backend": ctx["backend"],
-                        "simbay.execution_mode": "sequential",
-                        "simbay.parallel_units": 1,
-                    }
-                )
-                set_span_attributes({"simbay.step": step})
-                robot_execute_start = time.perf_counter()
-                real_robot.move_joints(qpos)
-                if viewer is not None:
-                    viewer.sync()
-                stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
-            with tracing_span(ctx["tracer"], "pf_update"):
-                previous_mass_estimate = float(particle_filter.estimate())
-                set_span_attributes(
-                    {
-                        "simbay.run_id": ctx["run_id"],
-                        "simbay.stage": "phase_4_lift",
-                        "simbay.substage": "pf_update",
-                        "simbay.backend": ctx["backend"],
-                        "simbay.previous_mass_estimate_kg": previous_mass_estimate,
-                        "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
-                        "simbay.parallel_units": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
-                    }
-                )
-                step_wall_start = time.perf_counter()
-                step_cpu_start = time.process_time()
-                measurements = real_robot.get_sensor_reads()
-                noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=3)
-                if ctx["backend"] == "mujoco-warp":
-                    with annotate("phase4_particle_filter_step"):
-                        if not stage_state["bootstrap_applied"]:
-                            last_result = None
-                            for attempt in range(1, 4):
-                                step_result = _warp_step(qpos, noisy_ft_reading, step, attempt=attempt)
-                                last_result = step_result
-                                if not bool(step_result.get("skipped_invalid_update", False)):
-                                    if attempt > 1:
-                                        ctx["logger"].info({**ctx["log_data"], "event": "warp_first_update_recovered", "msg": f"Recovered the first Warp update after {attempt} attempts.", "attempts": attempt, "step": particle_filter._step_index - 1})
-                                    break
-                            step_result = last_result if last_result is not None else _warp_step(qpos, noisy_ft_reading, step)
-                            stage_state["bootstrap_applied"] = True
-                        else:
-                            step_result = _warp_step(qpos, noisy_ft_reading, step)
-                else:
-                    with annotate("phase4_particle_filter_step"):
-                        particle_filter.predict(qpos)
-                        particle_filter.update(noisy_ft_reading)
-                        did_resample = particle_filter.effective_sample_size() < (particle_filter.N / 2)
-                        if did_resample or ctx["backend"] != "cpu":
-                            particle_filter.resample()
-                        step_result = {
-                            "ess": particle_filter.effective_sample_size(),
-                            "resampled": did_resample,
-                            "resample_count": getattr(
-                                particle_filter,
-                                "_resample_count",
-                                stage_state["resample_count"] + int(did_resample),
-                            ),
-                            "uniform_weight_l1_distance": 0.0,
-                            "uniform_weight_max_deviation": 0.0,
-                            "collapsed_to_uniform": False,
-                        }
-                set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
-        step_wall_duration = time.perf_counter() - step_wall_start
-        step_cpu_duration = time.process_time() - step_cpu_start
-        update_phase_4_metrics(
-            ctx,
-            stage_state,
-            particle_filter=particle_filter,
-            step=step,
-            true_mass=true_mass,
-            step_result=step_result,
-            step_wall_duration=step_wall_duration,
-            step_cpu_duration=step_cpu_duration,
-        )
-    return finalize_phase_4_metrics(
-        ctx,
-        stage_state,
-        trajectory=trajectory,
-        particle_filter=particle_filter,
     )
+    try:
+        with tracing_span(ctx["tracer"], phase):
+            set_span_attributes(
+                stage_span_attrs(
+                    run_id=ctx["run_id"],
+                    backend=ctx["backend"],
+                    num_particles=ctx["num_particles"],
+                    dt=ctx["dt"],
+                    execution_device=ctx["execution_device"],
+                    stage=phase,
+                    steps=len(trajectory),
+                )
+            )
+            stage_state = ctx["stage_state"]
+
+            def _warp_step(qpos, noisy_ft_reading, step: int, attempt: int = 1) -> dict[str, float | bool]:
+                particle_filter.particles = particle_filter.env.propagate(particle_filter.particles, qpos)
+                likelihoods = particle_filter.env.compute_likelihoods(particle_filter.particles, noisy_ft_reading)
+                diagnostics = particle_filter.env.last_measurement_diagnostics()
+                if not particle_filter._measurement_is_valid(diagnostics):
+                    return particle_filter._skip_invalid_update(diagnostics, attempt=attempt)
+                if not particle_filter._measurement_is_informative(diagnostics):
+                    return particle_filter._skip_uninformative_update(diagnostics)
+                offset = float(particle_filter._rng.uniform())
+                (
+                    particle_filter.weights,
+                    particle_filter.particles,
+                    particle_filter._ess,
+                    indexes,
+                    did_resample,
+                ) = update_and_optionally_resample(
+                    particle_filter.weights,
+                    particle_filter.particles,
+                    likelihoods,
+                    offset,
+                )
+                if did_resample:
+                    particle_filter.env.resample_states(indexes)
+                    particle_filter._resample_count += 1
+                particle_filter._save_last_good_snapshot()
+                uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = uniform_weight_metrics(
+                    particle_filter.weights
+                )
+                particle_filter._step_index += 1
+                return {
+                    "ess": float(particle_filter._ess),
+                    "resampled": did_resample,
+                    "resample_count": particle_filter._resample_count,
+                    "uniform_weight_l1_distance": uniform_weight_l1,
+                    "uniform_weight_max_deviation": uniform_weight_max_dev,
+                    "collapsed_to_uniform": collapsed_to_uniform,
+                    "diagnostics": diagnostics,
+                    "skipped_invalid_update": False,
+                    "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
+                    "bootstrap_attempts": attempt,
+                    "uninformative_update": False,
+                }
+
+            for step, qpos in enumerate(trajectory):
+                with tracing_span(ctx["tracer"], "step"):
+                    set_span_attributes(
+                        {
+                            "simbay.run_id": ctx["run_id"],
+                            "simbay.stage": "phase_4_lift",
+                            "simbay.backend": ctx["backend"],
+                            "simbay.control_dt": ctx["dt"],
+                            "simbay.execution_device": ctx["execution_device"],
+                        }
+                    )
+                    set_span_attributes(
+                        {
+                            "simbay.step": step,
+                            "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
+                            "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+                        }
+                    )
+                    with tracing_span(ctx["tracer"], "robot_execute"):
+                        set_span_attributes(
+                            {
+                                "simbay.run_id": ctx["run_id"],
+                                "simbay.stage": "phase_4_lift",
+                                "simbay.substage": "robot_execute",
+                                "simbay.backend": ctx["backend"],
+                                "simbay.execution_mode": "sequential",
+                                "simbay.parallel_units": 1,
+                            }
+                        )
+                        set_span_attributes({"simbay.step": step})
+                        robot_execute_start = time.perf_counter()
+                        real_robot.move_joints(qpos)
+                        if viewer is not None:
+                            viewer.sync()
+                        stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
+                    with tracing_span(ctx["tracer"], "pf_update"):
+                        previous_mass_estimate = float(particle_filter.estimate())
+                        set_span_attributes(
+                            {
+                                "simbay.run_id": ctx["run_id"],
+                                "simbay.stage": "phase_4_lift",
+                                "simbay.substage": "pf_update",
+                                "simbay.backend": ctx["backend"],
+                                "simbay.previous_mass_estimate_kg": previous_mass_estimate,
+                                "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
+                                "simbay.parallel_units": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+                            }
+                        )
+                        step_wall_start = time.perf_counter()
+                        step_cpu_start = time.process_time()
+                        measurements = real_robot.get_sensor_reads()
+                        noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=3)
+                        if ctx["backend"] == "mujoco-warp":
+                            with annotate("phase4_particle_filter_step"):
+                                if not stage_state["bootstrap_applied"]:
+                                    last_result = None
+                                    for attempt in range(1, 4):
+                                        step_result = _warp_step(qpos, noisy_ft_reading, step, attempt=attempt)
+                                        last_result = step_result
+                                        if not bool(step_result.get("skipped_invalid_update", False)):
+                                            if attempt > 1:
+                                                ctx["logger"].info({**ctx["log_data"], "event": "warp_first_update_recovered", "msg": f"Recovered the first Warp update after {attempt} attempts.", "attempts": attempt, "step": particle_filter._step_index - 1})
+                                            break
+                                    step_result = last_result if last_result is not None else _warp_step(qpos, noisy_ft_reading, step)
+                                    stage_state["bootstrap_applied"] = True
+                                else:
+                                    step_result = _warp_step(qpos, noisy_ft_reading, step)
+                        else:
+                            with annotate("phase4_particle_filter_step"):
+                                particle_filter.predict(qpos)
+                                particle_filter.update(noisy_ft_reading)
+                                did_resample = particle_filter.effective_sample_size() < (particle_filter.N / 2)
+                                if did_resample or ctx["backend"] != "cpu":
+                                    particle_filter.resample()
+                                step_result = {
+                                    "ess": particle_filter.effective_sample_size(),
+                                    "resampled": did_resample,
+                                    "resample_count": getattr(
+                                        particle_filter,
+                                        "_resample_count",
+                                        stage_state["resample_count"] + int(did_resample),
+                                    ),
+                                    "uniform_weight_l1_distance": 0.0,
+                                    "uniform_weight_max_deviation": 0.0,
+                                    "collapsed_to_uniform": False,
+                                }
+                        set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
+                step_wall_duration = time.perf_counter() - step_wall_start
+                step_cpu_duration = time.process_time() - step_cpu_start
+                update_phase_4_metrics(
+                    ctx,
+                    stage_state,
+                    particle_filter=particle_filter,
+                    step=step,
+                    true_mass=true_mass,
+                    step_result=step_result,
+                    step_wall_duration=step_wall_duration,
+                    step_cpu_duration=step_cpu_duration,
+                )
+            return finalize_phase_4_metrics(
+                ctx,
+                stage_state,
+                trajectory=trajectory,
+                particle_filter=particle_filter,
+            )
+    finally:
+        if ctx["backend"] == "mujoco-warp" and env is not None:
+            update_warp_memory_metrics(env, ctx["metrics"], stage=phase)
+        ctx["metrics"].finish_stage(stage_token)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "stage_finished",
+                "msg": f"Finished {stage_label}.",
+                "stage": phase,
+            }
+        )
+        ctx.pop("stage_state", None)
 
 
+@trace_call("simbay.main", span_name="main")
 def main(runtime: dict[str, Any]) -> None:
     logger = runtime["logger"]
     metrics = runtime["metrics"]
@@ -927,54 +957,32 @@ def main(runtime: dict[str, Any]) -> None:
     log_data = runtime["log_data"]
     run_id = runtime["run_id"]
 
-    setup_stage = metrics.start_stage("setup")
+    headless = HEADLESS
+    backend = BACKEND
+    setup_stage_token = metrics.start_stage("setup")
     logger.info({**log_data, "event": "stage_started", "msg": "Started setup.", "stage": "setup"})
-    with tracing_span(tracer, "setup"):
-        headless = HEADLESS
-        backend = BACKEND
-
-        use_batched_backend = backend == "mujoco-warp"
-        real_robot = initialize_mujoco_env()
-        viewer = None
-        if not headless:
-            viewer = mujoco.viewer.launch_passive(real_robot.model, real_robot.data)
-        real_robot.viewer = viewer
-        dt = real_robot.dt
-
-        obj_pos = DEFAULT_OBJECT_PROPS["pos"]
-        true_mass = DEFAULT_OBJECT_PROPS["mass"]
-        num_particles = NUM_PARTICLES
-        limits = (0.0, 3.0)
-
-        if backend == "mujoco-warp":
-            env = FrankaWarpEnv(limits, num_particles, logging_data=log_data)
-            particle_filter = WarpParticleFilter(env, logging_data=log_data)
-        elif backend == "cpu":
-            env = FrankaMuJoCoEnv(limits, num_particles)
-            particle_filter = ParticleFilter(env, logging_data=log_data)
-            _uniform_weight_metrics = None
-            _update_and_optionally_resample = None
-        else:
-            raise AssertionError(f"Unexpected backend: {backend}")
-
-        memory_profile = particle_filter.memory_profile()
-        env_memory_profile = env.memory_profile()
-        execution_device = str(env_memory_profile.get("execution_device", backend))
-        apply_setup_observability(
-            run_id=run_id,
+    try:
+        setup_result = setup(
+            backend=backend,
+            headless=headless,
+            log_data=log_data,
+            logger=logger,
             metrics=metrics,
-            backend_name=backend,
-            num_particles=num_particles,
-            dt=dt,
-            execution_device=execution_device,
-            true_mass=true_mass,
-            env=env,
-            env_memory_profile=env_memory_profile,
-            memory_profile=memory_profile,
+            run_id=run_id,
         )
-        logger.info({**log_data, "event": "simulation_setup", "msg": "Completed simulation setup.", "backend": backend, "headless": headless})
-    metrics.finish_stage(setup_stage)
-    logger.info({**log_data, "event": "stage_finished", "msg": "Finished setup.", "stage": "setup"})
+    finally:
+        metrics.finish_stage(setup_stage_token)
+        logger.info({**log_data, "event": "stage_finished", "msg": "Finished setup.", "stage": "setup"})
+
+    obj_pos = setup_result["obj_pos"]
+    true_mass = setup_result["true_mass"]
+    num_particles = setup_result["num_particles"]
+    real_robot = setup_result["real_robot"]
+    viewer = setup_result["viewer"]
+    dt = setup_result["dt"]
+    env = setup_result["env"]
+    particle_filter = setup_result["particle_filter"]
+    execution_device = setup_result["execution_device"]
 
     ctx = {
         "run_id": run_id,
@@ -989,80 +997,38 @@ def main(runtime: dict[str, Any]) -> None:
         "execution_device": execution_device,
     }
 
-    planning_stage = metrics.start_stage("ik_planning")
+    planning_stage_token = metrics.start_stage("ik_planning")
     logger.info({**log_data, "event": "stage_started", "msg": "Started ik planning.", "stage": "ik_planning"})
-    with tracing_span(tracer, "ik_planning"):
-        set_span_attributes(
-            stage_span_attrs(
-                run_id=run_id,
-                backend=backend,
-                num_particles=num_particles,
-                dt=dt,
-                execution_device=execution_device,
-                stage="ik_planning",
-            )
+    try:
+        planning_result = ik_planning(
+            backend=backend,
+            obj_pos=obj_pos,
+            dt=dt,
+            particle_filter=particle_filter,
+            logger=logger,
+            log_data=log_data,
         )
-        target_quat = np.array([0.0, 1.0, 0.0, 0.0])
+    finally:
+        metrics.finish_stage(planning_stage_token)
+        logger.info({**log_data, "event": "stage_finished", "msg": "Finished ik planning.", "stage": "ik_planning"})
 
-        pre_grasp_pos = obj_pos + np.array([0.0, 0.0, 0.15])
-        pre_grasp_q7 = FrankaSmartSolver.solve(FRANKA_HOME_QPOS, np.concatenate([pre_grasp_pos, target_quat]))
-        grasp_q7 = FrankaSmartSolver.solve(pre_grasp_q7, np.concatenate([obj_pos, target_quat]))
-        lift_pos = obj_pos + np.array([0.0, 0.0, 0.2])
-        lift_q7 = FrankaSmartSolver.solve(grasp_q7, np.concatenate([lift_pos, target_quat]))
+    traj1 = planning_result["traj1"]
+    traj2 = planning_result["traj2"]
+    traj3 = planning_result["traj3"]
+    traj4 = planning_result["traj4"]
 
-        q_home = np.append(FRANKA_HOME_QPOS, 255)
-        q_pre_grasp = np.append(pre_grasp_q7, 255)
-        q_grasp_open = np.append(grasp_q7, 255)
-        q_grasp_closed = np.append(grasp_q7, 0)
-        q_lift_closed = np.append(lift_q7, 0)
+    uniform_weight_metrics = _uniform_weight_metrics
+    update_and_optionally_resample = _update_and_optionally_resample
+    if backend == "cpu":
+        uniform_weight_metrics = None
+        update_and_optionally_resample = None
 
-        traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
-        traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
-        traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
-        traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
-        set_span_attributes(
-            {
-                "ik.target_quat_dim": int(target_quat.shape[0]),
-                "ik.pre_grasp_height": float(pre_grasp_pos[2]),
-                "ik.lift_height": float(lift_pos[2]),
-            }
-        )
-        if use_batched_backend:
-            warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
-            logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend, "rollout_lengths": warmed_rollout_lengths, "phase4_step_warmup": 1})
-    metrics.finish_stage(planning_stage)
-    logger.info({**log_data, "event": "stage_finished", "msg": "Finished ik planning.", "stage": "ik_planning"})
-
-    run_phase_1_approach(
-        ctx,
-        steps=len(traj1),
-        trajectory=traj1,
-        real_robot=real_robot,
-        viewer=viewer,
-        particle_filter=particle_filter,
-        use_batched_backend=use_batched_backend,
-        env=env,
-    )
-    run_phase_2_descend(
-        ctx,
-        steps=len(traj2),
-        trajectory=traj2,
-        real_robot=real_robot,
-        viewer=viewer,
-        particle_filter=particle_filter,
-        use_batched_backend=use_batched_backend,
-        env=env,
-    )
-    run_phase_3_grip(
-        ctx,
-        steps=len(traj3),
-        trajectory=traj3,
-        real_robot=real_robot,
-        viewer=viewer,
-        particle_filter=particle_filter,
-        use_batched_backend=use_batched_backend,
-        env=env,
-    )
+    robot_execute(ctx, "phase_1_approach", traj1, real_robot, viewer)
+    pf_replay(ctx, "phase_1_approach", traj1, particle_filter)
+    robot_execute(ctx, "phase_2_descend", traj2, real_robot, viewer)
+    pf_replay(ctx, "phase_2_descend", traj2, particle_filter)
+    robot_execute(ctx, "phase_3_grip", traj3, real_robot, viewer)
+    pf_replay(ctx, "phase_3_grip", traj3, particle_filter)
     lift_result = run_phase_4_lift(
         ctx,
         steps=len(traj4),
@@ -1072,8 +1038,8 @@ def main(runtime: dict[str, Any]) -> None:
         particle_filter=particle_filter,
         env=env,
         true_mass=true_mass,
-        uniform_weight_metrics=_uniform_weight_metrics,
-        update_and_optionally_resample=_update_and_optionally_resample,
+        uniform_weight_metrics=uniform_weight_metrics,
+        update_and_optionally_resample=update_and_optionally_resample,
     )
 
     history_estimates = lift_result.history_estimates
@@ -1092,13 +1058,13 @@ def main(runtime: dict[str, Any]) -> None:
         logger.info({**log_data, "event": "particle_filter_completed", "msg": "Finished the particle filter run.", "backend": "mujoco-warp"})
 
     logger.info({**log_data, "event": "sequence_complete", "msg": "Finished the execution sequence.", "awaiting_user_input": not headless})
-    if not headless and not is_shutdown_requested():
+    if not headless and not shutdown_requested:
         input()
-    elif not headless and is_shutdown_requested():
-        logger.info({**log_data, "event": "sequence_complete_skipping_user_input", "msg": "Skipped waiting for user input because shutdown was requested.", "signal": get_shutdown_signal_name()})
+    elif not headless and shutdown_requested:
+        logger.info({**log_data, "event": "sequence_complete_skipping_user_input", "msg": "Skipped waiting for user input because shutdown was requested.", "signal": shutdown_signal_name})
 
     final_prediction = float(particle_filter.estimate())
-    time_to_prediction_seconds = elapsed_seconds(runtime["started_at"])
+    time_to_prediction_seconds = time.perf_counter() - runtime["started_at"]
     metrics.set_prediction_ready(
         total_wall_seconds=time_to_prediction_seconds,
         final_error_pct=abs(true_mass - final_prediction) * 100,
@@ -1123,7 +1089,7 @@ def main(runtime: dict[str, Any]) -> None:
     logger.info({**log_data, "event": "plot_saved", "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 
     gc.collect()
-    logger.info({**log_data, "event": "goodbye", "msg": "Finished the run and shut down cleanly.", "shutdown_requested": is_shutdown_requested(), "signal": get_shutdown_signal_name() or "none"})
+    logger.info({**log_data, "event": "goodbye", "msg": "Finished the run and shut down cleanly.", "shutdown_requested": shutdown_requested, "signal": shutdown_signal_name or "none"})
 
 
 if __name__ == "__main__":
@@ -1132,4 +1098,5 @@ if __name__ == "__main__":
     try:
         main(runtime)
     finally:
-        shutdown_runtime(runtime)
+        if runtime is not None:
+            runtime["exit_stack"].close()
