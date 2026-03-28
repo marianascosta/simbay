@@ -21,16 +21,14 @@ from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
 from src.utils.logging_utils import setup_logging
 from src.utils.metrics import LiftPhaseResult
-from src.utils.metrics import begin_stage_observability
 from src.utils.metrics import apply_setup_observability
-from src.utils.metrics import finish_stage_observability
+from src.utils.metrics import observed_stage
 from src.utils.metrics import init_metrics
 from src.utils.metrics import init_stage_state
 from src.utils.metrics import finalize_phase_4_metrics
 from src.utils.metrics import shutdown_metrics
 from src.utils.metrics import stage_span_attrs
 from src.utils.metrics import substage_span_attrs
-from src.utils.metrics import update_warp_memory_metrics
 from src.utils.metrics import phase_4_step_observability
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
@@ -99,6 +97,7 @@ def install_signal_handlers(logger: Any, log_data: dict[str, object]) -> None:
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
+@observed_stage("setup")
 @trace_call("simbay.main", span_name="setup")
 def setup(
     *,
@@ -160,6 +159,7 @@ def setup(
     }
 
 
+@observed_stage("ik_planning")
 @trace_call("simbay.main", span_name="ik_planning")
 def ik_planning(
     *,
@@ -310,6 +310,8 @@ def pf_replay(
     return duration
 
 
+@observed_stage("phase_4_lift", env_arg="env")
+@trace_call("simbay.main", span_name="phase_4_lift")
 def run_phase_4_lift(
     ctx: dict[str, Any],
     *,
@@ -327,71 +329,67 @@ def run_phase_4_lift(
     stage_state = init_stage_state(phase)
     if stage_state is not None:
         ctx["stage_state"] = stage_state
-    stage_token = begin_stage_observability(ctx, stage=phase)
-    try:
-        with tracing_span(ctx["tracer"], phase):
-            set_span_attributes(
-                stage_span_attrs(
-                    run_id=ctx["run_id"],
-                    backend=ctx["backend"],
-                    num_particles=ctx["num_particles"],
-                    dt=ctx["dt"],
-                    execution_device=ctx["execution_device"],
-                    stage=phase,
-                    steps=len(trajectory),
+    with tracing_span(ctx["tracer"], phase):
+        set_span_attributes(
+            stage_span_attrs(
+                run_id=ctx["run_id"],
+                backend=ctx["backend"],
+                num_particles=ctx["num_particles"],
+                dt=ctx["dt"],
+                execution_device=ctx["execution_device"],
+                stage=phase,
+                steps=len(trajectory),
+            )
+        )
+        stage_state = ctx["stage_state"]
+        for step, qpos in enumerate(trajectory):
+            with tracing_span(ctx["tracer"], "step"):
+                set_span_attributes(
+                    {
+                        "simbay.run_id": ctx["run_id"],
+                        "simbay.stage": phase,
+                        "simbay.backend": ctx["backend"],
+                        "simbay.control_dt": ctx["dt"],
+                        "simbay.execution_device": ctx["execution_device"],
+                    }
                 )
-            )
-            stage_state = ctx["stage_state"]
-            for step, qpos in enumerate(trajectory):
-                with tracing_span(ctx["tracer"], "step"):
-                    set_span_attributes(
-                        {
-                            "simbay.run_id": ctx["run_id"],
-                            "simbay.stage": phase,
-                            "simbay.backend": ctx["backend"],
-                            "simbay.control_dt": ctx["dt"],
-                            "simbay.execution_device": ctx["execution_device"],
-                        }
-                    )
-                    set_span_attributes(
-                        {
-                            "simbay.step": step,
-                            "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
-                            "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
-                        }
-                    )
-                    step_wall_start = time.perf_counter()
-                    step_cpu_start = time.process_time()
-                    step_result = phase_4_step_logic(
-                        backend=ctx["backend"],
-                        stage_state=stage_state,
-                        particle_filter=particle_filter,
-                        real_robot=real_robot,
-                        viewer=viewer,
-                        qpos=qpos,
-                        uniform_weight_metrics=uniform_weight_metrics,
-                        update_and_optionally_resample=update_and_optionally_resample,
-                    )
-                    step_wall_duration = time.perf_counter() - step_wall_start
-                    step_cpu_duration = time.process_time() - step_cpu_start
-                    phase_4_step_observability(
-                        ctx,
-                        stage_state,
-                        particle_filter=particle_filter,
-                        step=step,
-                        true_mass=true_mass,
-                        step_result=step_result,
-                        step_wall_duration=step_wall_duration,
-                        step_cpu_duration=step_cpu_duration,
-                    )
-            return finalize_phase_4_metrics(
-                ctx,
-                stage_state,
-                trajectory=trajectory,
-                particle_filter=particle_filter,
-            )
-    finally:
-        finish_stage_observability(ctx, stage=phase, stage_token=stage_token, env=env)
+                set_span_attributes(
+                    {
+                        "simbay.step": step,
+                        "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
+                        "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+                    }
+                )
+                step_wall_start = time.perf_counter()
+                step_cpu_start = time.process_time()
+                step_result = phase_4_step_logic(
+                    backend=ctx["backend"],
+                    stage_state=stage_state,
+                    particle_filter=particle_filter,
+                    real_robot=real_robot,
+                    viewer=viewer,
+                    qpos=qpos,
+                    uniform_weight_metrics=uniform_weight_metrics,
+                    update_and_optionally_resample=update_and_optionally_resample,
+                )
+                step_wall_duration = time.perf_counter() - step_wall_start
+                step_cpu_duration = time.process_time() - step_cpu_start
+                phase_4_step_observability(
+                    ctx,
+                    stage_state,
+                    particle_filter=particle_filter,
+                    step=step,
+                    true_mass=true_mass,
+                    step_result=step_result,
+                    step_wall_duration=step_wall_duration,
+                    step_cpu_duration=step_cpu_duration,
+                )
+        return finalize_phase_4_metrics(
+            ctx,
+            stage_state,
+            trajectory=trajectory,
+            particle_filter=particle_filter,
+        )
 
 
 @trace_call("simbay.main", span_name="main")
@@ -404,18 +402,14 @@ def main(runtime: dict[str, Any]) -> None:
 
     headless = HEADLESS
     backend = BACKEND
-    setup_stage_token = begin_stage_observability(runtime, stage="setup")
-    try:
-        setup_result = setup(
-            backend=backend,
-            headless=headless,
-            log_data=log_data,
-            logger=logger,
-            metrics=metrics,
-            run_id=run_id,
-        )
-    finally:
-        finish_stage_observability(runtime, stage="setup", stage_token=setup_stage_token)
+    setup_result = setup(
+        backend=backend,
+        headless=headless,
+        log_data=log_data,
+        logger=logger,
+        metrics=metrics,
+        run_id=run_id,
+    )
 
     obj_pos = setup_result["obj_pos"]
     true_mass = setup_result["true_mass"]
@@ -440,18 +434,14 @@ def main(runtime: dict[str, Any]) -> None:
         "execution_device": execution_device,
     }
 
-    planning_stage_token = begin_stage_observability(runtime, stage="ik_planning")
-    try:
-        planning_result = ik_planning(
-            backend=backend,
-            obj_pos=obj_pos,
-            dt=dt,
-            particle_filter=particle_filter,
-            logger=logger,
-            log_data=log_data,
-        )
-    finally:
-        finish_stage_observability(runtime, stage="ik_planning", stage_token=planning_stage_token)
+    planning_result = ik_planning(
+        backend=backend,
+        obj_pos=obj_pos,
+        dt=dt,
+        particle_filter=particle_filter,
+        logger=logger,
+        log_data=log_data,
+    )
 
     traj1 = planning_result["traj1"]
     traj2 = planning_result["traj2"]

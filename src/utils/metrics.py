@@ -1,4 +1,5 @@
 import math
+import inspect
 import os
 import subprocess
 import threading
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from socketserver import ThreadingMixIn
 from typing import Any
 from typing import Iterable
+from functools import wraps
 from wsgiref.simple_server import WSGIServer
 from wsgiref.simple_server import make_server
 
@@ -1249,39 +1251,59 @@ def update_warp_memory_metrics(env: Any, metrics_obj: Any, *, stage: str) -> Non
     )
 
 
-def begin_stage_observability(ctx: dict[str, Any], *, stage: str) -> StageToken:
-    stage_token = ctx["metrics"].start_stage(stage)
-    stage_label = stage.replace("_", " ")
-    ctx["logger"].info(
-        {
-            **ctx["log_data"],
-            "event": "stage_started",
-            "msg": f"Started {stage_label}.",
-            "stage": stage,
-        }
-    )
-    return stage_token
+def observed_stage(stage: str, *, env_arg: str | None = None):
+    def decorator(func):
+        signature = inspect.signature(func)
 
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = signature.bind_partial(*args, **kwargs)
+            metrics_obj = bound.arguments.get("metrics")
+            logger = bound.arguments.get("logger")
+            log_data = bound.arguments.get("log_data")
+            backend = bound.arguments.get("backend")
+            env = bound.arguments.get(env_arg) if env_arg is not None else None
+            ctx = bound.arguments.get("ctx")
 
-def finish_stage_observability(
-    ctx: dict[str, Any],
-    *,
-    stage: str,
-    stage_token: StageToken,
-    env: Any | None = None,
-) -> None:
-    if ctx.get("backend") == "mujoco-warp" and env is not None:
-        update_warp_memory_metrics(env, ctx["metrics"], stage=stage)
-    ctx["metrics"].finish_stage(stage_token)
-    stage_label = stage.replace("_", " ")
-    ctx["logger"].info(
-        {
-            **ctx["log_data"],
-            "event": "stage_finished",
-            "msg": f"Finished {stage_label}.",
-            "stage": stage,
-        }
-    )
+            if ctx is not None:
+                metrics_obj = ctx["metrics"]
+                logger = ctx["logger"]
+                log_data = ctx["log_data"]
+                backend = ctx.get("backend")
+                if env_arg is not None and env is None:
+                    env = bound.arguments.get(env_arg)
+
+            if metrics_obj is None or logger is None or log_data is None:
+                raise ValueError(f"observed_stage requires metrics, logger, and log_data for stage {stage}")
+
+            stage_token = metrics_obj.start_stage(stage)
+            stage_label = stage.replace("_", " ")
+            logger.info(
+                {
+                    **log_data,
+                    "event": "stage_started",
+                    "msg": f"Started {stage_label}.",
+                    "stage": stage,
+                }
+            )
+            try:
+                return func(*args, **kwargs)
+            finally:
+                if backend == "mujoco-warp" and env is not None:
+                    update_warp_memory_metrics(env, metrics_obj, stage=stage)
+                metrics_obj.finish_stage(stage_token)
+                logger.info(
+                    {
+                        **log_data,
+                        "event": "stage_finished",
+                        "msg": f"Finished {stage_label}.",
+                        "stage": stage,
+                    }
+                )
+
+        return wrapper
+
+    return decorator
 
 
 def apply_setup_observability(
