@@ -14,9 +14,42 @@ from wsgiref.simple_server import WSGIServer
 from wsgiref.simple_server import make_server
 
 import numpy as np
-from prometheus_client import CollectorRegistry
-from prometheus_client import Gauge
-from prometheus_client import make_wsgi_app
+try:
+    from prometheus_client import CollectorRegistry
+    from prometheus_client import Gauge
+    from prometheus_client import make_wsgi_app
+    PROMETHEUS_AVAILABLE = True
+except ModuleNotFoundError:
+    PROMETHEUS_AVAILABLE = False
+
+    class CollectorRegistry:  # type: ignore[no-redef]
+        pass
+
+    class _NoOpMetric:
+        def labels(self, *args: Any, **kwargs: Any) -> "_NoOpMetric":
+            return self
+
+        def set(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def inc(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def dec(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def observe(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    def Gauge(*args: Any, **kwargs: Any) -> _NoOpMetric:  # type: ignore[no-redef]
+        return _NoOpMetric()
+
+    def make_wsgi_app(_registry: Any):  # type: ignore[no-redef]
+        def _app(environ: Any, start_response: Any):
+            start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"prometheus_client is unavailable\n"]
+
+        return _app
 
 from .logging_utils import get_process_memory_bytes
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
@@ -746,7 +779,7 @@ class SimbayMetrics:
         return (self.run_id, phase, substage)
 
     def start(self) -> None:
-        if not self.enabled or self._server is not None:
+        if not self.enabled or not PROMETHEUS_AVAILABLE or self._server is not None:
             return
         try:
             app = make_wsgi_app(self.registry)
@@ -1134,57 +1167,6 @@ def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) 
     return float(np.interp(quantile, cumulative, sorted_values))
 
 
-def stage_span_attrs(
-    *,
-    run_id: str,
-    backend: str,
-    num_particles: int,
-    dt: float,
-    execution_device: str,
-    stage: str,
-    steps: int | None = None,
-) -> dict[str, str | int | float | bool]:
-    attrs: dict[str, str | int | float | bool] = {
-        "simbay.run_id": run_id,
-        "simbay.stage": stage,
-        "simbay.backend": backend,
-        "simbay.particles": num_particles,
-        "simbay.control_dt": dt,
-        "simbay.execution_device": execution_device,
-    }
-    if steps is not None:
-        attrs["simbay.steps"] = steps
-    return attrs
-
-
-def substage_span_attrs(
-    *,
-    run_id: str,
-    backend: str,
-    num_particles: int,
-    dt: float,
-    execution_device: str,
-    stage: str,
-    substage: str,
-    steps: int,
-    execution_mode: str,
-    parallel_units: int,
-) -> dict[str, str | int | float | bool]:
-    attrs = stage_span_attrs(
-        run_id=run_id,
-        backend=backend,
-        num_particles=num_particles,
-        dt=dt,
-        execution_device=execution_device,
-        stage=stage,
-        steps=steps,
-    )
-    attrs["simbay.substage"] = substage
-    attrs["simbay.execution_mode"] = execution_mode
-    attrs["simbay.parallel_units"] = parallel_units
-    return attrs
-
-
 def init_stage_state(stage_name: str) -> dict[str, Any] | None:
     if stage_name != "phase_4_lift":
         return None
@@ -1525,6 +1507,68 @@ def update_phase_4_metrics(
     )
 
 
+def phase_4_step_observability(
+    ctx: dict[str, Any],
+    stage_state: dict[str, Any],
+    *,
+    particle_filter: Any,
+    step: int,
+    true_mass: float,
+    step_result: dict[str, Any],
+    step_wall_duration: float,
+    step_cpu_duration: float,
+) -> None:
+    previous_mass_estimate = (
+        float(stage_state["history_estimates"][-1]) if stage_state["history_estimates"] else float(particle_filter.estimate())
+    )
+    set_span_attributes(
+        {
+            **ctx["span_attrs"],
+            "simbay.stage": "phase_4_lift",
+            "simbay.substage": "robot_execute",
+            "simbay.substage_execution_strategy": "single_robot_control_loop",
+            "simbay.execution_parallel_unit_count": 1,
+        }
+    )
+    set_span_attributes({"simbay.phase_step_index": step})
+    set_span_attributes(
+        {
+            **ctx["span_attrs"],
+            "simbay.stage": "phase_4_lift",
+            "simbay.substage": "pf_update",
+            "simbay.previous_mass_estimate_kg": previous_mass_estimate,
+            "simbay.particle_update_strategy": (
+                "single_control_step_across_all_particles_in_batch"
+                if ctx["backend"] == "mujoco-warp"
+                else "single_control_step_one_particle_update_at_a_time"
+            ),
+            "simbay.execution_parallel_unit_count": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+        }
+    )
+    set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
+    recovered_attempts = int(step_result.get("recovered_first_update_attempts", 0))
+    if recovered_attempts > 1:
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "warp_first_update_recovered",
+                "msg": f"Recovered the first Warp update after {recovered_attempts} attempts.",
+                "attempts": recovered_attempts,
+                "step": particle_filter._step_index - 1,
+            }
+        )
+    update_phase_4_metrics(
+        ctx,
+        stage_state,
+        particle_filter=particle_filter,
+        step=step,
+        true_mass=true_mass,
+        step_result=step_result,
+        step_wall_duration=step_wall_duration,
+        step_cpu_duration=step_cpu_duration,
+    )
+
+
 def finalize_phase_4_metrics(
     ctx: dict[str, Any],
     state: dict[str, Any],
@@ -1533,7 +1577,6 @@ def finalize_phase_4_metrics(
     particle_filter: Any,
 ) -> LiftPhaseResult:
     phase = "phase_4_lift"
-    phase_label = PHASE_LOG_LABELS[phase]
     ctx["metrics"].set_substage_duration(phase, "robot_execute", state["robot_execute_total"])
     ctx["metrics"].set_substage_duration(phase, "pf_update", state["pf_update_total"])
     substage = "robot_execute"
@@ -1550,7 +1593,7 @@ def finalize_phase_4_metrics(
         {
             **ctx["log_data"],
             "event": "substage_finished",
-            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "msg": "Finished robot motion for phase 4 (lift).",
             "phase": phase,
             "substage": substage,
         }
@@ -1569,7 +1612,7 @@ def finalize_phase_4_metrics(
         {
             **ctx["log_data"],
             "event": "substage_finished",
-            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "msg": "Finished particle filter update for phase 4 (lift).",
             "phase": phase,
             "substage": substage,
         }
