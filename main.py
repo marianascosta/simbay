@@ -51,20 +51,6 @@ shutdown_signal_name: str | None = None
 LOGGER: Any | None = None
 METRICS: Any | None = None
 
-PHASE_LOG_LABELS = {
-    "phase_1_approach": "phase 1 (approach)",
-    "phase_2_descend": "phase 2 (descent)",
-    "phase_3_grip": "phase 3 (grip)",
-    "phase_4_lift": "phase 4 (lift)",
-}
-
-SUBSTAGE_FINISHED_LABELS = {
-    "robot_execute": "robot motion",
-    "pf_replay": "particle filter replay",
-    "pf_update": "particle filter update",
-}
-
-
 def init_runtime(run_id: str = RUN_ID) -> dict[str, Any]:
     global LOGGER
     global METRICS
@@ -229,7 +215,16 @@ def robot_execute(
     if LOGGER is None or METRICS is None:
         raise RuntimeError("Runtime logger and metrics must be initialized before robot execution.")
     substage = "robot_execute"
-    phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
+    if phase == "phase_1_approach":
+        phase_label = "phase 1 (approach)"
+    elif phase == "phase_2_descend":
+        phase_label = "phase 2 (descent)"
+    elif phase == "phase_3_grip":
+        phase_label = "phase 3 (grip)"
+    elif phase == "phase_4_lift":
+        phase_label = "phase 4 (lift)"
+    else:
+        phase_label = phase.replace("_", " ")
     span_attrs = {
         **span_attrs,
         "simbay.stage": phase,
@@ -255,7 +250,7 @@ def robot_execute(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "msg": f"Finished robot motion for {phase_label}.",
         }
     )
     METRICS.set_substage_workload(phase, substage, len(trajectory), 1, duration)
@@ -275,7 +270,16 @@ def pf_replay(
     if LOGGER is None or METRICS is None:
         raise RuntimeError("Runtime logger and metrics must be initialized before particle filter replay.")
     substage = "pf_replay"
-    phase_label = PHASE_LOG_LABELS.get(phase, phase.replace("_", " "))
+    if phase == "phase_1_approach":
+        phase_label = "phase 1 (approach)"
+    elif phase == "phase_2_descend":
+        phase_label = "phase 2 (descent)"
+    elif phase == "phase_3_grip":
+        phase_label = "phase 3 (grip)"
+    elif phase == "phase_4_lift":
+        phase_label = "phase 4 (lift)"
+    else:
+        phase_label = phase.replace("_", " ")
     span_attrs = {
         **span_attrs,
         "simbay.stage": phase,
@@ -305,7 +309,7 @@ def pf_replay(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Finished {SUBSTAGE_FINISHED_LABELS[substage]} for {phase_label}.",
+            "msg": f"Finished particle filter replay for {phase_label}.",
         }
     )
     METRICS.set_substage_workload(phase, substage, len(trajectory), particle_filter.N, duration)
@@ -592,7 +596,7 @@ def main(runtime: dict[str, Any]) -> None:
     traj4 = planning_result["traj4"]
 
     phase = "phase_1_approach"
-    phase_label = PHASE_LOG_LABELS[phase]
+    phase_label = "phase 1 (approach)"
     phase_token = metrics.start_stage(phase)
     logger.info({**log_data, "msg": f"Started {phase_label}."})
     try:
@@ -613,7 +617,7 @@ def main(runtime: dict[str, Any]) -> None:
         logger.info({**log_data, "msg": f"Finished {phase_label}."})
 
     phase = "phase_2_descend"
-    phase_label = PHASE_LOG_LABELS[phase]
+    phase_label = "phase 2 (descent)"
     phase_token = metrics.start_stage(phase)
     logger.info({**log_data, "msg": f"Started {phase_label}."})
     try:
@@ -634,7 +638,7 @@ def main(runtime: dict[str, Any]) -> None:
         logger.info({**log_data, "msg": f"Finished {phase_label}."})
 
     phase = "phase_3_grip"
-    phase_label = PHASE_LOG_LABELS[phase]
+    phase_label = "phase 3 (grip)"
     phase_token = metrics.start_stage(phase)
     logger.info({**log_data, "msg": f"Started {phase_label}."})
     try:
