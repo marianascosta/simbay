@@ -119,9 +119,6 @@ class WarpParticleFilter:
                 event="warp_particle_filter_initialized",
                 msg=f"Initialised the Warp particle filter with {self.N} particles.",
                 particles=self.N,
-                state_bytes_total=self.state_bytes_total,
-                state_bytes_per_particle=self.state_bytes_per_particle,
-                process_memory_per_particle_estimate_bytes=(self.process_memory_per_particle_estimate),
             )
         )
 
@@ -149,8 +146,6 @@ class WarpParticleFilter:
                 self.logging_data,
                 event="warp_filter_runtime_warmup_done",
                 msg="Finished warming up the Warp particle filter runtime.",
-                particles=self.N,
-                rollout_lengths=warmed_rollout_lengths,
             )
         )
         return warmed_rollout_lengths
@@ -214,15 +209,6 @@ class WarpParticleFilter:
                 step=self._step_index,
                 attempt=attempt,
                 restored=restored,
-                ess=float(self._ess),
-                likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 0.0),
-                sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
-                diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
-                qpos_nonfinite_count=int(diagnostics.get("qpos_nonfinite_count", 0.0)),
-                qvel_nonfinite_count=int(diagnostics.get("qvel_nonfinite_count", 0.0)),
-                sensordata_nonfinite_count=int(diagnostics.get("sensordata_nonfinite_count", 0.0)),
-                ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
             )
         )
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
@@ -258,12 +244,6 @@ class WarpParticleFilter:
                 msg=f"Skipped an uninformative Warp update at step {self._step_index}.",
                 step=self._step_index,
                 restored=restored,
-                ess=float(self._ess),
-                likelihood_std=diagnostics.get("likelihood_std", 0.0),
-                likelihood_range=diagnostics.get("likelihood_range", 0.0),
-                sim_force_axis_std_x=diagnostics.get("sim_force_axis_std_x", 0.0),
-                sim_force_axis_std_y=diagnostics.get("sim_force_axis_std_y", 0.0),
-                sim_force_axis_std_z=diagnostics.get("sim_force_axis_std_z", 0.0),
             )
         )
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
@@ -342,13 +322,6 @@ class WarpParticleFilter:
                     event="warp_weight_update_uninformative",
                     msg=(f"Detected an uninformative Warp weight update at step " f"{self._step_index}."),
                     step=self._step_index,
-                    ess=float(self._ess),
-                    likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 1.0),
-                    sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
-                    diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                    likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
-                    first_invalid_sensor_step=int(diagnostics.get("first_invalid_sensor_step", -1.0)),
-                    first_invalid_state_step=int(diagnostics.get("first_invalid_state_step", -1.0)),
                 )
             )
         self._step_index += 1

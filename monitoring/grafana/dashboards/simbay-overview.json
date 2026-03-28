@@ -74,7 +74,7 @@
           },
           "direction": "backward",
           "editorMode": "builder",
-          "expr": "{service_name=\"simbay\"} |= ``",
+          "expr": "{service_name=\"simbay\"} | json | run_id=~\"$run_id\"",
           "key": "Q-7a2d255e-2f6b-4113-8081-56d63ec28776-0",
           "queryType": "range",
           "refId": "A"

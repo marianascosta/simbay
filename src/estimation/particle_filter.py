@@ -50,9 +50,6 @@ class ParticleFilter:
                 event="particle_filter_initialized",
                 msg=f"Initialised the particle filter with {self.N} particles.",
                 particles=self.N,
-                state_bytes_total=self.state_bytes_total,
-                state_bytes_per_particle=self.state_bytes_per_particle,
-                process_memory_per_particle_estimate_bytes=(self.process_memory_per_particle_estimate),
             )
         )
 

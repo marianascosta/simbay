@@ -199,7 +199,7 @@ def ik_planning(
     )
     if backend == "mujoco-warp":
         warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
-        logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend, "rollout_lengths": warmed_rollout_lengths, "phase4_step_warmup": 1})
+        logger.info({**log_data, "event": "backend_runtime_warmup_summary", "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend})
     return {
         "traj1": traj1,
         "traj2": traj2,
@@ -225,7 +225,7 @@ def robot_execute(
             "simbay.trajectory_step_count": len(trajectory),
             "simbay.substage": substage,
             "simbay.substage_execution_strategy": "single_robot_control_loop",
-            "simbay.execution_parallel_unit_count": 1,
+            "simbay.particles_updated_at_the_same_time": 1,
             "simbay.commanded_robot_motion_seconds": len(trajectory) * ctx["dt"],
         }
     )
@@ -277,7 +277,7 @@ def pf_replay(
                 if ctx["backend"] == "mujoco-warp"
                 else "trajectory_replay_one_control_step_at_a_time"
             ),
-            "simbay.execution_parallel_unit_count": particle_filter.N if ctx["backend"] == "mujoco-warp" else 1,
+            "simbay.particles_updated_at_the_same_time": particle_filter.N if ctx["backend"] == "mujoco-warp" else 1,
         }
     )
     stage_token = ctx["metrics"].start_substage(phase, substage)

@@ -69,9 +69,6 @@ class WarpBatch:
                 event="warp_batch_init",
                 msg=f"Initialised the Warp batch with {self._size} worlds.",
                 nworld=self._size,
-                body_id=body_id,
-                nconmax=nconmax,
-                njmax=njmax,
             )
         )
 
@@ -135,7 +132,6 @@ class WarpBatch:
                 self.logging_data,
                 event="warp_batch_rollout_warmup_done",
                 msg=f"Finished Warp rollout warm-up over {steps} steps.",
-                steps=steps,
             )
         )
 

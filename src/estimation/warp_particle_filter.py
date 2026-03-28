@@ -96,7 +96,6 @@ class FrankaWarpEnv(ParticleEnvironment):
                 self.logging_data,
                 event="warp_runtime_warmup_start",
                 msg=(f"Started warming up the Warp runtime with {self._num_particles} particles."),
-                particles=self._num_particles,
             )
         )
         self._batch.warmup()
@@ -219,13 +218,6 @@ class FrankaWarpEnv(ParticleEnvironment):
                     event="warp_invalid_sensor_state",
                     msg=f"Detected an invalid Warp sensor state at step {self._step_count}.",
                     step=self._step_count,
-                    observation=observation_np.tolist(),
-                    mass_min=float(np.min(self._masses)) if self._masses.size else 0.0,
-                    mass_max=float(np.max(self._masses)) if self._masses.size else 0.0,
-                    mass_mean=float(np.mean(self._masses)) if self._masses.size else 0.0,
-                    sim_force_nonfinite_count=sim_force_nonfinite_count,
-                    diff_nonfinite_count=diff_nonfinite_count,
-                    likelihood_nonfinite_count=likelihood_nonfinite_count,
                 )
             )
         if state_invalid_transition:
@@ -235,10 +227,6 @@ class FrankaWarpEnv(ParticleEnvironment):
                     event="warp_invalid_backend_state",
                     msg=f"Detected an invalid Warp backend state at step {self._step_count}.",
                     step=self._step_count,
-                    qpos_nonfinite_count=state_nonfinite_counts["qpos_nonfinite_count"],
-                    qvel_nonfinite_count=state_nonfinite_counts["qvel_nonfinite_count"],
-                    sensordata_nonfinite_count=state_nonfinite_counts["sensordata_nonfinite_count"],
-                    ctrl_nonfinite_count=state_nonfinite_counts["ctrl_nonfinite_count"],
                 )
             )
         repair_active_now = bool(np.any(repaired_worlds))
@@ -251,7 +239,6 @@ class FrankaWarpEnv(ParticleEnvironment):
                     event="warp_repaired_invalid_worlds",
                     msg=(f"Repaired invalid Warp worlds at step {self._step_count}."),
                     step=self._step_count,
-                    repaired_world_count=int(np.count_nonzero(repaired_worlds)),
                 )
             )
 
@@ -325,8 +312,6 @@ class FrankaWarpEnv(ParticleEnvironment):
                 self.logging_data,
                 event="warp_runtime_rollout_warmup_done",
                 msg="Finished warming up Warp rollout execution.",
-                particles=self._num_particles,
-                rollout_lengths=normalized_lengths,
             )
         )
         return normalized_lengths

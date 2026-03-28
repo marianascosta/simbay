@@ -14,42 +14,9 @@ from wsgiref.simple_server import WSGIServer
 from wsgiref.simple_server import make_server
 
 import numpy as np
-try:
-    from prometheus_client import CollectorRegistry
-    from prometheus_client import Gauge
-    from prometheus_client import make_wsgi_app
-    PROMETHEUS_AVAILABLE = True
-except ModuleNotFoundError:
-    PROMETHEUS_AVAILABLE = False
-
-    class CollectorRegistry:  # type: ignore[no-redef]
-        pass
-
-    class _NoOpMetric:
-        def labels(self, *args: Any, **kwargs: Any) -> "_NoOpMetric":
-            return self
-
-        def set(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def inc(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def dec(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def observe(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-    def Gauge(*args: Any, **kwargs: Any) -> _NoOpMetric:  # type: ignore[no-redef]
-        return _NoOpMetric()
-
-    def make_wsgi_app(_registry: Any):  # type: ignore[no-redef]
-        def _app(environ: Any, start_response: Any):
-            start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
-            return [b"prometheus_client is unavailable\n"]
-
-        return _app
+from prometheus_client import CollectorRegistry
+from prometheus_client import Gauge
+from prometheus_client import make_wsgi_app
 
 from .logging_utils import get_process_memory_bytes
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
@@ -98,6 +65,9 @@ class SubstageToken:
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return None
 
 
 class SimbayMetrics:
@@ -779,7 +749,7 @@ class SimbayMetrics:
         return (self.run_id, phase, substage)
 
     def start(self) -> None:
-        if not self.enabled or not PROMETHEUS_AVAILABLE or self._server is not None:
+        if not self.enabled or self._server is not None:
             return
         try:
             app = make_wsgi_app(self.registry)
@@ -1527,7 +1497,7 @@ def phase_4_step_observability(
             "simbay.stage": "phase_4_lift",
             "simbay.substage": "robot_execute",
             "simbay.substage_execution_strategy": "single_robot_control_loop",
-            "simbay.execution_parallel_unit_count": 1,
+            "simbay.particles_updated_at_the_same_time": 1,
         }
     )
     set_span_attributes({"simbay.phase_step_index": step})
@@ -1542,7 +1512,7 @@ def phase_4_step_observability(
                 if ctx["backend"] == "mujoco-warp"
                 else "single_control_step_one_particle_update_at_a_time"
             ),
-            "simbay.execution_parallel_unit_count": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+            "simbay.particles_updated_at_the_same_time": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
         }
     )
     set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
