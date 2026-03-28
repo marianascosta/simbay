@@ -1,0 +1,21 @@
+services:
+  simbay-mujoco-warp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cuda
+    container_name: simbay-mujoco-warp
+    environment:
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-500}"
+      SIMBAY_BACKEND: "mujoco-warp"
+      SIMBAY_HEADLESS: "1"
+      SIMBAY_DOCKER_TARGET: "cuda"
+      SIMBAY_ENABLE_NSIGHT: "${SIMBAY_ENABLE_NSIGHT:-1}"
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    ports:
+      - "8000:8000"
+    stdin_open: true
+    tty: true
+    gpus: all
