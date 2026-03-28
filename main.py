@@ -661,25 +661,6 @@ def phase_4_begin_stage_observability(
     return stage_token
 
 
-def phase_4_stage_span_observability(
-    ctx: dict[str, Any],
-    *,
-    phase: str,
-    steps: int,
-) -> None:
-    set_span_attributes(
-        stage_span_attrs(
-            run_id=ctx["run_id"],
-            backend=ctx["backend"],
-            num_particles=ctx["num_particles"],
-            dt=ctx["dt"],
-            execution_device=ctx["execution_device"],
-            stage=phase,
-            steps=steps,
-        )
-    )
-
-
 def phase_4_finish_stage_observability(
     ctx: dict[str, Any],
     *,
@@ -700,30 +681,6 @@ def phase_4_finish_stage_observability(
         }
     )
     ctx.pop("stage_state", None)
-
-
-def phase_4_step_span_observability(
-    ctx: dict[str, Any],
-    *,
-    step: int,
-    particle_filter: Any,
-) -> None:
-    set_span_attributes(
-        {
-            "simbay.run_id": ctx["run_id"],
-            "simbay.stage": "phase_4_lift",
-            "simbay.backend": ctx["backend"],
-            "simbay.control_dt": ctx["dt"],
-            "simbay.execution_device": ctx["execution_device"],
-        }
-    )
-    set_span_attributes(
-        {
-            "simbay.step": step,
-            "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
-            "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
-        }
-    )
 
 
 def phase_4_warp_step_logic(
@@ -866,34 +823,10 @@ def phase_4_step_observability(
     particle_filter: Any,
     step: int,
     true_mass: float,
-    previous_mass_estimate: float,
     step_result: dict[str, Any],
     step_wall_duration: float,
     step_cpu_duration: float,
 ) -> None:
-    set_span_attributes(
-        {
-            "simbay.run_id": ctx["run_id"],
-            "simbay.stage": "phase_4_lift",
-            "simbay.substage": "robot_execute",
-            "simbay.backend": ctx["backend"],
-            "simbay.execution_mode": "sequential",
-            "simbay.parallel_units": 1,
-        }
-    )
-    set_span_attributes({"simbay.step": step})
-    set_span_attributes(
-        {
-            "simbay.run_id": ctx["run_id"],
-            "simbay.stage": "phase_4_lift",
-            "simbay.substage": "pf_update",
-            "simbay.backend": ctx["backend"],
-            "simbay.previous_mass_estimate_kg": previous_mass_estimate,
-            "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
-            "simbay.parallel_units": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
-        }
-    )
-    set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
     recovered_attempts = int(step_result.get("recovered_first_update_attempts", 0))
     if recovered_attempts > 1:
         ctx["logger"].info(
@@ -905,6 +838,7 @@ def phase_4_step_observability(
                 "step": particle_filter._step_index - 1,
             }
         )
+    set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
     update_phase_4_metrics(
         ctx,
         stage_state,
@@ -1038,12 +972,36 @@ def run_phase_4_lift(
     stage_token = phase_4_begin_stage_observability(ctx, phase=phase)
     try:
         with tracing_span(ctx["tracer"], phase):
-            phase_4_stage_span_observability(ctx, phase=phase, steps=len(trajectory))
+            set_span_attributes(
+                stage_span_attrs(
+                    run_id=ctx["run_id"],
+                    backend=ctx["backend"],
+                    num_particles=ctx["num_particles"],
+                    dt=ctx["dt"],
+                    execution_device=ctx["execution_device"],
+                    stage=phase,
+                    steps=len(trajectory),
+                )
+            )
             stage_state = ctx["stage_state"]
             for step, qpos in enumerate(trajectory):
                 with tracing_span(ctx["tracer"], "step"):
-                    phase_4_step_span_observability(ctx, step=step, particle_filter=particle_filter)
-                    previous_mass_estimate = float(particle_filter.estimate())
+                    set_span_attributes(
+                        {
+                            "simbay.run_id": ctx["run_id"],
+                            "simbay.stage": phase,
+                            "simbay.backend": ctx["backend"],
+                            "simbay.control_dt": ctx["dt"],
+                            "simbay.execution_device": ctx["execution_device"],
+                        }
+                    )
+                    set_span_attributes(
+                        {
+                            "simbay.step": step,
+                            "simbay.execution_mode": ("batched_parallel" if ctx["backend"] == "mujoco-warp" else "sequential"),
+                            "simbay.batched_particle_updates": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+                        }
+                    )
                     step_wall_start = time.perf_counter()
                     step_cpu_start = time.process_time()
                     step_result = phase_4_step_logic(
@@ -1064,7 +1022,6 @@ def run_phase_4_lift(
                         particle_filter=particle_filter,
                         step=step,
                         true_mass=true_mass,
-                        previous_mass_estimate=previous_mass_estimate,
                         step_result=step_result,
                         step_wall_duration=step_wall_duration,
                         step_cpu_duration=step_cpu_duration,
