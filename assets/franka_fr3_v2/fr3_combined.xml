@@ -1,7 +1,7 @@
 <mujoco model="fr3v2">
   <compiler angle="radian" meshdir="assets" />
   
-  <option cone="elliptic" impratio="10" noslip_iterations="5" />
+  <option cone="elliptic" impratio="10" noslip_iterations="5" ccd_iterations="100" />
 
   <default>
     <default class="fr3v2">

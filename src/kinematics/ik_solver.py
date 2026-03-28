@@ -60,7 +60,6 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray, tol: f
             )
             logger.info(
                 {
-                    "event": "ik_converged",
                     "msg": f"IK converged in {i} iterations.",
                     "iterations": i,
                     "residual_norm": error,
@@ -80,7 +79,6 @@ def solve_IKProblem(problem: IKProblem, theta: np.ndarray, t: np.ndarray, tol: f
     # second-to-last position. This is acceptable for failed/non-converged states.
     logger.info(
         {
-            "event": "ik_not_converged",
             "msg": f"IK did not converge after {i} iterations.",
             "iterations": i,
             "residual_norm": error,

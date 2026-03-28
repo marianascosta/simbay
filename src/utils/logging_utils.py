@@ -10,9 +10,6 @@ from .settings import LOG_FALLBACK_DIR
 from .settings import LOG_LEVEL_NAME
 
 _LOG_KEY_ORDER = (
-    "timestamp",
-    "level",
-    "logger",
     "run_id",
     "msg",
     "backend",
@@ -20,6 +17,9 @@ _LOG_KEY_ORDER = (
     "substage",
     "step",
     "steps",
+    "timestamp",
+    "level",
+    "logger",
 )
 
 logger = logging.getLogger("simbay")
@@ -118,7 +118,6 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     if file_target.parent != preferred_log_path:
         logger.warning(
             {
-                "event": "logging_fallback",
                 "msg": "Primary logs directory is not writable; using fallback log path.",
                 "requested_log_dir": str(preferred_log_path),
                 "fallback_log_file": str(file_target),

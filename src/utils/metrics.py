@@ -6,11 +6,10 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from socketserver import ThreadingMixIn
 from typing import Any
 from typing import Iterable
 from functools import wraps
-from wsgiref.simple_server import WSGIServer
+from wsgiref.simple_server import WSGIRequestHandler
 from wsgiref.simple_server import make_server
 
 import numpy as np
@@ -61,14 +60,6 @@ class SubstageToken:
     phase: str
     substage: str
     started_at: float
-
-
-class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
-    daemon_threads = True
-
-    def log_message(self, format: str, *args: Any) -> None:
-        return None
-
 
 class SimbayMetrics:
     def __init__(self, enabled: bool, port: int, run_id: str = "unknown") -> None:
@@ -753,7 +744,8 @@ class SimbayMetrics:
             return
         try:
             app = make_wsgi_app(self.registry)
-            self._server = make_server("0.0.0.0", self.port, app, server_class=_ThreadingWSGIServer)
+            self._server = make_server("0.0.0.0", self.port, app)
+            self._server.RequestHandlerClass.log_message = lambda *args, **kwargs: None
         except OSError:
             self._server = None
             return
@@ -865,6 +857,11 @@ class SimbayMetrics:
         self.stage_duration_seconds.labels(*self._stage(token.stage)).set(duration)
         self.update_process_rss(token.stage)
         return duration
+
+    def set_stage_duration(self, stage: str, duration: float) -> None:
+        if stage not in self._known_stages:
+            self.register_stages([stage])
+        self.stage_duration_seconds.labels(*self._stage(stage)).set(duration)
 
     def start_substage(self, phase: str, substage: str) -> SubstageToken:
         if (phase, substage) not in self._known_substages:
@@ -1215,15 +1212,6 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
             log_data = bound.arguments.get("log_data")
             backend = bound.arguments.get("backend")
             env = bound.arguments.get(env_arg) if env_arg is not None else None
-            ctx = bound.arguments.get("ctx")
-
-            if ctx is not None:
-                metrics_obj = ctx["metrics"]
-                logger = ctx["logger"]
-                log_data = ctx["log_data"]
-                backend = ctx.get("backend")
-                if env_arg is not None and env is None:
-                    env = bound.arguments.get(env_arg)
 
             if metrics_obj is None or logger is None or log_data is None:
                 raise ValueError(f"observed_stage requires metrics, logger, and log_data for stage {stage}")
@@ -1233,9 +1221,7 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
             logger.info(
                 {
                     **log_data,
-                    "event": "stage_started",
                     "msg": f"Started {stage_label}.",
-                    "stage": stage,
                 }
             )
             try:
@@ -1247,9 +1233,7 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
                 logger.info(
                     {
                         **log_data,
-                        "event": "stage_finished",
                         "msg": f"Finished {stage_label}.",
-                        "stage": stage,
                     }
                 )
 
@@ -1332,9 +1316,12 @@ def update_phase_4_state(
 
 
 def update_phase_4_metrics(
-    ctx: dict[str, Any],
-    state: dict[str, Any],
     *,
+    run_id: str,
+    backend: str,
+    started_at: float,
+    metrics: Any,
+    state: dict[str, Any],
     particle_filter: Any,
     step: int,
     true_mass: float,
@@ -1347,7 +1334,7 @@ def update_phase_4_metrics(
         particle_filter=particle_filter,
         step=step,
         true_mass=true_mass,
-        started_at=ctx["started_at"],
+        started_at=started_at,
         step_result=step_result,
         step_wall_duration=step_wall_duration,
         step_cpu_duration=step_cpu_duration,
@@ -1356,8 +1343,8 @@ def update_phase_4_metrics(
     abs_error_kg = computed["abs_error_kg"]
     rel_error_pct = computed["rel_error_pct"]
     cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
-    add_exemplar(ctx["run_id"], step)
-    ctx["metrics"].update_filter_state(
+    add_exemplar(run_id, step)
+    metrics.update_filter_state(
         ess=particle_filter.effective_sample_size(),
         estimate=current_estimate,
         wall_seconds=step_wall_duration,
@@ -1365,12 +1352,12 @@ def update_phase_4_metrics(
         cpu_equivalent_cores=cpu_equivalent_cores_used,
         particles=particle_filter.N,
     )
-    ctx["metrics"].update_weight_health(
+    metrics.update_weight_health(
         uniform_weight_l1_distance=float(step_result.get("uniform_weight_l1_distance", 0.0)),
         uniform_weight_max_deviation=float(step_result.get("uniform_weight_max_deviation", 0.0)),
         collapsed_to_uniform=bool(step_result.get("collapsed_to_uniform", False)),
     )
-    ctx["metrics"].update_accuracy_metrics(
+    metrics.update_accuracy_metrics(
         mass_abs_error_kg=abs_error_kg,
         mass_rel_error_pct=rel_error_pct,
         phase4_mae_kg=computed["phase_4_mae_kg"],
@@ -1398,7 +1385,7 @@ def update_phase_4_metrics(
         max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
         weight_entropy_normalized = float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
         weight_perplexity = float(np.exp(weight_entropy))
-        ctx["metrics"].update_resample_state(
+        metrics.update_resample_state(
             steps=step + 1,
             resample_count=state["resample_count"],
             resampled=bool(step_result.get("resampled", False)),
@@ -1410,7 +1397,7 @@ def update_phase_4_metrics(
             particle_p50=float(np.percentile(latest_particles_snapshot, 50)),
             particle_p90=float(np.percentile(latest_particles_snapshot, 90)),
         )
-        ctx["metrics"].update_uncertainty_metrics(
+        metrics.update_uncertainty_metrics(
             credible_interval_50_width_kg=ci50_high - ci50_low,
             credible_interval_90_width_kg=ci90_high - ci90_low,
             credible_interval_50_contains_truth=ci50_low <= true_mass <= ci50_high,
@@ -1419,7 +1406,7 @@ def update_phase_4_metrics(
             weight_entropy_normalized=weight_entropy_normalized,
             weight_perplexity=weight_perplexity,
         )
-    if ctx["backend"] == "mujoco-warp":
+    if backend == "mujoco-warp":
         diagnostics = step_result.get("diagnostics", {})
         state["invalid_sensor_events"] = max(state["invalid_sensor_events"], int(diagnostics.get("invalid_sensor_events", 0.0)))
         state["invalid_state_events"] = max(state["invalid_state_events"], int(diagnostics.get("invalid_state_events", 0.0)))
@@ -1431,7 +1418,7 @@ def update_phase_4_metrics(
         if state["first_invalid_state_step"] < 0 and current_first_invalid_state_step >= 0:
             state["first_invalid_state_step"] = current_first_invalid_state_step
         state["max_repaired_world_count"] = max(state["max_repaired_world_count"], int(diagnostics.get("repaired_world_count", 0.0)))
-        ctx["metrics"].update_likelihood_health(
+        metrics.update_likelihood_health(
             sim_force_finite_ratio=float(diagnostics.get("sim_force_finite_ratio", 0.0)),
             diff_finite_ratio=float(diagnostics.get("diff_finite_ratio", 0.0)),
             likelihood_finite_ratio=float(diagnostics.get("likelihood_finite_ratio", 0.0)),
@@ -1442,7 +1429,7 @@ def update_phase_4_metrics(
             likelihood_mean=float(diagnostics.get("likelihood_mean", 0.0)),
             likelihood_std=float(diagnostics.get("likelihood_std", 0.0)),
         )
-        ctx["metrics"].update_invalid_state_counts(
+        metrics.update_invalid_state_counts(
             invalid_sensor_events=int(diagnostics.get("invalid_sensor_events", 0.0)),
             invalid_state_events=int(diagnostics.get("invalid_state_events", 0.0)),
             skipped_invalid_updates=int(step_result.get("skipped_invalid_updates", 0)),
@@ -1458,7 +1445,7 @@ def update_phase_4_metrics(
             sensordata_nonfinite_count=int(diagnostics.get("sensordata_nonfinite_count", 0.0)),
             ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
         )
-        ctx["metrics"].update_contact_health(
+        metrics.update_contact_health(
             contact_count_mean=float(diagnostics.get("contact_count_mean", 0.0)),
             contact_count_max=float(diagnostics.get("contact_count_max", 0.0)),
             active_contact_particle_ratio=float(diagnostics.get("active_contact_particle_ratio", 0.0)),
@@ -1478,9 +1465,15 @@ def update_phase_4_metrics(
 
 
 def phase_4_step_observability(
-    ctx: dict[str, Any],
-    stage_state: dict[str, Any],
     *,
+    run_id: str,
+    backend: str,
+    started_at: float,
+    span_attrs: dict[str, Any],
+    log_data: dict[str, Any],
+    logger: Any,
+    metrics: Any,
+    stage_state: dict[str, Any],
     particle_filter: Any,
     step: int,
     true_mass: float,
@@ -1493,7 +1486,7 @@ def phase_4_step_observability(
     )
     set_span_attributes(
         {
-            **ctx["span_attrs"],
+            **span_attrs,
             "simbay.stage": "phase_4_lift",
             "simbay.substage": "robot_execute",
             "simbay.substage_execution_strategy": "single_robot_control_loop",
@@ -1503,33 +1496,35 @@ def phase_4_step_observability(
     set_span_attributes({"simbay.phase_step_index": step})
     set_span_attributes(
         {
-            **ctx["span_attrs"],
+            **span_attrs,
             "simbay.stage": "phase_4_lift",
             "simbay.substage": "pf_update",
             "simbay.previous_mass_estimate_kg": previous_mass_estimate,
             "simbay.particle_update_strategy": (
                 "single_control_step_across_all_particles_in_batch"
-                if ctx["backend"] == "mujoco-warp"
+                if backend == "mujoco-warp"
                 else "single_control_step_one_particle_update_at_a_time"
             ),
-            "simbay.particles_updated_at_the_same_time": (particle_filter.N if ctx["backend"] == "mujoco-warp" else 1),
+            "simbay.particles_updated_at_the_same_time": (particle_filter.N if backend == "mujoco-warp" else 1),
         }
     )
     set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
     recovered_attempts = int(step_result.get("recovered_first_update_attempts", 0))
     if recovered_attempts > 1:
-        ctx["logger"].info(
+        logger.info(
             {
-                **ctx["log_data"],
-                "event": "warp_first_update_recovered",
+                **log_data,
                 "msg": f"Recovered the first Warp update after {recovered_attempts} attempts.",
                 "attempts": recovered_attempts,
                 "step": particle_filter._step_index - 1,
             }
         )
     update_phase_4_metrics(
-        ctx,
-        stage_state,
+        run_id=run_id,
+        backend=backend,
+        started_at=started_at,
+        metrics=metrics,
+        state=stage_state,
         particle_filter=particle_filter,
         step=step,
         true_mass=true_mass,
@@ -1540,55 +1535,43 @@ def phase_4_step_observability(
 
 
 def finalize_phase_4_metrics(
-    ctx: dict[str, Any],
-    state: dict[str, Any],
     *,
+    log_data: dict[str, Any],
+    logger: Any,
+    metrics: Any,
+    state: dict[str, Any],
     trajectory: list[np.ndarray] | np.ndarray,
     particle_filter: Any,
 ) -> LiftPhaseResult:
     phase = "phase_4_lift"
-    ctx["metrics"].set_substage_duration(phase, "robot_execute", state["robot_execute_total"])
-    ctx["metrics"].set_substage_duration(phase, "pf_update", state["pf_update_total"])
-    substage = "robot_execute"
-    ctx["logger"].info(
+    metrics.set_substage_duration(phase, "robot_execute", state["robot_execute_total"])
+    metrics.set_substage_duration(phase, "pf_update", state["pf_update_total"])
+    logger.info(
         {
-            **ctx["log_data"],
-            "event": "substage_started",
+            **log_data,
             "msg": "Started robot execute for phase 4 lift.",
-            "phase": phase,
-            "substage": substage,
         }
     )
-    ctx["logger"].info(
+    logger.info(
         {
-            **ctx["log_data"],
-            "event": "substage_finished",
+            **log_data,
             "msg": "Finished robot motion for phase 4 (lift).",
-            "phase": phase,
-            "substage": substage,
         }
     )
-    substage = "pf_update"
-    ctx["logger"].info(
+    logger.info(
         {
-            **ctx["log_data"],
-            "event": "substage_started",
+            **log_data,
             "msg": "Started pf update for phase 4 lift.",
-            "phase": phase,
-            "substage": substage,
         }
     )
-    ctx["logger"].info(
+    logger.info(
         {
-            **ctx["log_data"],
-            "event": "substage_finished",
+            **log_data,
             "msg": "Finished particle filter update for phase 4 (lift).",
-            "phase": phase,
-            "substage": substage,
         }
     )
-    ctx["metrics"].set_substage_workload(phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"])
-    ctx["metrics"].set_substage_workload(phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"])
+    metrics.set_substage_workload(phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"])
+    metrics.set_substage_workload(phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"])
     force_flush_tracing()
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
