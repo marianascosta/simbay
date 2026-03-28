@@ -216,15 +216,20 @@ def robot_execute(
         raise RuntimeError("Runtime logger and metrics must be initialized before robot execution.")
     substage = "robot_execute"
     if phase == "phase_1_approach":
-        phase_label = "phase 1 (approach)"
+        started_msg = "Started robot execute for phase 1 (approach)."
+        finished_msg = "Finished robot motion for phase 1 (approach)."
     elif phase == "phase_2_descend":
-        phase_label = "phase 2 (descent)"
+        started_msg = "Started robot execute for phase 2 (descent)."
+        finished_msg = "Finished robot motion for phase 2 (descent)."
     elif phase == "phase_3_grip":
-        phase_label = "phase 3 (grip)"
+        started_msg = "Started robot execute for phase 3 (grip)."
+        finished_msg = "Finished robot motion for phase 3 (grip)."
     elif phase == "phase_4_lift":
-        phase_label = "phase 4 (lift)"
+        started_msg = "Started robot execute for phase 4 (lift)."
+        finished_msg = "Finished robot motion for phase 4 (lift)."
     else:
-        phase_label = phase.replace("_", " ")
+        started_msg = f"Started robot execute for {phase.replace('_', ' ')}."
+        finished_msg = f"Finished robot motion for {phase.replace('_', ' ')}."
     span_attrs = {
         **span_attrs,
         "simbay.stage": phase,
@@ -239,7 +244,7 @@ def robot_execute(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+            "msg": started_msg,
         }
     )
     for _, qpos in enumerate(trajectory):
@@ -250,7 +255,7 @@ def robot_execute(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Finished robot motion for {phase_label}.",
+            "msg": finished_msg,
         }
     )
     METRICS.set_substage_workload(phase, substage, len(trajectory), 1, duration)
@@ -271,15 +276,20 @@ def pf_replay(
         raise RuntimeError("Runtime logger and metrics must be initialized before particle filter replay.")
     substage = "pf_replay"
     if phase == "phase_1_approach":
-        phase_label = "phase 1 (approach)"
+        started_msg = "Started particle filter replay for phase 1 (approach)."
+        finished_msg = "Finished particle filter replay for phase 1 (approach)."
     elif phase == "phase_2_descend":
-        phase_label = "phase 2 (descent)"
+        started_msg = "Started particle filter replay for phase 2 (descent)."
+        finished_msg = "Finished particle filter replay for phase 2 (descent)."
     elif phase == "phase_3_grip":
-        phase_label = "phase 3 (grip)"
+        started_msg = "Started particle filter replay for phase 3 (grip)."
+        finished_msg = "Finished particle filter replay for phase 3 (grip)."
     elif phase == "phase_4_lift":
-        phase_label = "phase 4 (lift)"
+        started_msg = "Started particle filter replay for phase 4 (lift)."
+        finished_msg = "Finished particle filter replay for phase 4 (lift)."
     else:
-        phase_label = phase.replace("_", " ")
+        started_msg = f"Started particle filter replay for {phase.replace('_', ' ')}."
+        finished_msg = f"Finished particle filter replay for {phase.replace('_', ' ')}."
     span_attrs = {
         **span_attrs,
         "simbay.stage": phase,
@@ -297,7 +307,7 @@ def pf_replay(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Started {substage.replace('_', ' ')} for {phase.replace('_', ' ')}.",
+            "msg": started_msg,
         }
     )
     if backend == "mujoco-warp":
@@ -309,7 +319,7 @@ def pf_replay(
     LOGGER.info(
         {
             **log_data,
-            "msg": f"Finished particle filter replay for {phase_label}.",
+            "msg": finished_msg,
         }
     )
     METRICS.set_substage_workload(phase, substage, len(trajectory), particle_filter.N, duration)
@@ -540,6 +550,29 @@ def run_phase_4_lift(
         )
 
 
+def generate_particle_filter_plot(
+    *,
+    history_estimates: list[float],
+    true_mass: float,
+    env: Any,
+) -> Path:
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
+    plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
+    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
+    plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    plt.ylabel("Estimated Mass (kg)", fontsize=12)
+    plt.ylim(env.min, env.max)
+    plt.legend(loc="upper right")
+    plt.grid(True, linestyle=":", alpha=0.7)
+    output_dir = Path("temp")
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / "particle_filter_evolution.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    return output_path
+
+
 @trace_call("simbay.main", span_name="main")
 def main(runtime: dict[str, Any]) -> None:
     logger = runtime["logger"]
@@ -595,68 +628,62 @@ def main(runtime: dict[str, Any]) -> None:
     traj3 = planning_result["traj3"]
     traj4 = planning_result["traj4"]
 
-    phase = "phase_1_approach"
-    phase_label = "phase 1 (approach)"
-    phase_token = metrics.start_stage(phase)
-    logger.info({**log_data, "msg": f"Started {phase_label}."})
+    phase_token = metrics.start_stage("phase_1_approach")
+    logger.info({**log_data, "msg": "Started phase 1 (approach)."})
     try:
-        with tracing_span(tracer, phase):
+        with tracing_span(tracer, "phase_1_approach"):
             set_span_attributes(
                 {
                     **span_attrs,
-                    "simbay.stage": phase,
+                    "simbay.stage": "phase_1_approach",
                     "simbay.phase_trajectory_step_count": len(traj1),
                 }
             )
-            robot_execute(phase=phase, trajectory=traj1, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase=phase, trajectory=traj1, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+            robot_execute(phase="phase_1_approach", trajectory=traj1, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_1_approach", trajectory=traj1, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
     finally:
         if backend == "mujoco-warp":
-            update_warp_memory_metrics(env, metrics, stage=phase)
+            update_warp_memory_metrics(env, metrics, stage="phase_1_approach")
         metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": f"Finished {phase_label}."})
+        logger.info({**log_data, "msg": "Finished phase 1 (approach)."})
 
-    phase = "phase_2_descend"
-    phase_label = "phase 2 (descent)"
-    phase_token = metrics.start_stage(phase)
-    logger.info({**log_data, "msg": f"Started {phase_label}."})
+    phase_token = metrics.start_stage("phase_2_descend")
+    logger.info({**log_data, "msg": "Started phase 2 (descent)."})
     try:
-        with tracing_span(tracer, phase):
+        with tracing_span(tracer, "phase_2_descend"):
             set_span_attributes(
                 {
                     **span_attrs,
-                    "simbay.stage": phase,
+                    "simbay.stage": "phase_2_descend",
                     "simbay.phase_trajectory_step_count": len(traj2),
                 }
             )
-            robot_execute(phase=phase, trajectory=traj2, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase=phase, trajectory=traj2, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+            robot_execute(phase="phase_2_descend", trajectory=traj2, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_2_descend", trajectory=traj2, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
     finally:
         if backend == "mujoco-warp":
-            update_warp_memory_metrics(env, metrics, stage=phase)
+            update_warp_memory_metrics(env, metrics, stage="phase_2_descend")
         metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": f"Finished {phase_label}."})
+        logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
 
-    phase = "phase_3_grip"
-    phase_label = "phase 3 (grip)"
-    phase_token = metrics.start_stage(phase)
-    logger.info({**log_data, "msg": f"Started {phase_label}."})
+    phase_token = metrics.start_stage("phase_3_grip")
+    logger.info({**log_data, "msg": "Started phase 3 (grip)."})
     try:
-        with tracing_span(tracer, phase):
+        with tracing_span(tracer, "phase_3_grip"):
             set_span_attributes(
                 {
                     **span_attrs,
-                    "simbay.stage": phase,
+                    "simbay.stage": "phase_3_grip",
                     "simbay.phase_trajectory_step_count": len(traj3),
                 }
             )
-            robot_execute(phase=phase, trajectory=traj3, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase=phase, trajectory=traj3, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+            robot_execute(phase="phase_3_grip", trajectory=traj3, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_3_grip", trajectory=traj3, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
     finally:
         if backend == "mujoco-warp":
-            update_warp_memory_metrics(env, metrics, stage=phase)
+            update_warp_memory_metrics(env, metrics, stage="phase_3_grip")
         metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": f"Finished {phase_label}."})
+        logger.info({**log_data, "msg": "Finished phase 3 (grip)."})
     lift_result = run_phase_4_lift(
         tracer=tracer,
         run_id=run_id,
@@ -696,20 +723,11 @@ def main(runtime: dict[str, Any]) -> None:
     logger.info({**log_data, "msg": "The prediction is ready."})
 
     logger.info({**log_data, "msg": "Started generating the output plots."})
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
-    plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
-    plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    plt.ylabel("Estimated Mass (kg)", fontsize=12)
-    plt.ylim(env.min, env.max)
-    plt.legend(loc="upper right")
-    plt.grid(True, linestyle=":", alpha=0.7)
-    output_dir = Path("temp")
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / "particle_filter_evolution.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    output_path = generate_particle_filter_plot(
+        history_estimates=history_estimates,
+        true_mass=true_mass,
+        env=env,
+    )
     logger.info({**log_data, "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 
     gc.collect()
