@@ -2,11 +2,8 @@ import json
 import logging
 import resource
 import sys
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from typing import Any
 
-from .settings import LOG_FALLBACK_DIR
 from .settings import LOG_LEVEL_NAME
 
 _LOG_KEY_ORDER = (
@@ -59,9 +56,9 @@ class _StructuredFormatter(logging.Formatter):
         return json.dumps(ordered_payload, default=str)
 
 
-def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logging.Logger:
+def setup_logging(run_id: str = "unknown") -> logging.Logger:
     """
-    Configure application logging for both stdout and a rotating file.
+    Configure application logging to stdout.
     """
     if logger.handlers:
         for handler in list(logger.handlers):
@@ -83,46 +80,7 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(run_id_filter)
 
-    preferred_log_path = Path(log_dir)
-    fallback_log_path = Path(LOG_FALLBACK_DIR)
-    fallback_log_path = fallback_log_path / str(run_id)
-    file_handler: RotatingFileHandler | None = None
-    file_target: Path | None = None
-
-    for candidate in (preferred_log_path, fallback_log_path):
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            file_target = candidate / "simbay.log"
-            file_handler = RotatingFileHandler(
-                file_target,
-                maxBytes=5 * 1024 * 1024,
-                backupCount=5,
-            )
-            break
-        except OSError:
-            file_handler = None
-            file_target = None
-
-    if file_handler is None or file_target is None:
-        raise RuntimeError(
-            "Failed to initialize file logging. "
-            f"Tried {preferred_log_path / 'simbay.log'} and {fallback_log_path / 'simbay.log'}."
-        )
-
-    file_handler.setLevel(level)
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(run_id_filter)
-
     logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
-    if file_target.parent != preferred_log_path:
-        logger.warning(
-            {
-                "msg": "Primary logs directory is not writable; using fallback log path.",
-                "requested_log_dir": str(preferred_log_path),
-                "fallback_log_file": str(file_target),
-            }
-        )
     return logger
 
 
