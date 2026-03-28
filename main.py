@@ -640,49 +640,6 @@ def finalize_phase_4_metrics(
     )
 
 
-def phase_4_begin_stage_observability(
-    ctx: dict[str, Any],
-    *,
-    phase: str,
-) -> str:
-    stage_state = init_stage_state(phase)
-    if stage_state is not None:
-        ctx["stage_state"] = stage_state
-    stage_token = ctx["metrics"].start_stage(phase)
-    stage_label = phase.replace("_", " ")
-    ctx["logger"].info(
-        {
-            **ctx["log_data"],
-            "event": "stage_started",
-            "msg": f"Started {stage_label}.",
-            "stage": phase,
-        }
-    )
-    return stage_token
-
-
-def phase_4_finish_stage_observability(
-    ctx: dict[str, Any],
-    *,
-    phase: str,
-    stage_token: Any,
-    env: Any,
-) -> None:
-    if ctx["backend"] == "mujoco-warp" and env is not None:
-        update_warp_memory_metrics(env, ctx["metrics"], stage=phase)
-    ctx["metrics"].finish_stage(stage_token)
-    stage_label = phase.replace("_", " ")
-    ctx["logger"].info(
-        {
-            **ctx["log_data"],
-            "event": "stage_finished",
-            "msg": f"Finished {stage_label}.",
-            "stage": phase,
-        }
-    )
-    ctx.pop("stage_state", None)
-
-
 def phase_4_warp_step_logic(
     particle_filter: Any,
     qpos: np.ndarray,
@@ -969,7 +926,19 @@ def run_phase_4_lift(
     update_and_optionally_resample: Any,
 ) -> LiftPhaseResult:
     phase = "phase_4_lift"
-    stage_token = phase_4_begin_stage_observability(ctx, phase=phase)
+    stage_state = init_stage_state(phase)
+    if stage_state is not None:
+        ctx["stage_state"] = stage_state
+    stage_token = ctx["metrics"].start_stage(phase)
+    stage_label = phase.replace("_", " ")
+    ctx["logger"].info(
+        {
+            **ctx["log_data"],
+            "event": "stage_started",
+            "msg": f"Started {stage_label}.",
+            "stage": phase,
+        }
+    )
     try:
         with tracing_span(ctx["tracer"], phase):
             set_span_attributes(
@@ -1033,7 +1002,18 @@ def run_phase_4_lift(
                 particle_filter=particle_filter,
             )
     finally:
-        phase_4_finish_stage_observability(ctx, phase=phase, stage_token=stage_token, env=env)
+        if ctx["backend"] == "mujoco-warp" and env is not None:
+            update_warp_memory_metrics(env, ctx["metrics"], stage=phase)
+        ctx["metrics"].finish_stage(stage_token)
+        ctx["logger"].info(
+            {
+                **ctx["log_data"],
+                "event": "stage_finished",
+                "msg": f"Finished {stage_label}.",
+                "stage": phase,
+            }
+        )
+        ctx.pop("stage_state", None)
 
 
 @trace_call("simbay.main", span_name="main")
