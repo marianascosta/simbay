@@ -2,13 +2,14 @@ import mujoco
 import numpy as np
 
 from src.robots import MujocoRobot
-from src.utils.constants import DEFAULT_OBJECT_PROPS
+from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.tracing import trace_public_methods
 
 from .base import ParticleEnvironment
 
 """ Mass only for now"""
+
 
 @trace_public_methods("simbay.mujoco_env")
 class FrankaMuJoCoEnv(ParticleEnvironment):
@@ -17,8 +18,8 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         self.robots: list[MujocoRobot] = []
 
         self._num_particles = num_particles
-        
-        self.std_dev = 0.005 # This is our process noise (Q).
+
+        self.std_dev = 0.005  # This is our process noise (Q).
 
     @property
     def num_particles(self) -> int:
@@ -27,21 +28,19 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
     def initialize_particles(self) -> np.ndarray:
         # Generate the initial uniform guesses for the block's mass
         masses = np.random.uniform(self.min, self.max, size=self.num_particles)
-        
+
         for mass in masses:
             # CRITICAL: Use .copy() so each robot gets a unique dictionary!
             object_properties = DEFAULT_OBJECT_PROPS.copy()
-            object_properties['mass'] = mass    
-            
+            object_properties["mass"] = mass
+
             robot = initialize_mujoco_env(object_properties)
             self.robots.append(robot)
 
-        # Cache the C++ memory ID for the block (they are all identical models, 
+        # Cache the C++ memory ID for the block (they are all identical models,
         # so the ID is the same for all 100 robots)
-        self.block_body_id = mujoco.mj_name2id( # type: ignore
-            self.robots[0].model, 
-            mujoco.mjtObj.mjOBJ_BODY,  # type: ignore
-            "object"
+        self.block_body_id = mujoco.mj_name2id(  # type: ignore
+            self.robots[0].model, mujoco.mjtObj.mjOBJ_BODY, "object"  # type: ignore
         )
 
         return masses
@@ -75,7 +74,7 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
             "native_bytes_per_robot": native_bytes_per_robot,
             "native_bytes_total": native_bytes_per_robot * len(self.robots),
         }
-    
+
     def resample_states(self, indexes: np.ndarray) -> None:
         self.robots = [self.robots[i] for i in indexes]
 
@@ -97,19 +96,16 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         # 1. OPTIMIZATION: List comprehension is much faster than a standard for-loop append
         sim_z = np.array([robot.get_sensor_reads() for robot in self.robots])
-        
-        # 2. Calculate the difference (Error) 
+
+        # 2. Calculate the difference (Error)
         diff = observation - sim_z
-        
+
         R = 1.0
-        
+
         # 3. OPTIMIZATION: Calculate the squared distance once
-        dist_sq = np.sum(diff ** 2, axis=1)
-        
+        dist_sq = np.sum(diff**2, axis=1)
+
         # 4. Calculate likelihood
         likelihoods = np.exp(-0.5 * dist_sq / R)
-        
-        return likelihoods
-        
 
-    
+        return likelihoods

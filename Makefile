@@ -1,12 +1,9 @@
-.PHONY: install install-warp shell run run-warp run-macos run-local-observability check docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
+.PHONY: install shell run run-warp run-macos run-local-observability check format lint docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 install:
 	poetry install --no-root
-
-install-warp:
-	poetry install --no-root --extras warp
 
 shell:
 	poetry shell
@@ -15,19 +12,19 @@ run:
 	poetry run python main.py
 
 run-warp:
-	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_METRICS_ENABLED=1 poetry run python main.py
+	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 poetry run python main.py
 
 run-local-observability:
-	SIMBAY_METRICS_ENABLED=1 SIMBAY_METRICS_PORT=8000 poetry run python main.py
+	poetry run python main.py
 
 run-macos:
-	MPLBACKEND=Agg "$(PROJECT_ROOT)/.venv/bin/python" "$(PROJECT_ROOT)/.venv/bin/mjpython" main.py
+	"$(PROJECT_ROOT)/.venv/bin/python" "$(PROJECT_ROOT)/.venv/bin/mjpython" main.py
 
 check:
 	poetry run python -m compileall main.py src
 
 make-smoke-test:
-	SIMBAY_HEADLESS=1 SIMBAY_USE_MJX=1 SIMBAY_PARTICLES=1 python main.py
+	SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py
 
 make-smoke-test-warp:
 	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py

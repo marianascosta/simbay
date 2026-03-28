@@ -9,20 +9,21 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 mujoco = "^3.6.0"
-matplot = "^0.1.9"
-mujoco-warp = { version = ">=0.0.2", optional = true }
-warp-lang = { version = ">=1.11.1", optional = true }
-nsight-python = { version = "*", optional = true }
-opentelemetry-sdk = { version = "^1.25.0", optional = true }
-opentelemetry-exporter-otlp-proto-grpc = { version = "^1.25.0", optional = true }
+matplotlib = "^3.10.0"
+mujoco-warp = ">=0.0.2"
+warp-lang = ">=1.11.1"
+opentelemetry-sdk = "^1.25.0"
+opentelemetry-exporter-otlp-proto-grpc = "^1.25.0"
 opentelemetry-api = "^1.25.0"
-
-[tool.poetry.extras]
-warp = ["mujoco-warp", "warp-lang"]
-profiling = ["nsight-python"]
-tracing = ["opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc"]
+prometheus-client = "^0.21.1"
 
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "black (>=26.3.1,<27.0.0)",
+    "nsight-python",
+]

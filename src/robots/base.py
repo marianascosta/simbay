@@ -8,7 +8,7 @@ class BaseRobot(ABC):
     """
     Abstract Interface that both Sim and Real robots must implement.
     """
-    
+
     @abstractmethod
     def move_joints(self, pos: np.ndarray):
         """
@@ -36,4 +36,3 @@ class BaseRobot(ABC):
         Holds the current simulation state for duration (seconds).
         """
         ...
-

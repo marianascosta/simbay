@@ -16,7 +16,6 @@ class FrankaSmartSolver:
     _data = None
     _solver_instance: MujocoPoseIK
 
-
     @classmethod
     @trace_call("simbay.franka_solver", "planning.FrankaSmartSolver._initialize")
     def _initialize(cls):
@@ -25,10 +24,10 @@ class FrankaSmartSolver:
         if cls._model is None:
             # Update this path to your specific robot-only XML
             xml_path = os.path.join("assets", "franka_fr3_v2", "fr3v2.xml")
-            
+
             if not os.path.exists(xml_path):
                 raise FileNotFoundError(f"Franka XML not found at {xml_path}")
-            
+
             cls._model, cls._data = load_mujoco_model(xml_path)
             # We initialize the IK wrapper once too
             # Assuming 'gripper' or 'hand_tcp' is the site name in your FR3v2 XML
@@ -58,10 +57,6 @@ class FrankaSmartSolver:
         # Solve the problem using the cached 'Brain'
         # We pass the current joints as the 'seed' for the solver
         goal_qpos = solve_IKProblem(
-            cls._solver_instance, 
-            current_joints,
-            target_pose, 
-            tol=tolerance, 
-            max_iter=max_iterations
+            cls._solver_instance, current_joints, target_pose, tol=tolerance, max_iter=max_iterations
         )
         return goal_qpos

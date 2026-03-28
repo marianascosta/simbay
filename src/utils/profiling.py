@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import os
 from contextlib import nullcontext
 from contextvars import ContextVar
 from threading import Lock
-
-
-def _profiling_enabled() -> bool:
-    return os.getenv("SIMBAY_ENABLE_NSIGHT", "").lower() in {"1", "true", "yes", "on"}
 
 
 try:
@@ -45,7 +40,7 @@ class _AnnotatedContext:
 
 
 def annotate(name: str):
-    if not _profiling_enabled() or nsight is None:
+    if nsight is None:
         return nullcontext()
     with _annotation_lock:
         next_index = _annotation_counts.get(name, 0) + 1

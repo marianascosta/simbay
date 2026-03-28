@@ -23,9 +23,9 @@ class MujocoRobot(BaseRobot):
         self.viewer: mujoco.viewer.Handle | None = viewer
         self.dt = model.opt.timestep
 
-        self.force_sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "hand_force") # type: ignore
+        self.force_sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "hand_force")  # type: ignore
         self.force_adress = model.sensor_adr[self.force_sensor_id]
-        
+
     def move_joints(self, pos):
         set_span_attributes(
             {
@@ -33,26 +33,24 @@ class MujocoRobot(BaseRobot):
             }
         )
         # Command control and update model
-        self.data.ctrl[:8] = pos              
+        self.data.ctrl[:8] = pos
         mujoco.mj_step(self.model, self.data)  # type: ignore
-        
+
         # Safely sync the viewer if it exists
         if self.viewer is not None:
-            self.viewer.sync()                    
+            self.viewer.sync()
 
-        
     def get_pos(self):
         return self.data.qpos[:7]
-    
+
     def get_sensor_reads(self):
         set_span_attributes({"robot.force_address": int(self.force_adress)})
         return self.data.sensordata[self.force_adress : self.force_adress + 3]
 
-    
     def wait_seconds(self, duration):
         set_span_attributes({"robot.wait_duration": float(duration)})
-        steps = int(duration / self.dt)  
+        steps = int(duration / self.dt)
         for _ in range(steps):
-            mujoco.mj_step(self.model, self.data)     # type: ignore
+            mujoco.mj_step(self.model, self.data)  # type: ignore
             if self.viewer is not None:
-                self.viewer.sync() 
+                self.viewer.sync()

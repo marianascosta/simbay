@@ -3,7 +3,6 @@ import logging
 import numpy as np
 
 from src.utils.logging_utils import get_process_memory_bytes
-from src.utils.logging_utils import extend_logging_data
 from src.utils.profiling import annotate
 
 from .warp_particle_filter import FrankaWarpEnv
@@ -114,17 +113,12 @@ class WarpParticleFilter:
         )
 
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_particle_filter_initialized",
-                msg=f"Initialised the Warp particle filter with {self.N} particles.",
-                particles=self.N,
-                state_bytes_total=self.state_bytes_total,
-                state_bytes_per_particle=self.state_bytes_per_particle,
-                process_memory_per_particle_estimate_bytes=(
-                    self.process_memory_per_particle_estimate
-                ),
-            )
+            {
+                **self.logging_data,
+                "event": "warp_particle_filter_initialized",
+                "msg": f"Initialised the Warp particle filter with {self.N} particles.",
+                "particles": self.N,
+            }
         )
 
     def warmup_runtime(self, rollout_lengths: list[int]) -> list[int]:
@@ -147,13 +141,11 @@ class WarpParticleFilter:
 
         _ = (weights, ess, estimate, update_resample)
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_filter_runtime_warmup_done",
-                msg="Finished warming up the Warp particle filter runtime.",
-                particles=self.N,
-                rollout_lengths=warmed_rollout_lengths,
-            )
+            {
+                **self.logging_data,
+                "event": "warp_filter_runtime_warmup_done",
+                "msg": "Finished warming up the Warp particle filter runtime.",
+            }
         )
         return warmed_rollout_lengths
 
@@ -209,34 +201,16 @@ class WarpParticleFilter:
             self._ess = float(self._last_good_ess)
         self._skipped_invalid_updates += 1
         self.logger.warning(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_invalid_update_skipped",
-                msg=(
-                    f"Skipped an invalid Warp update at step {self._step_index} "
-                    f"on attempt {attempt}."
-                ),
-                step=self._step_index,
-                attempt=attempt,
-                restored=restored,
-                ess=float(self._ess),
-                likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 0.0),
-                sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
-                diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                likelihood_nonfinite_count=int(
-                    diagnostics.get("likelihood_nonfinite_count", 0.0)
-                ),
-                qpos_nonfinite_count=int(diagnostics.get("qpos_nonfinite_count", 0.0)),
-                qvel_nonfinite_count=int(diagnostics.get("qvel_nonfinite_count", 0.0)),
-                sensordata_nonfinite_count=int(
-                    diagnostics.get("sensordata_nonfinite_count", 0.0)
-                ),
-                ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
-            )
+            {
+                **self.logging_data,
+                "event": "warp_invalid_update_skipped",
+                "msg": (f"Skipped an invalid Warp update at step {self._step_index} " f"on attempt {attempt}."),
+                "step": self._step_index,
+                "attempt": attempt,
+                "restored": restored,
+            }
         )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         result = {
             "ess": float(self._ess),
             "resampled": False,
@@ -263,23 +237,15 @@ class WarpParticleFilter:
             self.weights = self._last_good_weights.copy()
             self._ess = float(self._last_good_ess)
         self.logger.warning(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_uninformative_update_skipped",
-                msg=f"Skipped an uninformative Warp update at step {self._step_index}.",
-                step=self._step_index,
-                restored=restored,
-                ess=float(self._ess),
-                likelihood_std=diagnostics.get("likelihood_std", 0.0),
-                likelihood_range=diagnostics.get("likelihood_range", 0.0),
-                sim_force_axis_std_x=diagnostics.get("sim_force_axis_std_x", 0.0),
-                sim_force_axis_std_y=diagnostics.get("sim_force_axis_std_y", 0.0),
-                sim_force_axis_std_z=diagnostics.get("sim_force_axis_std_z", 0.0),
-            )
+            {
+                **self.logging_data,
+                "event": "warp_uninformative_update_skipped",
+                "msg": f"Skipped an uninformative Warp update at step {self._step_index}.",
+                "step": self._step_index,
+                "restored": restored,
+            }
         )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         result = {
             "ess": float(self._ess),
             "resampled": False,
@@ -343,39 +309,19 @@ class WarpParticleFilter:
                 self.env.resample_states(indexes)
             self._resample_count += 1
         self._save_last_good_snapshot()
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(
-            self.weights
-        )
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         if collapsed_to_uniform and (
             diagnostics.get("invalid_sensor_events", 0.0) > 0.0
             or diagnostics.get("invalid_state_events", 0.0) > 0.0
             or diagnostics.get("likelihood_finite_ratio", 1.0) < 1.0
         ):
             self.logger.warning(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_weight_update_uninformative",
-                    msg=(
-                        f"Detected an uninformative Warp weight update at step "
-                        f"{self._step_index}."
-                    ),
-                    step=self._step_index,
-                    ess=float(self._ess),
-                    likelihood_finite_ratio=diagnostics.get("likelihood_finite_ratio", 1.0),
-                    sim_force_nonfinite_count=int(
-                        diagnostics.get("sim_force_nonfinite_count", 0.0)
-                    ),
-                    diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-                    likelihood_nonfinite_count=int(
-                        diagnostics.get("likelihood_nonfinite_count", 0.0)
-                    ),
-                    first_invalid_sensor_step=int(
-                        diagnostics.get("first_invalid_sensor_step", -1.0)
-                    ),
-                    first_invalid_state_step=int(
-                        diagnostics.get("first_invalid_state_step", -1.0)
-                    ),
-                )
+                {
+                    **self.logging_data,
+                    "event": "warp_weight_update_uninformative",
+                    "msg": (f"Detected an uninformative Warp weight update at step " f"{self._step_index}."),
+                    "step": self._step_index,
+                }
             )
         self._step_index += 1
         return {
@@ -406,23 +352,23 @@ class WarpParticleFilter:
             if not bool(result.get("skipped_invalid_update", False)):
                 if attempt > 1:
                     self.logger.info(
-                        extend_logging_data(
-                            self.logging_data,
-                            event="warp_first_update_recovered",
-                            msg=f"Recovered the first Warp update after {attempt} attempts.",
-                            attempts=attempt,
-                            step=self._step_index - 1,
-                        )
+                        {
+                            **self.logging_data,
+                            "event": "warp_first_update_recovered",
+                            "msg": f"Recovered the first Warp update after {attempt} attempts.",
+                            "attempts": attempt,
+                            "step": self._step_index - 1,
+                        }
                     )
                 return result
             last_result = result
         self.logger.error(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_first_update_failed",
-                msg=f"Failed to recover the first Warp update after {max_attempts} attempts.",
-                attempts=max_attempts,
-            )
+            {
+                **self.logging_data,
+                "event": "warp_first_update_failed",
+                "msg": f"Failed to recover the first Warp update after {max_attempts} attempts.",
+                "attempts": max_attempts,
+            }
         )
         return last_result if last_result is not None else self.step(control_input, observation)
 

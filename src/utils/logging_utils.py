@@ -1,17 +1,12 @@
 import json
 import logging
-import os
 import resource
 import sys
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from typing import Any
 
+from .settings import LOG_LEVEL_NAME
 
 _LOG_KEY_ORDER = (
-    "timestamp",
-    "level",
-    "logger",
     "run_id",
     "msg",
     "backend",
@@ -19,7 +14,12 @@ _LOG_KEY_ORDER = (
     "substage",
     "step",
     "steps",
+    "timestamp",
+    "level",
+    "logger",
 )
+
+logger = logging.getLogger("simbay")
 
 
 class _RunIdFilter(logging.Filter):
@@ -56,24 +56,19 @@ class _StructuredFormatter(logging.Formatter):
         return json.dumps(ordered_payload, default=str)
 
 
-def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logging.Logger:
+def setup_logging(run_id: str = "unknown") -> logging.Logger:
     """
-    Configure application logging for both stdout and a rotating file.
+    Configure application logging to stdout.
     """
-    logger = logging.getLogger("simbay")
     if logger.handlers:
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
             handler.close()
 
-    level_name = os.getenv("SIMBAY_LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+    level = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
 
     logger.setLevel(level)
     logger.propagate = False
-
-    log_path = Path(log_dir)
-    log_path.mkdir(parents=True, exist_ok=True)
 
     formatter = _StructuredFormatter(
         datefmt="%Y-%m-%dT%H:%M:%S%z",
@@ -85,24 +80,11 @@ def setup_logging(log_dir: str | Path = "logs", run_id: str = "unknown") -> logg
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(run_id_filter)
 
-    file_handler = RotatingFileHandler(
-        log_path / "simbay.log",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
-    )
-    file_handler.setLevel(level)
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(run_id_filter)
-
     logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
     return logger
 
 
-def extend_logging_data(logging_data: dict[str, Any], **updates: Any) -> dict[str, Any]:
-    merged = dict(logging_data)
-    merged.update(updates)
-    return merged
+setup_logging()
 
 
 def get_process_memory_bytes() -> int:
@@ -115,16 +97,3 @@ def get_process_memory_bytes() -> int:
     if sys.platform == "darwin":
         return int(usage)
     return int(usage * 1024)
-
-
-def format_bytes(num_bytes: float) -> str:
-    """
-    Render a byte count in human-readable units.
-    """
-    value = float(num_bytes)
-    units = ["B", "KiB", "MiB", "GiB", "TiB"]
-    for unit in units:
-        if value < 1024.0 or unit == units[-1]:
-            return f"{value:.2f} {unit}"
-        value /= 1024.0
-    return f"{num_bytes:.2f} B"
