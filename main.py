@@ -2,7 +2,6 @@ import gc
 import math
 import signal
 import time
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -50,32 +49,6 @@ shutdown_requested = False
 shutdown_signal_name: str | None = None
 LOGGER: Any | None = None
 METRICS: Any | None = None
-
-def init_runtime(run_id: str = RUN_ID) -> dict[str, Any]:
-    global LOGGER
-    global METRICS
-    runtime_log_data = {"run_id": run_id}
-    setup_tracing(run_id=run_id)
-    runtime_tracer = get_tracer("simbay.main")
-    runtime_metrics = init_metrics(run_id=run_id)
-    runtime_logger = setup_logging(run_id=run_id)
-    LOGGER = runtime_logger
-    METRICS = runtime_metrics
-    exit_stack = ExitStack()
-    exit_stack.callback(shutdown_tracing)
-    exit_stack.callback(force_flush_tracing)
-    exit_stack.callback(shutdown_metrics, runtime_metrics)
-    set_span_attributes({"simbay.run_id": run_id})
-    return {
-        "run_id": run_id,
-        "tracer": runtime_tracer,
-        "metrics": runtime_metrics,
-        "logger": runtime_logger,
-        "log_data": runtime_log_data,
-        "exit_stack": exit_stack,
-        "started_at": time.perf_counter(),
-    }
-
 
 def install_signal_handlers(logger: Any, log_data: dict[str, object]) -> None:
     def _handle_shutdown_signal(signum, _frame) -> None:
@@ -574,12 +547,14 @@ def generate_particle_filter_plot(
 
 
 @trace_call("simbay.main", span_name="main")
-def main(runtime: dict[str, Any]) -> None:
-    logger = runtime["logger"]
-    metrics = runtime["metrics"]
-    tracer = runtime["tracer"]
-    log_data = runtime["log_data"]
-    run_id = runtime["run_id"]
+def main(run_id: str = RUN_ID) -> None:
+    if LOGGER is None or METRICS is None:
+        raise RuntimeError("Runtime logger and metrics must be initialized before main.")
+    logger = LOGGER
+    metrics = METRICS
+    tracer = get_tracer("simbay.main")
+    log_data: dict[str, object] = {"run_id": run_id}
+    started_at = time.perf_counter()
 
     headless = HEADLESS
     backend = BACKEND
@@ -687,7 +662,7 @@ def main(runtime: dict[str, Any]) -> None:
     lift_result = run_phase_4_lift(
         tracer=tracer,
         run_id=run_id,
-        started_at=runtime["started_at"],
+        started_at=started_at,
         span_attrs=span_attrs,
         backend=backend,
         trajectory=traj4,
@@ -715,7 +690,7 @@ def main(runtime: dict[str, Any]) -> None:
         logger.info({**log_data, "msg": "Skipped waiting for user input because shutdown was requested.", "signal": shutdown_signal_name})
 
     final_prediction = float(particle_filter.estimate())
-    time_to_prediction_seconds = time.perf_counter() - runtime["started_at"]
+    time_to_prediction_seconds = time.perf_counter() - started_at
     metrics.set_prediction_ready(
         total_wall_seconds=time_to_prediction_seconds,
         final_error_pct=abs(true_mass - final_prediction) * 100,
@@ -735,10 +710,16 @@ def main(runtime: dict[str, Any]) -> None:
 
 
 if __name__ == "__main__":
-    runtime = init_runtime()
-    install_signal_handlers(runtime["logger"], runtime["log_data"])
+    run_id = RUN_ID
+    setup_tracing(run_id=run_id)
+    LOGGER = setup_logging(run_id=run_id)
+    METRICS = init_metrics(run_id=run_id)
+    set_span_attributes({"simbay.run_id": run_id})
+    install_signal_handlers(LOGGER, {"run_id": run_id})
     try:
-        main(runtime)
+        main(run_id=run_id)
     finally:
-        if runtime is not None:
-            runtime["exit_stack"].close()
+        if METRICS is not None:
+            shutdown_metrics(METRICS)
+        force_flush_tracing()
+        shutdown_tracing()
