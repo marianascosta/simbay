@@ -13,8 +13,6 @@ import numpy as np
 import mujoco_warp as mjw
 import warp as wp
 
-from src.utils.logging_utils import extend_logging_data
-
 logger = logging.getLogger("simbay.warp_batch")
 
 _RESAMPLE_STATE_FIELDS = ("qpos", "qvel", "act", "ctrl", "qacc_warmstart")
@@ -64,12 +62,12 @@ class WarpBatch:
         self._ctrl_dim = int(mj_model.nu)
 
         logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_batch_init",
-                msg=f"Initialised the Warp batch with {self._size} worlds.",
-                nworld=self._size,
-            )
+            {
+                **self.logging_data,
+                "event": "warp_batch_init",
+                "msg": f"Initialised the Warp batch with {self._size} worlds.",
+                "nworld": self._size,
+            }
         )
 
         self._model = mjw.put_model(mj_model)
@@ -93,12 +91,12 @@ class WarpBatch:
         self._recovery_snapshot: dict[str, np.ndarray] | None = None
 
         logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_batch_init_complete",
-                msg=f"Finished setting up the Warp batch with {self._size} worlds.",
-                nworld=self._size,
-            )
+            {
+                **self.logging_data,
+                "event": "warp_batch_init_complete",
+                "msg": f"Finished setting up the Warp batch with {self._size} worlds.",
+                "nworld": self._size,
+            }
         )
 
     @property
@@ -111,12 +109,12 @@ class WarpBatch:
         mjw.step(self._model, self._data)
         wp.synchronize()
         logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_batch_warmup_done",
-                msg=f"Finished warming up the Warp batch for {self._size} worlds.",
-                nworld=self._size,
-            )
+            {
+                **self.logging_data,
+                "event": "warp_batch_warmup_done",
+                "msg": f"Finished warming up the Warp batch for {self._size} worlds.",
+                "nworld": self._size,
+            }
         )
 
     def warmup_rollout(self, steps: int) -> None:
@@ -128,11 +126,11 @@ class WarpBatch:
             mjw.step(self._model, self._data)
         wp.synchronize()
         logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_batch_rollout_warmup_done",
-                msg=f"Finished Warp rollout warm-up over {steps} steps.",
-            )
+            {
+                **self.logging_data,
+                "event": "warp_batch_rollout_warmup_done",
+                "msg": f"Finished Warp rollout warm-up over {steps} steps.",
+            }
         )
 
     def step(self, control_input: np.ndarray, masses: np.ndarray) -> None:

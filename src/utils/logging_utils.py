@@ -84,10 +84,7 @@ def setup_logging(run_id: str = "unknown") -> logging.Logger:
     return logger
 
 
-def extend_logging_data(logging_data: dict[str, Any], **updates: Any) -> dict[str, Any]:
-    merged = dict(logging_data)
-    merged.update(updates)
-    return merged
+setup_logging()
 
 
 def get_process_memory_bytes() -> int:
@@ -100,16 +97,3 @@ def get_process_memory_bytes() -> int:
     if sys.platform == "darwin":
         return int(usage)
     return int(usage * 1024)
-
-
-def format_bytes(num_bytes: float) -> str:
-    """
-    Render a byte count in human-readable units.
-    """
-    value = float(num_bytes)
-    units = ["B", "KiB", "MiB", "GiB", "TiB"]
-    for unit in units:
-        if value < 1024.0 or unit == units[-1]:
-            return f"{value:.2f} {unit}"
-        value /= 1024.0
-    return f"{num_bytes:.2f} B"

@@ -4,7 +4,6 @@ import numpy as np
 
 from .base import ParticleEnvironment
 from src.utils.logging_utils import get_process_memory_bytes
-from src.utils.logging_utils import extend_logging_data
 from src.utils.tracing import trace_public_methods
 
 
@@ -45,12 +44,12 @@ class ParticleFilter:
         )
 
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="particle_filter_initialized",
-                msg=f"Initialised the particle filter with {self.N} particles.",
-                particles=self.N,
-            )
+            {
+                **self.logging_data,
+                "event": "particle_filter_initialized",
+                "msg": f"Initialised the particle filter with {self.N} particles.",
+                "particles": self.N,
+            }
         )
 
     def predict(self, control_input: np.ndarray):

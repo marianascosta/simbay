@@ -61,7 +61,7 @@ class SubstageToken:
     substage: str
     started_at: float
 
-class SimbayMetrics:
+class _MetricsState:
     def __init__(self, enabled: bool, port: int, run_id: str = "unknown") -> None:
         self.enabled = enabled
         self.port = port
@@ -756,12 +756,12 @@ class SimbayMetrics:
         self._system_thread = threading.Thread(target=self._run_system_sampler, daemon=True)
         self._system_thread.start()
 
-    def initialize_defaults(self) -> "SimbayMetrics":
+    def initialize_defaults(self) -> "_MetricsState":
         self.register_stages(DEFAULT_STAGE_NAMES)
         self.register_substages(DEFAULT_SUBSTAGE_NAMES)
         return self
 
-    def start_runtime(self) -> "SimbayMetrics":
+    def start_runtime(self) -> "_MetricsState":
         self.start()
         return self
 
@@ -1105,6 +1105,279 @@ class SimbayMetrics:
         }
 
 
+_STATE: _MetricsState | None = None
+
+
+def _require_state() -> _MetricsState:
+    if _STATE is None:
+        raise RuntimeError("Metrics runtime is not initialized. Call init_metrics() first.")
+    return _STATE
+
+
+def start_stage(stage: str) -> StageToken:
+    return _require_state().start_stage(stage)
+
+
+def finish_stage(token: StageToken) -> float:
+    return _require_state().finish_stage(token)
+
+
+def set_stage_duration(stage: str, duration: float) -> None:
+    _require_state().set_stage_duration(stage, duration)
+
+
+def start_substage(phase: str, substage: str) -> SubstageToken:
+    return _require_state().start_substage(phase, substage)
+
+
+def finish_substage(token: SubstageToken) -> float:
+    return _require_state().finish_substage(token)
+
+
+def set_substage_duration(phase: str, substage: str, duration: float) -> None:
+    _require_state().set_substage_duration(phase, substage, duration)
+
+
+def set_substage_workload(phase: str, substage: str, steps: int, particles: int, duration_seconds: float) -> None:
+    _require_state().set_substage_workload(phase, substage, steps, particles, duration_seconds)
+
+
+def set_particle_count(particles: int) -> None:
+    _require_state().set_particle_count(particles)
+
+
+def set_backend(backend: str, device: str) -> None:
+    _require_state().set_backend(backend, device)
+
+
+def set_run_info(backend: str, particles: int, control_dt: float) -> None:
+    _require_state().set_run_info(backend, particles, control_dt)
+
+
+def set_memory_profile(*, state_bytes_total: int, state_bytes_per_particle: int, process_memory_per_particle_estimate_bytes: int) -> None:
+    _require_state().set_memory_profile(
+        state_bytes_total=state_bytes_total,
+        state_bytes_per_particle=state_bytes_per_particle,
+        process_memory_per_particle_estimate_bytes=process_memory_per_particle_estimate_bytes,
+    )
+
+
+def set_runtime_environment(
+    *,
+    execution_platform: str,
+    execution_device: str,
+    default_jax_platform: str,
+    default_jax_device: str,
+    device_fallback_applied: bool,
+) -> None:
+    _require_state().set_runtime_environment(
+        execution_platform=execution_platform,
+        execution_device=execution_device,
+        default_jax_platform=default_jax_platform,
+        default_jax_device=default_jax_device,
+        device_fallback_applied=device_fallback_applied,
+    )
+
+
+def set_mujoco_memory_profile(
+    *,
+    model_nbuffer_bytes_per_robot: int,
+    data_nbuffer_bytes_per_robot: int,
+    data_narena_bytes_per_robot: int,
+    native_bytes_per_robot: int,
+    native_bytes_total: int,
+) -> None:
+    _require_state().set_mujoco_memory_profile(
+        model_nbuffer_bytes_per_robot=model_nbuffer_bytes_per_robot,
+        data_nbuffer_bytes_per_robot=data_nbuffer_bytes_per_robot,
+        data_narena_bytes_per_robot=data_narena_bytes_per_robot,
+        native_bytes_per_robot=native_bytes_per_robot,
+        native_bytes_total=native_bytes_total,
+    )
+
+
+def update_warp_memory(*, stage: str, bytes_in_use: int, peak_bytes_in_use: int, bytes_limit: int, state_bytes_estimate: int) -> None:
+    _require_state().update_warp_memory(
+        stage=stage,
+        bytes_in_use=bytes_in_use,
+        peak_bytes_in_use=peak_bytes_in_use,
+        bytes_limit=bytes_limit,
+        state_bytes_estimate=state_bytes_estimate,
+    )
+
+
+def update_filter_state(ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
+    _require_state().update_filter_state(ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles)
+
+
+def update_weight_health(*, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
+    _require_state().update_weight_health(
+        uniform_weight_l1_distance=uniform_weight_l1_distance,
+        uniform_weight_max_deviation=uniform_weight_max_deviation,
+        collapsed_to_uniform=collapsed_to_uniform,
+    )
+
+
+def update_accuracy_metrics(
+    *,
+    mass_abs_error_kg: float,
+    mass_rel_error_pct: float,
+    phase4_mae_kg: float,
+    phase4_rmse_kg: float,
+    mass_error_within_1pct: bool,
+    mass_error_within_5pct: bool,
+    mass_error_within_10pct: bool,
+    convergence_time_to_5pct_seconds: float,
+    convergence_time_to_10pct_seconds: float,
+    time_to_first_estimate_seconds: float,
+) -> None:
+    _require_state().update_accuracy_metrics(
+        mass_abs_error_kg=mass_abs_error_kg,
+        mass_rel_error_pct=mass_rel_error_pct,
+        phase4_mae_kg=phase4_mae_kg,
+        phase4_rmse_kg=phase4_rmse_kg,
+        mass_error_within_1pct=mass_error_within_1pct,
+        mass_error_within_5pct=mass_error_within_5pct,
+        mass_error_within_10pct=mass_error_within_10pct,
+        convergence_time_to_5pct_seconds=convergence_time_to_5pct_seconds,
+        convergence_time_to_10pct_seconds=convergence_time_to_10pct_seconds,
+        time_to_first_estimate_seconds=time_to_first_estimate_seconds,
+    )
+
+
+def update_uncertainty_metrics(
+    *,
+    credible_interval_50_width_kg: float,
+    credible_interval_90_width_kg: float,
+    credible_interval_50_contains_truth: bool,
+    credible_interval_90_contains_truth: bool,
+    weight_entropy: float,
+    weight_entropy_normalized: float,
+    weight_perplexity: float,
+) -> None:
+    _require_state().update_uncertainty_metrics(
+        credible_interval_50_width_kg=credible_interval_50_width_kg,
+        credible_interval_90_width_kg=credible_interval_90_width_kg,
+        credible_interval_50_contains_truth=credible_interval_50_contains_truth,
+        credible_interval_90_contains_truth=credible_interval_90_contains_truth,
+        weight_entropy=weight_entropy,
+        weight_entropy_normalized=weight_entropy_normalized,
+        weight_perplexity=weight_perplexity,
+    )
+
+
+def update_resample_state(
+    *,
+    steps: int,
+    resample_count: int,
+    resampled: bool,
+    particle_min: float,
+    particle_max: float,
+    particle_mean: float,
+    particle_std: float,
+    particle_p10: float,
+    particle_p50: float,
+    particle_p90: float,
+) -> None:
+    _require_state().update_resample_state(
+        steps=steps,
+        resample_count=resample_count,
+        resampled=resampled,
+        particle_min=particle_min,
+        particle_max=particle_max,
+        particle_mean=particle_mean,
+        particle_std=particle_std,
+        particle_p10=particle_p10,
+        particle_p50=particle_p50,
+        particle_p90=particle_p90,
+    )
+
+
+def update_likelihood_health(
+    *,
+    sim_force_finite_ratio: float,
+    diff_finite_ratio: float,
+    likelihood_finite_ratio: float,
+    sim_force_norm_mean: float,
+    diff_norm_mean: float,
+    likelihood_min: float,
+    likelihood_max: float,
+    likelihood_mean: float,
+    likelihood_std: float,
+) -> None:
+    _require_state().update_likelihood_health(
+        sim_force_finite_ratio=sim_force_finite_ratio,
+        diff_finite_ratio=diff_finite_ratio,
+        likelihood_finite_ratio=likelihood_finite_ratio,
+        sim_force_norm_mean=sim_force_norm_mean,
+        diff_norm_mean=diff_norm_mean,
+        likelihood_min=likelihood_min,
+        likelihood_max=likelihood_max,
+        likelihood_mean=likelihood_mean,
+        likelihood_std=likelihood_std,
+    )
+
+
+def update_invalid_state_counts(
+    *,
+    invalid_sensor_events: int,
+    invalid_state_events: int,
+    skipped_invalid_updates: int,
+    skipped_invalid_update: bool,
+    bootstrap_attempts: int,
+    first_invalid_sensor_step: int,
+    first_invalid_state_step: int,
+    sim_force_nonfinite_count: int,
+    diff_nonfinite_count: int,
+    likelihood_nonfinite_count: int,
+    qpos_nonfinite_count: int,
+    qvel_nonfinite_count: int,
+    sensordata_nonfinite_count: int,
+    ctrl_nonfinite_count: int,
+) -> None:
+    _require_state().update_invalid_state_counts(
+        invalid_sensor_events=invalid_sensor_events,
+        invalid_state_events=invalid_state_events,
+        skipped_invalid_updates=skipped_invalid_updates,
+        skipped_invalid_update=skipped_invalid_update,
+        bootstrap_attempts=bootstrap_attempts,
+        first_invalid_sensor_step=first_invalid_sensor_step,
+        first_invalid_state_step=first_invalid_state_step,
+        sim_force_nonfinite_count=sim_force_nonfinite_count,
+        diff_nonfinite_count=diff_nonfinite_count,
+        likelihood_nonfinite_count=likelihood_nonfinite_count,
+        qpos_nonfinite_count=qpos_nonfinite_count,
+        qvel_nonfinite_count=qvel_nonfinite_count,
+        sensordata_nonfinite_count=sensordata_nonfinite_count,
+        ctrl_nonfinite_count=ctrl_nonfinite_count,
+    )
+
+
+def update_contact_health(
+    *,
+    contact_count_mean: float,
+    contact_count_max: float,
+    active_contact_particle_ratio: float,
+    contact_metric_available: bool,
+    contact_force_mismatch: bool,
+    valid_force_particle_ratio: float,
+    sim_force_signal_particle_ratio: float,
+) -> None:
+    _require_state().update_contact_health(
+        contact_count_mean=contact_count_mean,
+        contact_count_max=contact_count_max,
+        active_contact_particle_ratio=active_contact_particle_ratio,
+        contact_metric_available=contact_metric_available,
+        contact_force_mismatch=contact_force_mismatch,
+        valid_force_particle_ratio=valid_force_particle_ratio,
+        sim_force_signal_particle_ratio=sim_force_signal_particle_ratio,
+    )
+
+
+def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> None:
+    _require_state().set_prediction_ready(total_wall_seconds, final_error_pct)
+
+
 @dataclass(frozen=True)
 class LiftPhaseResult:
     history_estimates: list[float]
@@ -1161,18 +1434,17 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
 
 
 def update_setup_metrics(
-    metrics_obj: Any,
     backend_name: str,
     env_memory_profile: dict[str, Any],
     memory_profile: dict[str, Any],
 ) -> None:
-    metrics_obj.set_memory_profile(
+    set_memory_profile(
         state_bytes_total=int(memory_profile["state_bytes_total"]),
         state_bytes_per_particle=int(memory_profile["state_bytes_per_particle"]),
         process_memory_per_particle_estimate_bytes=int(memory_profile["process_memory_per_particle_estimate_bytes"]),
     )
     if backend_name == "mujoco-warp":
-        metrics_obj.set_runtime_environment(
+        set_runtime_environment(
             execution_platform=str(env_memory_profile["execution_platform"]),
             execution_device=str(env_memory_profile["execution_device"]),
             default_jax_platform=str(env_memory_profile["default_jax_platform"]),
@@ -1180,7 +1452,7 @@ def update_setup_metrics(
             device_fallback_applied=bool(env_memory_profile["device_fallback_applied"]),
         )
         return
-    metrics_obj.set_mujoco_memory_profile(
+    set_mujoco_memory_profile(
         model_nbuffer_bytes_per_robot=int(env_memory_profile["model_nbuffer_bytes_per_robot"]),
         data_nbuffer_bytes_per_robot=int(env_memory_profile["data_nbuffer_bytes_per_robot"]),
         data_narena_bytes_per_robot=int(env_memory_profile["data_narena_bytes_per_robot"]),
@@ -1189,9 +1461,9 @@ def update_setup_metrics(
     )
 
 
-def update_warp_memory_metrics(env: Any, metrics_obj: Any, *, stage: str) -> None:
+def update_warp_memory_metrics(env: Any, *, stage: str) -> None:
     env_memory_profile = env.memory_profile()
-    metrics_obj.update_warp_memory(
+    update_warp_memory(
         stage=stage,
         bytes_in_use=int(env_memory_profile["bytes_in_use"]),
         peak_bytes_in_use=int(env_memory_profile["peak_bytes_in_use"]),
@@ -1207,16 +1479,15 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
         @wraps(func)
         def wrapper(*args, **kwargs):
             bound = signature.bind_partial(*args, **kwargs)
-            metrics_obj = bound.arguments.get("metrics")
             logger = bound.arguments.get("logger")
             log_data = bound.arguments.get("log_data")
             backend = bound.arguments.get("backend")
             env = bound.arguments.get(env_arg) if env_arg is not None else None
 
-            if metrics_obj is None or logger is None or log_data is None:
-                raise ValueError(f"observed_stage requires metrics, logger, and log_data for stage {stage}")
+            if logger is None or log_data is None:
+                raise ValueError(f"observed_stage requires logger and log_data for stage {stage}")
 
-            stage_token = metrics_obj.start_stage(stage)
+            stage_token = start_stage(stage)
             stage_label = stage.replace("_", " ")
             logger.info(
                 {
@@ -1228,8 +1499,8 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
                 return func(*args, **kwargs)
             finally:
                 if backend == "mujoco-warp" and env is not None:
-                    update_warp_memory_metrics(env, metrics_obj, stage=stage)
-                metrics_obj.finish_stage(stage_token)
+                    update_warp_memory_metrics(env, stage=stage)
+                finish_stage(stage_token)
                 logger.info(
                     {
                         **log_data,
@@ -1245,7 +1516,6 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
 def apply_setup_observability(
     *,
     run_id: str,
-    metrics: SimbayMetrics,
     backend_name: str,
     num_particles: int,
     dt: float,
@@ -1266,12 +1536,12 @@ def apply_setup_observability(
             "simbay.true_mass": float(true_mass),
         }
     )
-    metrics.set_particle_count(num_particles)
-    metrics.set_backend(backend_name, execution_device)
-    metrics.set_run_info(backend=backend_name, particles=num_particles, control_dt=dt)
-    update_setup_metrics(metrics, backend_name, env_memory_profile, memory_profile)
+    set_particle_count(num_particles)
+    set_backend(backend_name, execution_device)
+    set_run_info(backend=backend_name, particles=num_particles, control_dt=dt)
+    update_setup_metrics(backend_name, env_memory_profile, memory_profile)
     if backend_name == "mujoco-warp":
-        update_warp_memory_metrics(env, metrics, stage="setup")
+        update_warp_memory_metrics(env, stage="setup")
 
 
 def update_phase_4_state(
@@ -1320,7 +1590,6 @@ def update_phase_4_metrics(
     run_id: str,
     backend: str,
     started_at: float,
-    metrics: Any,
     state: dict[str, Any],
     particle_filter: Any,
     step: int,
@@ -1344,7 +1613,7 @@ def update_phase_4_metrics(
     rel_error_pct = computed["rel_error_pct"]
     cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
     add_exemplar(run_id, step)
-    metrics.update_filter_state(
+    update_filter_state(
         ess=particle_filter.effective_sample_size(),
         estimate=current_estimate,
         wall_seconds=step_wall_duration,
@@ -1352,12 +1621,12 @@ def update_phase_4_metrics(
         cpu_equivalent_cores=cpu_equivalent_cores_used,
         particles=particle_filter.N,
     )
-    metrics.update_weight_health(
+    update_weight_health(
         uniform_weight_l1_distance=float(step_result.get("uniform_weight_l1_distance", 0.0)),
         uniform_weight_max_deviation=float(step_result.get("uniform_weight_max_deviation", 0.0)),
         collapsed_to_uniform=bool(step_result.get("collapsed_to_uniform", False)),
     )
-    metrics.update_accuracy_metrics(
+    update_accuracy_metrics(
         mass_abs_error_kg=abs_error_kg,
         mass_rel_error_pct=rel_error_pct,
         phase4_mae_kg=computed["phase_4_mae_kg"],
@@ -1385,7 +1654,7 @@ def update_phase_4_metrics(
         max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
         weight_entropy_normalized = float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
         weight_perplexity = float(np.exp(weight_entropy))
-        metrics.update_resample_state(
+        update_resample_state(
             steps=step + 1,
             resample_count=state["resample_count"],
             resampled=bool(step_result.get("resampled", False)),
@@ -1397,7 +1666,7 @@ def update_phase_4_metrics(
             particle_p50=float(np.percentile(latest_particles_snapshot, 50)),
             particle_p90=float(np.percentile(latest_particles_snapshot, 90)),
         )
-        metrics.update_uncertainty_metrics(
+        update_uncertainty_metrics(
             credible_interval_50_width_kg=ci50_high - ci50_low,
             credible_interval_90_width_kg=ci90_high - ci90_low,
             credible_interval_50_contains_truth=ci50_low <= true_mass <= ci50_high,
@@ -1418,7 +1687,7 @@ def update_phase_4_metrics(
         if state["first_invalid_state_step"] < 0 and current_first_invalid_state_step >= 0:
             state["first_invalid_state_step"] = current_first_invalid_state_step
         state["max_repaired_world_count"] = max(state["max_repaired_world_count"], int(diagnostics.get("repaired_world_count", 0.0)))
-        metrics.update_likelihood_health(
+        update_likelihood_health(
             sim_force_finite_ratio=float(diagnostics.get("sim_force_finite_ratio", 0.0)),
             diff_finite_ratio=float(diagnostics.get("diff_finite_ratio", 0.0)),
             likelihood_finite_ratio=float(diagnostics.get("likelihood_finite_ratio", 0.0)),
@@ -1429,7 +1698,7 @@ def update_phase_4_metrics(
             likelihood_mean=float(diagnostics.get("likelihood_mean", 0.0)),
             likelihood_std=float(diagnostics.get("likelihood_std", 0.0)),
         )
-        metrics.update_invalid_state_counts(
+        update_invalid_state_counts(
             invalid_sensor_events=int(diagnostics.get("invalid_sensor_events", 0.0)),
             invalid_state_events=int(diagnostics.get("invalid_state_events", 0.0)),
             skipped_invalid_updates=int(step_result.get("skipped_invalid_updates", 0)),
@@ -1445,7 +1714,7 @@ def update_phase_4_metrics(
             sensordata_nonfinite_count=int(diagnostics.get("sensordata_nonfinite_count", 0.0)),
             ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
         )
-        metrics.update_contact_health(
+        update_contact_health(
             contact_count_mean=float(diagnostics.get("contact_count_mean", 0.0)),
             contact_count_max=float(diagnostics.get("contact_count_max", 0.0)),
             active_contact_particle_ratio=float(diagnostics.get("active_contact_particle_ratio", 0.0)),
@@ -1472,7 +1741,6 @@ def phase_4_step_observability(
     span_attrs: dict[str, Any],
     log_data: dict[str, Any],
     logger: Any,
-    metrics: Any,
     stage_state: dict[str, Any],
     particle_filter: Any,
     step: int,
@@ -1523,7 +1791,6 @@ def phase_4_step_observability(
         run_id=run_id,
         backend=backend,
         started_at=started_at,
-        metrics=metrics,
         state=stage_state,
         particle_filter=particle_filter,
         step=step,
@@ -1538,14 +1805,13 @@ def finalize_phase_4_metrics(
     *,
     log_data: dict[str, Any],
     logger: Any,
-    metrics: Any,
     state: dict[str, Any],
     trajectory: list[np.ndarray] | np.ndarray,
     particle_filter: Any,
 ) -> LiftPhaseResult:
     phase = "phase_4_lift"
-    metrics.set_substage_duration(phase, "robot_execute", state["robot_execute_total"])
-    metrics.set_substage_duration(phase, "pf_update", state["pf_update_total"])
+    set_substage_duration(phase, "robot_execute", state["robot_execute_total"])
+    set_substage_duration(phase, "pf_update", state["pf_update_total"])
     logger.info(
         {
             **log_data,
@@ -1570,8 +1836,8 @@ def finalize_phase_4_metrics(
             "msg": "Finished particle filter update for phase 4 (lift).",
         }
     )
-    metrics.set_substage_workload(phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"])
-    metrics.set_substage_workload(phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"])
+    set_substage_workload(phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"])
+    set_substage_workload(phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"])
     force_flush_tracing()
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
@@ -1586,10 +1852,15 @@ def finalize_phase_4_metrics(
     )
 
 
-def init_metrics(run_id: str = "unknown") -> SimbayMetrics:
-    return SimbayMetrics(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
+def init_metrics(run_id: str = "unknown") -> None:
+    global _STATE
+    _STATE = _MetricsState(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
 
 
-def shutdown_metrics(metrics: SimbayMetrics) -> None:
+def shutdown_metrics() -> None:
+    global _STATE
+    if _STATE is None:
+        return
     with suppress(Exception):
-        metrics.stop()
+        _STATE.stop()
+    _STATE = None

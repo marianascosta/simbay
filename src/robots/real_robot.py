@@ -5,7 +5,6 @@ import time
 import numpy as np
 
 from .base import BaseRobot
-from src.utils.logging_utils import extend_logging_data
 
 logger = logging.getLogger("simbay.real_robot")
 

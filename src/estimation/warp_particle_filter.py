@@ -11,7 +11,6 @@ import mujoco
 import numpy as np
 
 from src.utils.settings import DEFAULT_OBJECT_PROPS
-from src.utils.logging_utils import extend_logging_data
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
 from src.utils.mujoco_utils import prepare_model_for_warp
@@ -92,19 +91,19 @@ class FrankaWarpEnv(ParticleEnvironment):
             logging_data=self.logging_data,
         )
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_runtime_warmup_start",
-                msg=(f"Started warming up the Warp runtime with {self._num_particles} particles."),
-            )
+            {
+                **self.logging_data,
+                "event": "warp_runtime_warmup_start",
+                "msg": (f"Started warming up the Warp runtime with {self._num_particles} particles."),
+            }
         )
         self._batch.warmup()
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_runtime_warmup_done",
-                msg="Finished warming up the Warp runtime.",
-            )
+            {
+                **self.logging_data,
+                "event": "warp_runtime_warmup_done",
+                "msg": "Finished warming up the Warp runtime.",
+            }
         )
         self._masses = masses.copy()
         self._step_count = 0
@@ -213,33 +212,33 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         if sensor_invalid_transition:
             self.logger.warning(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_invalid_sensor_state",
-                    msg=f"Detected an invalid Warp sensor state at step {self._step_count}.",
-                    step=self._step_count,
-                )
+                {
+                    **self.logging_data,
+                    "event": "warp_invalid_sensor_state",
+                    "msg": f"Detected an invalid Warp sensor state at step {self._step_count}.",
+                    "step": self._step_count,
+                }
             )
         if state_invalid_transition:
             self.logger.warning(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_invalid_backend_state",
-                    msg=f"Detected an invalid Warp backend state at step {self._step_count}.",
-                    step=self._step_count,
-                )
+                {
+                    **self.logging_data,
+                    "event": "warp_invalid_backend_state",
+                    "msg": f"Detected an invalid Warp backend state at step {self._step_count}.",
+                    "step": self._step_count,
+                }
             )
         repair_active_now = bool(np.any(repaired_worlds))
         repair_transition = repair_active_now and not self._repair_active
         self._repair_active = repair_active_now
         if repair_transition:
             self.logger.warning(
-                extend_logging_data(
-                    self.logging_data,
-                    event="warp_repaired_invalid_worlds",
-                    msg=(f"Repaired invalid Warp worlds at step {self._step_count}."),
-                    step=self._step_count,
-                )
+                {
+                    **self.logging_data,
+                    "event": "warp_repaired_invalid_worlds",
+                    "msg": (f"Repaired invalid Warp worlds at step {self._step_count}."),
+                    "step": self._step_count,
+                }
             )
 
         self._last_measurement_diagnostics = {
@@ -308,11 +307,11 @@ class FrankaWarpEnv(ParticleEnvironment):
         for length in normalized_lengths:
             self._batch.warmup_rollout(length)
         self.logger.info(
-            extend_logging_data(
-                self.logging_data,
-                event="warp_runtime_rollout_warmup_done",
-                msg="Finished warming up Warp rollout execution.",
-            )
+            {
+                **self.logging_data,
+                "event": "warp_runtime_rollout_warmup_done",
+                "msg": "Finished warming up Warp rollout execution.",
+            }
         )
         return normalized_lengths
 
