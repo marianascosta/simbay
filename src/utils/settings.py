@@ -16,11 +16,13 @@ def _read_bool(name: str, default: bool = False) -> bool:
 RUN_ID = os.getenv("SIMBAY_RUN_ID") or datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 HEADLESS = _read_bool("SIMBAY_HEADLESS", default=True)
 BACKEND = os.getenv("SIMBAY_BACKEND", "cpu").lower()
+ENVIRONMENT = os.getenv("SIMBAY_ENVIRONMENT", "dev").lower()
 NUM_PARTICLES = int(os.getenv("SIMBAY_PARTICLES", "100"))
 LOG_LEVEL_NAME = "INFO"
 LOG_FALLBACK_DIR = Path("/tmp/simbay-logs")
 SYSTEM_METRICS_INTERVAL_SECONDS = 1.0
 OTEL_ENDPOINT = "http://tempo:4317"
+OBSERVABILITY_ENABLED = ENVIRONMENT == "docker-dev"
 MATPLOTLIB_BACKEND = "Agg"
 os.environ.setdefault("MPLBACKEND", MATPLOTLIB_BACKEND)
 

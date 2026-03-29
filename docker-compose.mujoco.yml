@@ -6,6 +6,7 @@ services:
       target: base
     container_name: simbay-mujoco
     environment:
+      SIMBAY_ENVIRONMENT: "docker-dev"
       SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
       SIMBAY_BACKEND: "cpu"
       SIMBAY_HEADLESS: "1"

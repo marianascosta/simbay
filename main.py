@@ -23,9 +23,11 @@ from src.utils.logging_utils import logger as simbay_logger, logger
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
+from src.utils.settings import ENVIRONMENT
 from src.utils.settings import FRANKA_HOME_QPOS
 from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
+from src.utils.settings import OBSERVABILITY_ENABLED
 from src.utils.settings import RUN_ID
 from src.utils.tracing import get_tracer
 from src.utils.tracing import trace_call
@@ -807,10 +809,18 @@ def main(run_id: str = RUN_ID) -> None:
 
 if __name__ == "__main__":
     run_id = RUN_ID
-    export_observability = HEADLESS
+    export_observability = OBSERVABILITY_ENABLED
     set_tracing_enabled(export_observability)
     setup_tracing(run_id=run_id)
     LOGGER = simbay_logger
+    LOGGER.info(
+        {
+            "run_id": run_id,
+            "msg": "Initialized runtime observability mode.",
+            "environment": ENVIRONMENT,
+            "observability_enabled": export_observability,
+        }
+    )
     metrics.init_metrics(run_id=run_id, enabled=export_observability)
     set_span_attributes({"simbay.run_id": run_id})
     install_signal_handlers(LOGGER, {"run_id": run_id})
