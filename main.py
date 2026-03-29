@@ -364,8 +364,8 @@ def phase_4_step_logic(
         viewer.sync()
     stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
 
-    measurements = real_robot.get_sensor_reads()
-    noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=3)
+    measurements = np.asarray(real_robot.get_sensor_reads())
+    noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=measurements.shape)
 
     with annotate("phase4_particle_filter_step"):
         if backend == "mujoco-warp":

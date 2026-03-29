@@ -53,7 +53,7 @@ class WarpBatch:
         masses: np.ndarray,
         body_id: int,
         nconmax: int = 128,
-        njmax: int = 256,
+        njmax: int = 384,
         logging_data: dict[str, object] | None = None,
     ):
         self.logging_data = dict(logging_data or {})
