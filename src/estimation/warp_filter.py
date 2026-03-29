@@ -20,7 +20,10 @@ def _normalize_weights(weights: np.ndarray, likelihoods: np.ndarray) -> np.ndarr
     safe_likelihoods = np.maximum(safe_likelihoods, tiny)
 
     log_updated = np.log(safe_weights) + np.log(safe_likelihoods)
-    log_updated = log_updated - np.max(log_updated)
+    finite_mask = np.isfinite(log_updated)
+    if not np.any(finite_mask):
+        return np.full_like(weights, 1.0 / weights.shape[0])
+    log_updated = log_updated - np.max(log_updated[finite_mask])
     updated = np.exp(log_updated)
     total = max(float(np.sum(updated)), tiny)
     return updated / total
@@ -95,7 +98,7 @@ class WarpParticleFilter:
         init_memory_after = get_process_memory_bytes()
         self.N = int(self.particles.shape[0])
 
-        self.weights = np.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
+        self.weights = np.full((self.N,), 1.0 / self.N, dtype=np.float64)
         self._rng = np.random.default_rng(7)
         self._ess = float(self.N)
         self._step_index = 0
@@ -128,18 +131,7 @@ class WarpParticleFilter:
         weights = _normalize_weights(self.weights, likelihoods)
         ess = _effective_sample_size(weights)
         estimate = _estimate_particles(self.particles, weights)
-
-        offset = float(self._rng.uniform())
-        update_resample = _update_and_optionally_resample(
-            self.weights,
-            self.particles,
-            likelihoods,
-            offset,
-        )
-        indexes = np.arange(self.N, dtype=np.int32)
-        self.env.resample_states(indexes)
-
-        _ = (weights, ess, estimate, update_resample)
+        _ = (ess, estimate)
         self.logger.info(
             {
                 **self.logging_data,
@@ -148,6 +140,9 @@ class WarpParticleFilter:
             }
         )
         return warmed_rollout_lengths
+
+    def set_contact_mode(self, *, simplified_contacts: bool) -> None:
+        self.env.set_contact_mode(simplified_contacts=simplified_contacts)
 
     def predict(self, control_input) -> None:
         self.particles = self.env.propagate(self.particles, control_input)
@@ -166,6 +161,7 @@ class WarpParticleFilter:
             and diagnostics.get("qvel_nonfinite_count", 0.0) == 0.0
             and diagnostics.get("sensordata_nonfinite_count", 0.0) == 0.0
             and diagnostics.get("ctrl_nonfinite_count", 0.0) == 0.0
+            and diagnostics.get("qacc_warmstart_nonfinite_count", 0.0) == 0.0
         )
 
     @staticmethod

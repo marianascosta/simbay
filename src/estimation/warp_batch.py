@@ -33,6 +33,20 @@ _RECOVERY_STATE_FIELDS = (
     "qacc_warmstart",
     "sensordata",
 )
+_STATE_TRANSFER_FIELDS = (
+    "qpos",
+    "qvel",
+    "act",
+    "ctrl",
+)
+_NONFINITE_CHECK_FIELDS = (
+    "qpos",
+    "qvel",
+    "act",
+    "ctrl",
+    "qacc_warmstart",
+    "sensordata",
+)
 
 
 def _assign_warp_array(array, values: np.ndarray, dtype=wp.float32) -> None:
@@ -60,6 +74,7 @@ class WarpBatch:
         self._body_id = body_id
         self._size = int(len(masses))
         self._ctrl_dim = int(mj_model.nu)
+        self._ctrl_np = np.zeros((self._size, self._ctrl_dim), dtype=np.float32)
 
         logger.info(
             {
@@ -85,6 +100,7 @@ class WarpBatch:
         ).astype(np.float32)
         base_mass_np[:, body_id] = np.asarray(masses, dtype=np.float32)
         self._body_mass_np = base_mass_np.copy()
+        self._body_mass_column_np = self._body_mass_np[:, self._body_id]
         self._model.body_mass = wp.from_numpy(base_mass_np, dtype=wp.float32)
         mjw.set_const(self._model, self._data)
         self._peak_bytes_in_use = 0
@@ -104,8 +120,8 @@ class WarpBatch:
         return self._ctrl_dim
 
     def warmup(self) -> None:
-        dummy_ctrl = np.zeros((self._size, self._ctrl_dim), dtype=np.float32)
-        _assign_warp_array(self._data.ctrl, dummy_ctrl)
+        self._ctrl_np.fill(0.0)
+        _assign_warp_array(self._data.ctrl, self._ctrl_np)
         mjw.step(self._model, self._data)
         wp.synchronize()
         logger.info(
@@ -120,8 +136,8 @@ class WarpBatch:
     def warmup_rollout(self, steps: int) -> None:
         if steps <= 0:
             return
-        dummy_ctrl = np.zeros((self._size, self._ctrl_dim), dtype=np.float32)
-        _assign_warp_array(self._data.ctrl, dummy_ctrl)
+        self._ctrl_np.fill(0.0)
+        _assign_warp_array(self._data.ctrl, self._ctrl_np)
         for _ in range(steps):
             mjw.step(self._model, self._data)
         wp.synchronize()
@@ -134,14 +150,10 @@ class WarpBatch:
         )
 
     def step(self, control_input: np.ndarray, masses: np.ndarray) -> None:
-        self._body_mass_np[:, self._body_id] = np.asarray(masses, dtype=np.float32)
+        np.copyto(self._body_mass_column_np, np.asarray(masses, dtype=np.float32))
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
-
-        ctrl_np = np.broadcast_to(
-            np.asarray(control_input, dtype=np.float32),
-            (self._size, self._ctrl_dim),
-        ).copy()
-        _assign_warp_array(self._data.ctrl, ctrl_np)
+        self._ctrl_np[:] = np.asarray(control_input, dtype=np.float32)
+        _assign_warp_array(self._data.ctrl, self._ctrl_np)
 
         mjw.step(self._model, self._data)
 
@@ -149,8 +161,14 @@ class WarpBatch:
         steps = int(control_inputs.shape[0])
         if steps <= 0:
             return
+        control_inputs_np = np.asarray(control_inputs, dtype=np.float32)
+        mass_trajectory_np = np.asarray(mass_trajectory, dtype=np.float32)
         for step_idx in range(steps):
-            self.step(control_inputs[step_idx], mass_trajectory[step_idx])
+            np.copyto(self._body_mass_column_np, mass_trajectory_np[step_idx])
+            _assign_warp_array(self._model.body_mass, self._body_mass_np)
+            self._ctrl_np[:] = control_inputs_np[step_idx]
+            _assign_warp_array(self._data.ctrl, self._ctrl_np)
+            mjw.step(self._model, self._data)
 
     def sensor_slice(self, start: int, width: int) -> np.ndarray:
         return self._data.sensordata.numpy()[:, start : start + width]
@@ -163,7 +181,7 @@ class WarpBatch:
 
     def state_nonfinite_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for field_name in ("qpos", "qvel", "sensordata", "ctrl"):
+        for field_name in _NONFINITE_CHECK_FIELDS:
             array = getattr(self._data, field_name, None)
             if array is None:
                 counts[f"{field_name}_nonfinite_count"] = 0
@@ -174,7 +192,7 @@ class WarpBatch:
 
     def invalid_world_mask(self) -> np.ndarray:
         invalid_mask = np.zeros((self._size,), dtype=bool)
-        for field_name in ("qpos", "qvel", "sensordata", "ctrl"):
+        for field_name in _NONFINITE_CHECK_FIELDS:
             array = getattr(self._data, field_name, None)
             if array is None:
                 continue
@@ -193,7 +211,35 @@ class WarpBatch:
             _assign_warp_array(array, np_array[indexes_np])
 
         self._body_mass_np = self._body_mass_np[indexes_np]
+        self._body_mass_column_np = self._body_mass_np[:, self._body_id]
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
+        mjw.set_const(self._model, self._data)
+
+    def snapshot_state(self) -> dict[str, np.ndarray]:
+        snapshot: dict[str, np.ndarray] = {
+            "body_mass": self._body_mass_np.copy(),
+        }
+        for field_name in _STATE_TRANSFER_FIELDS:
+            array = getattr(self._data, field_name, None)
+            if array is None:
+                continue
+            snapshot[field_name] = np.asarray(array.numpy()).copy()
+        return snapshot
+
+    def restore_state(self, snapshot: dict[str, np.ndarray]) -> None:
+        self._body_mass_np = snapshot["body_mass"].copy()
+        self._body_mass_column_np = self._body_mass_np[:, self._body_id]
+        _assign_warp_array(self._model.body_mass, self._body_mass_np)
+        for field_name in _STATE_TRANSFER_FIELDS:
+            array = getattr(self._data, field_name, None)
+            values = snapshot.get(field_name)
+            if array is None or values is None:
+                continue
+            _assign_warp_array(array, values)
+        qacc_warmstart = getattr(self._data, "qacc_warmstart", None)
+        if qacc_warmstart is not None:
+            zeros = np.zeros_like(np.asarray(qacc_warmstart.numpy()))
+            _assign_warp_array(qacc_warmstart, zeros)
         mjw.set_const(self._model, self._data)
 
     def capture_recovery_snapshot(self) -> None:
@@ -212,6 +258,7 @@ class WarpBatch:
             return False
         snapshot = self._recovery_snapshot
         self._body_mass_np = snapshot["body_mass"].copy()
+        self._body_mass_column_np = self._body_mass_np[:, self._body_id]
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
         for field_name in _RECOVERY_STATE_FIELDS:
             array = getattr(self._data, field_name, None)
@@ -232,6 +279,7 @@ class WarpBatch:
 
         snapshot = self._recovery_snapshot
         self._body_mass_np[invalid_mask] = snapshot["body_mass"][invalid_mask]
+        self._body_mass_column_np = self._body_mass_np[:, self._body_id]
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
         for field_name in _RECOVERY_STATE_FIELDS:
             array = getattr(self._data, field_name, None)
