@@ -1852,9 +1852,9 @@ def finalize_phase_4_metrics(
     )
 
 
-def init_metrics(run_id: str = "unknown") -> None:
+def init_metrics(run_id: str = "unknown", *, enabled: bool = True) -> None:
     global _STATE
-    _STATE = _MetricsState(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
+    _STATE = _MetricsState(enabled=enabled, port=8000, run_id=run_id).initialize_defaults().start_runtime()
 
 
 def shutdown_metrics() -> None:

@@ -2,10 +2,10 @@ import gc
 import math
 import signal
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -19,17 +19,20 @@ from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
 from src.utils import metrics
-from src.utils.logging_utils import logger as simbay_logger
+from src.utils.logging_utils import logger as simbay_logger, logger
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
+from src.utils.settings import ENVIRONMENT
 from src.utils.settings import FRANKA_HOME_QPOS
 from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
+from src.utils.settings import OBSERVABILITY_ENABLED
 from src.utils.settings import RUN_ID
 from src.utils.tracing import get_tracer
 from src.utils.tracing import trace_call
 from src.utils.tracing import force_flush_tracing
+from src.utils.tracing import set_tracing_enabled
 from src.utils.tracing import set_span_attributes
 from src.utils.tracing import setup_tracing
 from src.utils.tracing import shutdown_tracing
@@ -139,10 +142,16 @@ def ik_planning(
     q_grasp_closed = np.append(grasp_q7, 0)
     q_lift_closed = np.append(lift_q7, 0)
 
-    traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
-    traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
-    traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
-    traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
+    if backend == "cpu":
+        traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt, settle_time=0.0)
+        traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt, settle_time=0.0)
+        traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
+        traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
+    else:
+        traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
+        traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
+        traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
+        traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
     set_span_attributes(
         {
             **span_attrs,
@@ -513,11 +522,23 @@ def generate_particle_filter_plot(
     history_estimates: list[float],
     true_mass: float,
     env: Any,
+    history_particles: list[np.ndarray] | None = None,
+    num_particles: int | None = None,
 ) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=(10, 6))
+    particle_count_label = num_particles if num_particles is not None else "unknown"
+    if history_particles is not None and num_particles is not None:
+        num_steps = len(history_particles)
+        for t in range(num_steps):
+            plt.scatter([t] * num_particles, history_particles[t], color="blue", alpha=0.05, s=15)
     plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
     plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
+    plt.title(f"Particle Filter: Mass Estimation Evolution (N={particle_count_label})", fontsize=14, fontweight="bold")
     plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
     plt.ylabel("Estimated Mass (kg)", fontsize=12)
     plt.ylim(env.min, env.max)
@@ -531,11 +552,152 @@ def generate_particle_filter_plot(
     return output_path
 
 
+def run_simbay_mujoco_original(
+    *,
+    traj1: list[np.ndarray] | np.ndarray,
+    traj2: list[np.ndarray] | np.ndarray,
+    traj3: list[np.ndarray] | np.ndarray,
+    traj4: list[np.ndarray] | np.ndarray,
+    real_robot: Any,
+    viewer: Any,
+    particle_filter: Any,
+    logger: Any,
+    log_data: dict[str, object],
+) -> tuple[list[float], list[np.ndarray]]:
+    logger.info({**log_data, "msg": "Moving to Approach position..."})
+    for qpos in traj1:
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+        particle_filter.predict(qpos)
+
+    logger.info({**log_data, "msg": "Descending to grasp..."})
+    for qpos in traj2:
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+        particle_filter.predict(qpos)
+
+    logger.info({**log_data, "msg": "Closing Gripper..."})
+    for qpos in traj3:
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+        particle_filter.predict(qpos)
+
+    logger.info({**log_data, "msg": "Lifting object and running Particle Filter..."})
+    history_particles: list[np.ndarray] = []
+    history_estimates: list[float] = []
+    for _, qpos in enumerate(traj4):
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+        particle_filter.predict(qpos)
+        measurements = np.asarray(real_robot.get_sensor_reads())
+        noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=measurements.shape)
+        particle_filter.update(noisy_ft_reading)
+        particle_filter.resample()
+        history_particles.append(particle_filter.particles.copy())
+        history_estimates.append(float(particle_filter.estimate()))
+    return history_estimates, history_particles
+
+
+def run_simbay_mujoco_warp(
+    *,
+    tracer: Any,
+    run_id: str,
+    started_at: float,
+    span_attrs: dict[str, Any],
+    traj1: list[np.ndarray] | np.ndarray,
+    traj2: list[np.ndarray] | np.ndarray,
+    traj3: list[np.ndarray] | np.ndarray,
+    traj4: list[np.ndarray] | np.ndarray,
+    real_robot: Any,
+    viewer: Any,
+    dt: float,
+    particle_filter: Any,
+    env: Any,
+    true_mass: float,
+    backend: str,
+    logger: Any,
+    log_data: dict[str, object],
+) -> list[float]:
+    phase_token = metrics.start_stage("phase_1_approach")
+    logger.info({**log_data, "msg": "Started phase 1 (approach)."})
+    try:
+        with tracing_span(tracer, "phase_1_approach"):
+            set_span_attributes(
+                {
+                    **span_attrs,
+                    "simbay.stage": "phase_1_approach",
+                    "simbay.phase_trajectory_step_count": len(traj1),
+                }
+            )
+            robot_execute(phase="phase_1_approach", trajectory=traj1, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_1_approach", trajectory=traj1, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+    finally:
+        metrics.update_warp_memory_metrics(env, stage="phase_1_approach")
+        metrics.finish_stage(phase_token)
+        logger.info({**log_data, "msg": "Finished phase 1 (approach)."})
+
+    phase_token = metrics.start_stage("phase_2_descend")
+    logger.info({**log_data, "msg": "Started phase 2 (descent)."})
+    try:
+        with tracing_span(tracer, "phase_2_descend"):
+            set_span_attributes(
+                {
+                    **span_attrs,
+                    "simbay.stage": "phase_2_descend",
+                    "simbay.phase_trajectory_step_count": len(traj2),
+                }
+            )
+            robot_execute(phase="phase_2_descend", trajectory=traj2, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_2_descend", trajectory=traj2, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+    finally:
+        metrics.update_warp_memory_metrics(env, stage="phase_2_descend")
+        metrics.finish_stage(phase_token)
+        logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
+
+    phase_token = metrics.start_stage("phase_3_grip")
+    logger.info({**log_data, "msg": "Started phase 3 (grip)."})
+    try:
+        with tracing_span(tracer, "phase_3_grip"):
+            set_span_attributes(
+                {
+                    **span_attrs,
+                    "simbay.stage": "phase_3_grip",
+                    "simbay.phase_trajectory_step_count": len(traj3),
+                }
+            )
+            robot_execute(phase="phase_3_grip", trajectory=traj3, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
+            pf_replay(phase="phase_3_grip", trajectory=traj3, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
+    finally:
+        metrics.update_warp_memory_metrics(env, stage="phase_3_grip")
+        metrics.finish_stage(phase_token)
+        logger.info({**log_data, "msg": "Finished phase 3 (grip)."})
+
+    lift_result = run_phase_4_lift(
+        tracer=tracer,
+        run_id=run_id,
+        started_at=started_at,
+        span_attrs=span_attrs,
+        backend=backend,
+        trajectory=traj4,
+        real_robot=real_robot,
+        viewer=viewer,
+        particle_filter=particle_filter,
+        env=env,
+        true_mass=true_mass,
+        logger=logger,
+        log_data=log_data,
+        uniform_weight_metrics=_uniform_weight_metrics,
+        update_and_optionally_resample=_update_and_optionally_resample,
+    )
+    return lift_result.history_estimates
+
+
 @trace_call("simbay.main", span_name="main")
 def main(run_id: str = RUN_ID) -> None:
-    if LOGGER is None:
-        raise RuntimeError("Runtime logger must be initialized before main.")
-    logger = LOGGER
     tracer = get_tracer("simbay.main")
     log_data: dict[str, object] = {"run_id": run_id}
     started_at = time.perf_counter()
@@ -585,91 +747,41 @@ def main(run_id: str = RUN_ID) -> None:
     traj3 = planning_result["traj3"]
     traj4 = planning_result["traj4"]
 
-    phase_token = metrics.start_stage("phase_1_approach")
-    logger.info({**log_data, "msg": "Started phase 1 (approach)."})
-    try:
-        with tracing_span(tracer, "phase_1_approach"):
-            set_span_attributes(
-                {
-                    **span_attrs,
-                    "simbay.stage": "phase_1_approach",
-                    "simbay.phase_trajectory_step_count": len(traj1),
-                }
-            )
-            robot_execute(phase="phase_1_approach", trajectory=traj1, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase="phase_1_approach", trajectory=traj1, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
-    finally:
-        if backend == "mujoco-warp":
-            metrics.update_warp_memory_metrics(env, stage="phase_1_approach")
-        metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": "Finished phase 1 (approach)."})
-
-    phase_token = metrics.start_stage("phase_2_descend")
-    logger.info({**log_data, "msg": "Started phase 2 (descent)."})
-    try:
-        with tracing_span(tracer, "phase_2_descend"):
-            set_span_attributes(
-                {
-                    **span_attrs,
-                    "simbay.stage": "phase_2_descend",
-                    "simbay.phase_trajectory_step_count": len(traj2),
-                }
-            )
-            robot_execute(phase="phase_2_descend", trajectory=traj2, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase="phase_2_descend", trajectory=traj2, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
-    finally:
-        if backend == "mujoco-warp":
-            metrics.update_warp_memory_metrics(env, stage="phase_2_descend")
-        metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
-
-    phase_token = metrics.start_stage("phase_3_grip")
-    logger.info({**log_data, "msg": "Started phase 3 (grip)."})
-    try:
-        with tracing_span(tracer, "phase_3_grip"):
-            set_span_attributes(
-                {
-                    **span_attrs,
-                    "simbay.stage": "phase_3_grip",
-                    "simbay.phase_trajectory_step_count": len(traj3),
-                }
-            )
-            robot_execute(phase="phase_3_grip", trajectory=traj3, real_robot=real_robot, viewer=viewer, dt=dt, span_attrs=span_attrs, log_data=log_data)
-            pf_replay(phase="phase_3_grip", trajectory=traj3, particle_filter=particle_filter, backend=backend, span_attrs=span_attrs, log_data=log_data)
-    finally:
-        if backend == "mujoco-warp":
-            metrics.update_warp_memory_metrics(env, stage="phase_3_grip")
-        metrics.finish_stage(phase_token)
-        logger.info({**log_data, "msg": "Finished phase 3 (grip)."})
-    lift_result = run_phase_4_lift(
-        tracer=tracer,
-        run_id=run_id,
-        started_at=started_at,
-        span_attrs=span_attrs,
-        backend=backend,
-        trajectory=traj4,
-        real_robot=real_robot,
-        viewer=viewer,
-        particle_filter=particle_filter,
-        env=env,
-        true_mass=true_mass,
-        logger=logger,
-        log_data=log_data,
-        uniform_weight_metrics=_uniform_weight_metrics,
-        update_and_optionally_resample=_update_and_optionally_resample,
-    )
-
-    history_estimates = lift_result.history_estimates
+    if backend == "cpu":
+        history_estimates, history_particles = run_simbay_mujoco_original(
+            traj1=traj1,
+            traj2=traj2,
+            traj3=traj3,
+            traj4=traj4,
+            real_robot=real_robot,
+            viewer=viewer,
+            particle_filter=particle_filter,
+            logger=logger,
+            log_data=log_data,
+        )
+    else:
+        history_estimates = run_simbay_mujoco_warp(
+            tracer=tracer,
+            run_id=run_id,
+            started_at=started_at,
+            span_attrs=span_attrs,
+            traj1=traj1,
+            traj2=traj2,
+            traj3=traj3,
+            traj4=traj4,
+            real_robot=real_robot,
+            viewer=viewer,
+            dt=dt,
+            particle_filter=particle_filter,
+            env=env,
+            true_mass=true_mass,
+            backend=backend,
+            logger=logger,
+            log_data=log_data,
+        )
+        history_particles = None
 
     logger.info({**log_data, "msg": "Finished the particle filter run.", "backend": backend})
-
-    awaiting_user_input = not headless and not shutdown_requested
-    logger.info({**log_data, "msg": "Finished the execution sequence.", "awaiting_user_input": awaiting_user_input})
-    if awaiting_user_input:
-        input()
-    elif not headless:
-        logger.info({**log_data, "msg": "Skipped waiting for user input because shutdown was requested.", "signal": shutdown_signal_name})
-
     final_prediction = float(particle_filter.estimate())
     time_to_prediction_seconds = time.perf_counter() - started_at
     metrics.set_prediction_ready(
@@ -683,18 +795,33 @@ def main(run_id: str = RUN_ID) -> None:
         history_estimates=history_estimates,
         true_mass=true_mass,
         env=env,
+        history_particles=history_particles,
+        num_particles=num_particles if history_particles is not None else None,
     )
     logger.info({**log_data, "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 
+    if viewer is not None:
+        with suppress(Exception):
+            viewer.close()
     gc.collect()
     logger.info({**log_data, "msg": "Finished the run and shut down cleanly.", "shutdown_requested": shutdown_requested, "signal": shutdown_signal_name or "none"})
 
 
 if __name__ == "__main__":
     run_id = RUN_ID
+    export_observability = OBSERVABILITY_ENABLED
+    set_tracing_enabled(export_observability)
     setup_tracing(run_id=run_id)
     LOGGER = simbay_logger
-    metrics.init_metrics(run_id=run_id)
+    LOGGER.info(
+        {
+            "run_id": run_id,
+            "msg": "Initialized runtime observability mode.",
+            "environment": ENVIRONMENT,
+            "observability_enabled": export_observability,
+        }
+    )
+    metrics.init_metrics(run_id=run_id, enabled=export_observability)
     set_span_attributes({"simbay.run_id": run_id})
     install_signal_handlers(LOGGER, {"run_id": run_id})
     try:

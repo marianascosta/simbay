@@ -1,6 +1,5 @@
 <mujoco model="fr3v2 scene">
-  <include file="fr3_combined.xml"/>
-
+  <include file="fr3v2_hand.xml"/>
   <include file="props.xml"/>
 
   <statistic center="0.2 0 0.4" extent=".8"/>
@@ -20,8 +19,11 @@
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+
+    <!-- Contact was made stiffer to avoid visible floor penetration. -->
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" 
-      condim="3" friction="1 0.005 0.0001" 
-      solref="0.002 1" solimp="0.99 0.99 0.01"/>
+          condim="3" friction="1 0.005 0.0001" 
+          solref="0.002 1" solimp="0.99 0.99 0.01"
+          contype="1" conaffinity="1" />
   </worldbody>
 </mujoco>
