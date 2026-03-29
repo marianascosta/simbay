@@ -2,10 +2,10 @@ import gc
 import math
 import signal
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -19,7 +19,7 @@ from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
 from src.planning import plan_linear_trajectory
 from src.utils import metrics
-from src.utils.logging_utils import logger as simbay_logger
+from src.utils.logging_utils import logger as simbay_logger, logger
 from src.utils.mujoco_utils import initialize_mujoco_env
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
@@ -143,8 +143,8 @@ def ik_planning(
     if backend == "cpu":
         traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt, settle_time=0.0)
         traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt, settle_time=0.0)
-        traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.0)
-        traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=0.0)
+        traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
+        traj4 = plan_linear_trajectory(q_grasp_closed, q_lift_closed, max_velocity=0.5, dt=dt, settle_time=1.0)
     else:
         traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt)
         traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt)
@@ -523,14 +523,20 @@ def generate_particle_filter_plot(
     history_particles: list[np.ndarray] | None = None,
     num_particles: int | None = None,
 ) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=(10, 6))
+    particle_count_label = num_particles if num_particles is not None else "unknown"
     if history_particles is not None and num_particles is not None:
         num_steps = len(history_particles)
         for t in range(num_steps):
             plt.scatter([t] * num_particles, history_particles[t], color="blue", alpha=0.05, s=15)
     plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
     plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
+    plt.title(f"Particle Filter: Mass Estimation Evolution (N={particle_count_label})", fontsize=14, fontweight="bold")
     plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
     plt.ylabel("Estimated Mass (kg)", fontsize=12)
     plt.ylim(env.min, env.max)
@@ -690,9 +696,6 @@ def run_simbay_mujoco_warp(
 
 @trace_call("simbay.main", span_name="main")
 def main(run_id: str = RUN_ID) -> None:
-    if LOGGER is None:
-        raise RuntimeError("Runtime logger must be initialized before main.")
-    logger = LOGGER
     tracer = get_tracer("simbay.main")
     log_data: dict[str, object] = {"run_id": run_id}
     started_at = time.perf_counter()
@@ -777,14 +780,6 @@ def main(run_id: str = RUN_ID) -> None:
         history_particles = None
 
     logger.info({**log_data, "msg": "Finished the particle filter run.", "backend": backend})
-
-    awaiting_user_input = not headless and not shutdown_requested
-    logger.info({**log_data, "msg": "Finished the execution sequence.", "awaiting_user_input": awaiting_user_input})
-    if awaiting_user_input:
-        input()
-    elif not headless:
-        logger.info({**log_data, "msg": "Skipped waiting for user input because shutdown was requested.", "signal": shutdown_signal_name})
-
     final_prediction = float(particle_filter.estimate())
     time_to_prediction_seconds = time.perf_counter() - started_at
     metrics.set_prediction_ready(
@@ -803,6 +798,9 @@ def main(run_id: str = RUN_ID) -> None:
     )
     logger.info({**log_data, "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 
+    if viewer is not None:
+        with suppress(Exception):
+            viewer.close()
     gc.collect()
     logger.info({**log_data, "msg": "Finished the run and shut down cleanly.", "shutdown_requested": shutdown_requested, "signal": shutdown_signal_name or "none"})
 

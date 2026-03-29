@@ -287,6 +287,21 @@ class FrankaWarpEnv(ParticleEnvironment):
             "likelihood_std": float(np.std(likelihoods)),
             "likelihood_range": float(np.max(likelihoods) - np.min(likelihoods)),
         }
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "warp_likelihood_debug",
+                "step": self._step_count,
+                "observation_shape": tuple(observation_np.shape),
+                "sim_shape": tuple(sim_forces.shape),
+                "dist_sq_min": float(np.min(dist_sq)),
+                "dist_sq_max": float(np.max(dist_sq)),
+                "dist_sq_mean": float(np.mean(dist_sq)),
+                "likelihood_min": float(np.min(likelihoods)),
+                "likelihood_max": float(np.max(likelihoods)),
+                "likelihood_mean": float(np.mean(likelihoods)),
+            }
+        )
 
         return likelihoods
 

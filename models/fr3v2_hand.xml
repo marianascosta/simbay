@@ -27,7 +27,8 @@
         <geom type="mesh" contype="0" conaffinity="0" group="2"/>
       </default>
       <default class="panda_collision">
-        <geom type="mesh" group="3"/>
+        <!-- Match master hand contact parameters to prevent box slipping through the gripper under load. -->
+        <geom type="mesh" group="3" friction="5.0 0.5 0.001" solimp="0.95 0.99 0.001" solref="0.01 1" condim="4" margin="0.001"/>
         <default class="fingertip_pad_collision_1">
           <geom type="box" size="0.0085 0.004 0.0085" pos="0 0.0055 0.0445"/>
         </default>
@@ -180,6 +181,7 @@
                         mass="0.682876" diaginertia="0.00110022 0.000899844 0.000699938"/>
                       <joint name="fr3v2_joint7" pos="0 0 0" axis="0 0 1" range="-3.0159 3.0159"
                         actuatorfrcrange="-12 12" damping="0.003" frictionloss="0.2"/>
+                      <site name="sensor_site" pos="0 0 0" size="0.01"/>
                       <geom name="fr3v2_link7_collision" class="collision" mesh="link7_coll"/>
                       <geom mesh="link7_0" material="white" class="visual"/>
                       <geom mesh="link7_1" material="white" class="visual"/>
@@ -265,8 +267,8 @@
     <position class="fr3v2" name="fr3v2_joint6" joint="fr3v2_joint6" kp="2000" kv="200"/>
     <position class="fr3v2" name="fr3v2_joint7" joint="fr3v2_joint7" kp="2000" kv="200"/>
     
-    <general class="panda" name="actuator8" tendon="split" forcerange="-100 100" ctrlrange="0 255"
-      gainprm="0.01568627451 0 0" biasprm="0 -100 -10"/>
+    <general class="panda" name="actuator8" tendon="split" forcerange="-500 500" ctrlrange="0 255"
+      gainprm="0.7843137 0 0" biasprm="0 -5000 -100"/>
   </actuator>
 
   <keyframe>
@@ -274,8 +276,8 @@
   </keyframe>
 
   <sensor>
-    <force name="hand_force" site="wrist_ft_site"/>
-    <torque name="hand_torque" site="wrist_ft_site"/>
+    <force name="hand_force" site="sensor_site"/>
+    <torque name="hand_torque" site="sensor_site"/>
   </sensor>
 
 </mujoco>

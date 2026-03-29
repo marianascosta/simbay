@@ -19,9 +19,11 @@
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    
+
+    <!-- Contact was made stiffer to avoid visible floor penetration. -->
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" 
           condim="3" friction="1 0.005 0.0001" 
+          solref="0.002 1" solimp="0.99 0.99 0.01"
           contype="1" conaffinity="1" />
   </worldbody>
 </mujoco>
