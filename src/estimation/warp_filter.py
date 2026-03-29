@@ -123,7 +123,7 @@ class WarpParticleFilter:
 
     def warmup_runtime(self, rollout_lengths: list[int]) -> list[int]:
         warmed_rollout_lengths = self.env.warmup_runtime(rollout_lengths)
-        zero_observation = np.zeros((3,), dtype=self.particles.dtype)
+        zero_observation = np.zeros((6,), dtype=self.particles.dtype)
         likelihoods = self.env.compute_likelihoods(self.particles, zero_observation)
         weights = _normalize_weights(self.weights, likelihoods)
         ess = _effective_sample_size(weights)
