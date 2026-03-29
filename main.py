@@ -12,8 +12,6 @@ import numpy as np
 
 from src.estimation.mujoco_particle_filter import FrankaMuJoCoEnv
 from src.estimation.particle_filter import ParticleFilter
-from src.estimation.warp_filter import _uniform_weight_metrics
-from src.estimation.warp_filter import _update_and_optionally_resample
 from src.estimation.warp_filter import WarpParticleFilter
 from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
@@ -142,7 +140,7 @@ def ik_planning(
     q_grasp_closed = np.append(grasp_q7, 0)
     q_lift_closed = np.append(lift_q7, 0)
 
-    if backend == "cpu":
+    if backend in {"cpu", "mujoco-warp"}:
         traj1 = plan_linear_trajectory(q_home, q_pre_grasp, max_velocity=1.0, dt=dt, settle_time=0.0)
         traj2 = plan_linear_trajectory(q_pre_grasp, q_grasp_open, max_velocity=0.5, dt=dt, settle_time=0.0)
         traj3 = plan_linear_trajectory(q_grasp_closed, q_grasp_closed, max_velocity=500, dt=dt, settle_time=0.5)
@@ -161,7 +159,8 @@ def ik_planning(
         }
     )
     if backend == "mujoco-warp":
-        warmed_rollout_lengths = particle_filter.warmup_runtime([len(traj1), len(traj2), len(traj3)])
+        particle_filter.set_contact_mode(simplified_contacts=True)
+        particle_filter.warmup_runtime([len(traj1), len(traj2)])
         logger.info({**log_data, "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend})
     return {
         "traj1": traj1,
@@ -281,6 +280,8 @@ def pf_replay(
         }
     )
     if backend == "mujoco-warp":
+        # Warp can replay phases 1-3 as a single batched rollout because these
+        # phases only need state propagation, not per-step measurement updates.
         particle_filter.predict_trajectory(trajectory)
     else:
         for qpos in trajectory:
@@ -296,57 +297,6 @@ def pf_replay(
     return duration
 
 
-def phase_4_warp_step_logic(
-    particle_filter: Any,
-    qpos: np.ndarray,
-    noisy_ft_reading: np.ndarray,
-    *,
-    update_and_optionally_resample: Any,
-    uniform_weight_metrics: Any,
-    attempt: int = 1,
-) -> dict[str, Any]:
-    particle_filter.particles = particle_filter.env.propagate(particle_filter.particles, qpos)
-    likelihoods = particle_filter.env.compute_likelihoods(particle_filter.particles, noisy_ft_reading)
-    diagnostics = particle_filter.env.last_measurement_diagnostics()
-    if not particle_filter._measurement_is_valid(diagnostics):
-        return particle_filter._skip_invalid_update(diagnostics, attempt=attempt)
-    if not particle_filter._measurement_is_informative(diagnostics):
-        return particle_filter._skip_uninformative_update(diagnostics)
-
-    offset = float(particle_filter._rng.uniform())
-    (
-        particle_filter.weights,
-        particle_filter.particles,
-        particle_filter._ess,
-        indexes,
-        did_resample,
-    ) = update_and_optionally_resample(
-        particle_filter.weights,
-        particle_filter.particles,
-        likelihoods,
-        offset,
-    )
-    if did_resample:
-        particle_filter.env.resample_states(indexes)
-        particle_filter._resample_count += 1
-    particle_filter._save_last_good_snapshot()
-    uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = uniform_weight_metrics(particle_filter.weights)
-    particle_filter._step_index += 1
-    return {
-        "ess": float(particle_filter._ess),
-        "resampled": did_resample,
-        "resample_count": particle_filter._resample_count,
-        "uniform_weight_l1_distance": uniform_weight_l1,
-        "uniform_weight_max_deviation": uniform_weight_max_dev,
-        "collapsed_to_uniform": collapsed_to_uniform,
-        "diagnostics": diagnostics,
-        "skipped_invalid_update": False,
-        "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
-        "bootstrap_attempts": attempt,
-        "uninformative_update": False,
-    }
-
-
 def phase_4_step_logic(
     *,
     backend: str,
@@ -355,8 +305,6 @@ def phase_4_step_logic(
     real_robot: Any,
     viewer: Any,
     qpos: np.ndarray,
-    uniform_weight_metrics: Any,
-    update_and_optionally_resample: Any,
 ) -> dict[str, Any]:
     robot_execute_start = time.perf_counter()
     real_robot.move_joints(qpos)
@@ -366,46 +314,22 @@ def phase_4_step_logic(
 
     measurements = np.asarray(real_robot.get_sensor_reads())
     noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=measurements.shape)
+    step_index = len(stage_state["history_estimates"])
+    before_update = metrics.maybe_capture_particle_audit(
+        stage_state,
+        step=step_index,
+        particle_filter=particle_filter,
+        qpos=qpos,
+        observation=noisy_ft_reading,
+    )
 
     with annotate("phase4_particle_filter_step"):
         if backend == "mujoco-warp":
             if not stage_state["bootstrap_applied"]:
-                last_result = None
-                for attempt in range(1, 4):
-                    step_result = phase_4_warp_step_logic(
-                        particle_filter,
-                        qpos,
-                        noisy_ft_reading,
-                        update_and_optionally_resample=update_and_optionally_resample,
-                        uniform_weight_metrics=uniform_weight_metrics,
-                        attempt=attempt,
-                    )
-                    last_result = step_result
-                    if not bool(step_result.get("skipped_invalid_update", False)):
-                        if attempt > 1:
-                            step_result["recovered_first_update_attempts"] = attempt
-                        break
-                step_result = last_result if last_result is not None else {
-                    "ess": float(particle_filter.effective_sample_size()),
-                    "resampled": False,
-                    "resample_count": particle_filter._resample_count,
-                    "uniform_weight_l1_distance": 0.0,
-                    "uniform_weight_max_deviation": 0.0,
-                    "collapsed_to_uniform": False,
-                    "skipped_invalid_update": True,
-                    "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
-                    "bootstrap_attempts": 1,
-                    "uninformative_update": False,
-                }
+                step_result = particle_filter.bootstrap_first_update(qpos, noisy_ft_reading, max_attempts=3)
                 stage_state["bootstrap_applied"] = True
             else:
-                step_result = phase_4_warp_step_logic(
-                    particle_filter,
-                    qpos,
-                    noisy_ft_reading,
-                    update_and_optionally_resample=update_and_optionally_resample,
-                    uniform_weight_metrics=uniform_weight_metrics,
-                )
+                step_result = particle_filter.step(qpos, noisy_ft_reading)
         else:
             particle_filter.predict(qpos)
             particle_filter.update(noisy_ft_reading)
@@ -424,6 +348,12 @@ def phase_4_step_logic(
                 "uniform_weight_max_deviation": 0.0,
                 "collapsed_to_uniform": False,
             }
+    metrics.validate_particle_invariants(
+        particle_filter,
+        step=step_index,
+        step_result=step_result,
+    )
+    step_result["before_update"] = before_update
     return step_result
 
 
@@ -444,8 +374,6 @@ def run_phase_4_lift(
     true_mass: float,
     logger: Any,
     log_data: dict[str, Any],
-    uniform_weight_metrics: Any,
-    update_and_optionally_resample: Any,
 ) -> metrics.LiftPhaseResult:
     phase = "phase_4_lift"
     stage_state = metrics.init_stage_state(phase)
@@ -487,8 +415,6 @@ def run_phase_4_lift(
                     real_robot=real_robot,
                     viewer=viewer,
                     qpos=qpos,
-                    uniform_weight_metrics=uniform_weight_metrics,
-                    update_and_optionally_resample=update_and_optionally_resample,
                 )
                 step_wall_duration = time.perf_counter() - step_wall_start
                 step_cpu_duration = time.process_time() - step_cpu_start
@@ -519,36 +445,70 @@ def run_phase_4_lift(
 
 def generate_particle_filter_plot(
     *,
+    run_id: str,
     history_estimates: list[float],
     true_mass: float,
     env: Any,
     history_particles: list[np.ndarray] | None = None,
     num_particles: int | None = None,
+    history_ess: list[float] | None = None,
+    history_ci50_low: list[float] | None = None,
+    history_ci50_high: list[float] | None = None,
+    history_ci90_low: list[float] | None = None,
+    history_ci90_high: list[float] | None = None,
+    history_resampled: list[bool] | None = None,
 ) -> Path:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(10, 6))
+    fig, (ax_mass, ax_ess) = plt.subplots(
+        2,
+        1,
+        figsize=(11, 8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
     particle_count_label = num_particles if num_particles is not None else "unknown"
+    steps = list(range(len(history_estimates)))
     if history_particles is not None and num_particles is not None:
         num_steps = len(history_particles)
         for t in range(num_steps):
-            plt.scatter([t] * num_particles, history_particles[t], color="blue", alpha=0.05, s=15)
-    plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
-    plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-    plt.title(f"Particle Filter: Mass Estimation Evolution (N={particle_count_label})", fontsize=14, fontweight="bold")
-    plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    plt.ylabel("Estimated Mass (kg)", fontsize=12)
-    plt.ylim(env.min, env.max)
-    plt.legend(loc="upper right")
-    plt.grid(True, linestyle=":", alpha=0.7)
+            ax_mass.scatter([t] * num_particles, history_particles[t], color="steelblue", alpha=0.05, s=15)
+    if history_ci90_low is not None and history_ci90_high is not None and len(history_ci90_low) == len(history_estimates):
+        ax_mass.fill_between(steps, history_ci90_low, history_ci90_high, color="cornflowerblue", alpha=0.18, label="90% credible interval")
+    if history_ci50_low is not None and history_ci50_high is not None and len(history_ci50_low) == len(history_estimates):
+        ax_mass.fill_between(steps, history_ci50_low, history_ci50_high, color="royalblue", alpha=0.28, label="50% credible interval")
+    ax_mass.plot(steps, history_estimates, color="firebrick", linewidth=2.5, label="Filter estimate")
+    ax_mass.axhline(y=true_mass, color="darkgreen", linestyle="--", linewidth=2, label=f"True mass ({true_mass} kg)")
+    if history_resampled is not None:
+        resample_steps = [step for step, resampled in enumerate(history_resampled) if resampled]
+        if resample_steps:
+            ax_mass.vlines(resample_steps, env.min, env.max, colors="black", alpha=0.12, linewidth=1, label="Resample")
+    ax_mass.set_title(
+        f"Particle Filter: Mass Estimation Evolution (N={particle_count_label})\nRun ID: {run_id}",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax_mass.set_ylabel("Mass (kg)", fontsize=12)
+    ax_mass.set_ylim(env.min, env.max)
+    ax_mass.legend(loc="upper right")
+    ax_mass.grid(True, linestyle=":", alpha=0.7)
+    if history_ess is not None and len(history_ess) == len(history_estimates):
+        ax_ess.plot(steps, history_ess, color="darkorange", linewidth=2, label="ESS")
+        if num_particles is not None:
+            ax_ess.axhline(y=num_particles / 2.0, color="gray", linestyle="--", linewidth=1.5, label="Resample threshold")
+            ax_ess.set_ylim(0.0, max(float(num_particles), max(history_ess, default=0.0) * 1.05))
+        ax_ess.legend(loc="upper right")
+    ax_ess.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    ax_ess.set_ylabel("ESS", fontsize=12)
+    ax_ess.grid(True, linestyle=":", alpha=0.7)
     output_dir = Path("temp")
     output_dir.mkdir(exist_ok=True)
     output_path = output_dir / "particle_filter_evolution.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     return output_path
 
 
@@ -621,7 +581,8 @@ def run_simbay_mujoco_warp(
     backend: str,
     logger: Any,
     log_data: dict[str, object],
-) -> list[float]:
+) -> metrics.LiftPhaseResult:
+    particle_filter.set_contact_mode(simplified_contacts=True)
     phase_token = metrics.start_stage("phase_1_approach")
     logger.info({**log_data, "msg": "Started phase 1 (approach)."})
     try:
@@ -658,6 +619,8 @@ def run_simbay_mujoco_warp(
         metrics.finish_stage(phase_token)
         logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
 
+    particle_filter.set_contact_mode(simplified_contacts=False)
+    particle_filter.warmup_runtime([len(traj3)])
     phase_token = metrics.start_stage("phase_3_grip")
     logger.info({**log_data, "msg": "Started phase 3 (grip)."})
     try:
@@ -690,10 +653,8 @@ def run_simbay_mujoco_warp(
         true_mass=true_mass,
         logger=logger,
         log_data=log_data,
-        uniform_weight_metrics=_uniform_weight_metrics,
-        update_and_optionally_resample=_update_and_optionally_resample,
     )
-    return lift_result.history_estimates
+    return lift_result
 
 
 @trace_call("simbay.main", span_name="main")
@@ -747,6 +708,13 @@ def main(run_id: str = RUN_ID) -> None:
     traj3 = planning_result["traj3"]
     traj4 = planning_result["traj4"]
 
+    history_ess: list[float] | None = None
+    history_ci50_low: list[float] | None = None
+    history_ci50_high: list[float] | None = None
+    history_ci90_low: list[float] | None = None
+    history_ci90_high: list[float] | None = None
+    history_resampled: list[bool] | None = None
+
     if backend == "cpu":
         history_estimates, history_particles = run_simbay_mujoco_original(
             traj1=traj1,
@@ -760,7 +728,7 @@ def main(run_id: str = RUN_ID) -> None:
             log_data=log_data,
         )
     else:
-        history_estimates = run_simbay_mujoco_warp(
+        lift_result = run_simbay_mujoco_warp(
             tracer=tracer,
             run_id=run_id,
             started_at=started_at,
@@ -779,7 +747,14 @@ def main(run_id: str = RUN_ID) -> None:
             logger=logger,
             log_data=log_data,
         )
-        history_particles = None
+        history_estimates = lift_result.history_estimates
+        history_particles = lift_result.history_particles
+        history_ess = lift_result.history_ess
+        history_ci50_low = lift_result.history_ci50_low
+        history_ci50_high = lift_result.history_ci50_high
+        history_ci90_low = lift_result.history_ci90_low
+        history_ci90_high = lift_result.history_ci90_high
+        history_resampled = lift_result.history_resampled
 
     logger.info({**log_data, "msg": "Finished the particle filter run.", "backend": backend})
     final_prediction = float(particle_filter.estimate())
@@ -792,11 +767,18 @@ def main(run_id: str = RUN_ID) -> None:
 
     logger.info({**log_data, "msg": "Started generating the output plots."})
     output_path = generate_particle_filter_plot(
+        run_id=run_id,
         history_estimates=history_estimates,
         true_mass=true_mass,
         env=env,
         history_particles=history_particles,
-        num_particles=num_particles if history_particles is not None else None,
+        num_particles=num_particles,
+        history_ess=history_ess,
+        history_ci50_low=history_ci50_low,
+        history_ci50_high=history_ci50_high,
+        history_ci90_low=history_ci90_low,
+        history_ci90_high=history_ci90_high,
+        history_resampled=history_resampled,
     )
     logger.info({**log_data, "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 

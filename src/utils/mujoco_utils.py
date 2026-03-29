@@ -2,7 +2,6 @@
 # 1. IMPORTS
 # ==========================================
 import logging
-import os
 from pathlib import Path
 
 import mujoco
@@ -124,10 +123,8 @@ def prepare_model_for_warp(model) -> None:
     model.geom_margin[:] = 0.0
     model.geom_gap[:] = 0.0
 
-    # Preserve the previous batched-backend collision model: only the floor,
-    # fingertip-pad boxes, and the object participate in contact. Mesh and
-    # sphere geoms are disabled to keep Warp aligned with the prior runtime
-    # behavior and force signal characteristics.
+    # Keep the batched Warp path focused on the object, floor, and fingertip-pad
+    # box geoms. This avoids paying for full robot mesh contact in approach/descent.
     for geom_index in range(model.ngeom):
         geom_type = model.geom_type[geom_index]
         if geom_type in (mujoco.mjtGeom.mjGEOM_MESH, mujoco.mjtGeom.mjGEOM_SPHERE):
@@ -146,9 +143,7 @@ def initialize_mujoco_env(object_properties=DEFAULT_OBJECT_PROPS):
             "mujoco.object_type": str(object_properties["type"]),
         }
     )
-    xml_path = os.path.join("models", "scene.xml")
-
-    model, data = load_mujoco_model(xml_path)
+    model, data = load_mujoco_model(Path("models") / "scene.xml")
     modify_object_properties(model, data, "object", object_properties)
 
     return MujocoRobot(model, data)

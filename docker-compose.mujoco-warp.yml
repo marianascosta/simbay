@@ -1,13 +1,13 @@
 services:
-  simbay-mujoco-warp:
+  simbay:
     build:
       context: .
       dockerfile: Dockerfile
       target: cuda
-    container_name: simbay-mujoco-warp
+    container_name: simbay
     environment:
       SIMBAY_ENVIRONMENT: "docker-dev"
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-500}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
       SIMBAY_BACKEND: "mujoco-warp"
       SIMBAY_HEADLESS: "1"
       SIMBAY_DOCKER_TARGET: "cuda"

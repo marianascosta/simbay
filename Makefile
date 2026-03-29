@@ -20,4 +20,4 @@ docker-mujoco:
 	docker compose -f docker-compose.mujoco.yml up --build simbay-mujoco
 
 docker-mujoco-warp:
-	docker compose -f docker-compose.mujoco-warp.yml up --build simbay-mujoco-warp
+	docker compose -f docker-compose.mujoco-warp.yml up --build simbay
