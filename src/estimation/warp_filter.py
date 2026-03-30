@@ -10,23 +10,17 @@ from .warp_particle_filter import FrankaWarpEnv
 
 
 def _normalize_weights(weights: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
-    tiny = np.finfo(weights.dtype).tiny
-    safe_weights = np.maximum(weights, tiny)
-    safe_likelihoods = np.nan_to_num(
-        likelihoods,
-        nan=tiny,
-        posinf=1.0,
-        neginf=tiny,
+    updated = weights * likelihoods
+    updated = np.nan_to_num(
+        updated,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
     )
-    safe_likelihoods = np.maximum(safe_likelihoods, tiny)
-
-    log_updated = np.log(safe_weights) + np.log(safe_likelihoods)
-    finite_mask = np.isfinite(log_updated)
-    if not np.any(finite_mask):
+    updated += 1.0e-300
+    total = float(np.sum(updated))
+    if not np.isfinite(total) or total <= 0.0:
         return np.full_like(weights, 1.0 / weights.shape[0])
-    log_updated = log_updated - np.max(log_updated[finite_mask])
-    updated = np.exp(log_updated)
-    total = max(float(np.sum(updated)), tiny)
     return updated / total
 
 
@@ -102,7 +96,7 @@ class WarpParticleFilter:
         self.N = int(self.particles.shape[0])
 
         self.weights = np.full((self.N,), 1.0 / self.N, dtype=np.float64)
-        self._rng = np.random.default_rng(7)
+        self._rng = np.random.default_rng()
         self._effective_sample_size = float(self.N)
         self._step_index = 0
         self._resample_count = 0
@@ -163,12 +157,17 @@ class WarpParticleFilter:
 
     @staticmethod
     def _measurement_is_informative(diagnostics: dict[str, float]) -> bool:
+        likelihood_std = float(np.nan_to_num(diagnostics.get("likelihood_std", 0.0), nan=0.0, posinf=0.0, neginf=0.0))
+        likelihood_range = float(np.nan_to_num(diagnostics.get("likelihood_range", 0.0), nan=0.0, posinf=0.0, neginf=0.0))
+        sim_force_std_x = float(np.nan_to_num(diagnostics.get("sim_force_axis_std_x", 0.0), nan=0.0, posinf=0.0, neginf=0.0))
+        sim_force_std_y = float(np.nan_to_num(diagnostics.get("sim_force_axis_std_y", 0.0), nan=0.0, posinf=0.0, neginf=0.0))
+        sim_force_std_z = float(np.nan_to_num(diagnostics.get("sim_force_axis_std_z", 0.0), nan=0.0, posinf=0.0, neginf=0.0))
         return (
-            diagnostics.get("likelihood_std", 0.0) > 1e-3
-            or diagnostics.get("likelihood_range", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_x", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_y", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_z", 0.0) > 1e-3
+            likelihood_std > 1e-3
+            or likelihood_range > 1e-3
+            or sim_force_std_x > 1e-3
+            or sim_force_std_y > 1e-3
+            or sim_force_std_z > 1e-3
         )
 
     def update(self, observation) -> None:
@@ -219,11 +218,16 @@ class WarpParticleFilter:
                 self.env.resample_states(indexes)
             self._resample_count += 1
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
-        if collapsed_to_uniform and (
-            diagnostics.get("invalid_sensor_events", 0.0) > 0.0
-            or diagnostics.get("invalid_state_events", 0.0) > 0.0
-            or diagnostics.get("likelihood_finite_ratio", 1.0) < 1.0
-        ):
+        current_invalid_measurement = (
+            diagnostics.get("sim_force_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("diff_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("likelihood_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("qpos_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("qvel_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("sensordata_nonfinite_count", 0.0) > 0.0
+            or diagnostics.get("ctrl_nonfinite_count", 0.0) > 0.0
+        )
+        if collapsed_to_uniform and (not did_resample) and current_invalid_measurement:
             self.logger.warning(
                 {
                     **self.logging_data,

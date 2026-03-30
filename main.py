@@ -27,7 +27,6 @@ from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
 from src.utils.settings import OBSERVABILITY_ENABLED
 from src.utils.settings import RUN_ID
-from src.utils.settings import WARP_MEASUREMENT_CONTACT_MODE
 from src.utils.tracing import get_tracer
 from src.utils.tracing import trace_call
 from src.utils.tracing import force_flush_tracing
@@ -159,9 +158,6 @@ def ik_planning(
             "ik.lift_height": float(lift_pos[2]),
         }
     )
-    if backend == "mujoco-warp":
-        particle_filter.set_contact_mode(simplified_contacts=True)
-        logger.info({**log_data, "msg": f"Configured replay mode for the {backend} backend.", "backend": backend})
     return {
         "traj1": traj1,
         "traj2": traj2,
@@ -279,13 +275,8 @@ def pf_replay(
             "msg": started_msg,
         }
     )
-    if backend == "mujoco-warp":
-        # Keep per-particle world evolution through phases 1-3 so phase-4
-        # likelihoods start from physically consistent particle states.
-        particle_filter.predict_trajectory(trajectory)
-    else:
-        for qpos in trajectory:
-            particle_filter.predict(qpos)
+    for qpos in trajectory:
+        particle_filter.predict(qpos)
     duration = metrics.finish_substage(stage_token)
     LOGGER.info(
         {
@@ -614,7 +605,6 @@ def run_simbay_mujoco_warp(
     logger: Any,
     log_data: dict[str, object],
 ) -> metrics.LiftPhaseResult:
-    particle_filter.set_contact_mode(simplified_contacts=True)
     phase_token = metrics.start_stage("phase_1_approach")
     logger.info({**log_data, "msg": "Started phase 1 (approach)."})
     try:
@@ -651,9 +641,6 @@ def run_simbay_mujoco_warp(
         metrics.finish_stage(phase_token)
         logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
 
-    use_simplified_measurement_contacts = WARP_MEASUREMENT_CONTACT_MODE != "full"
-    particle_filter.set_contact_mode(simplified_contacts=use_simplified_measurement_contacts)
-    particle_filter.warmup_runtime([len(traj3)])
     phase_token = metrics.start_stage("phase_3_grip")
     logger.info({**log_data, "msg": "Started phase 3 (grip)."})
     try:
