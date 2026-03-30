@@ -2057,8 +2057,11 @@ def phase_4_step_observability(
                 "dist_sq_min": float(diagnostics.get("dist_sq_min", 0.0)),
                 "dist_sq_max": float(diagnostics.get("dist_sq_max", 0.0)),
                 "dist_sq_mean": float(diagnostics.get("dist_sq_mean", 0.0)),
+                "dist_sq_std": float(diagnostics.get("dist_sq_std", 0.0)),
                 "obs_norm": float(diagnostics.get("obs_norm", 0.0)),
                 "sim_force_norm_mean": float(diagnostics.get("sim_force_norm_mean", 0.0)),
+                "sim_force_norm_std": float(diagnostics.get("sim_force_norm_std", 0.0)),
+                "logw_std": float(step_result.get("logw_std", 0.0)),
                 "active_contact_particle_ratio": float(diagnostics.get("active_contact_particle_ratio", 0.0)),
                 "repaired_world_count": int(diagnostics.get("repaired_world_count", 0.0)),
             }

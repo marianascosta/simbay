@@ -460,6 +460,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             "dist_sq_min": float(np.min(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
             "dist_sq_max": float(np.max(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
             "dist_sq_mean": float(np.mean(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+            "dist_sq_std": float(np.std(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
             "diff_norm_min": float(np.min(finite_diff_norms)) if finite_diff_norms.size else float("nan"),
             "diff_norm_max": float(np.max(finite_diff_norms)) if finite_diff_norms.size else float("nan"),
             "diff_norm_mean": float(np.mean(finite_diff_norms)) if finite_diff_norms.size else float("nan"),

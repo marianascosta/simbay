@@ -213,6 +213,12 @@ class WarpParticleFilter:
                 self.env.resample_states(indexes)
             self._resample_count += 1
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
+        finite_weights = self.weights[np.isfinite(self.weights)]
+        if finite_weights.size:
+            clipped_weights = np.clip(finite_weights, np.finfo(np.float64).tiny, 1.0)
+            logw_std = float(np.std(np.log(clipped_weights)))
+        else:
+            logw_std = 0.0
         current_invalid_measurement = (
             diagnostics.get("sim_force_nonfinite_count", 0.0) > 0.0
             or diagnostics.get("diff_nonfinite_count", 0.0) > 0.0
@@ -239,6 +245,7 @@ class WarpParticleFilter:
             "uniform_weight_l1_distance": uniform_weight_l1,
             "uniform_weight_max_deviation": uniform_weight_max_dev,
             "collapsed_to_uniform": collapsed_to_uniform,
+            "logw_std": logw_std,
             "diagnostics": diagnostics,
             "skipped_invalid_update": False,
             "skipped_invalid_updates": self._skipped_invalid_updates,
