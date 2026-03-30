@@ -325,10 +325,13 @@ def phase_4_step_logic(
     with annotate("phase4_particle_filter_step"):
         if backend == "mujoco-warp":
             if not stage_state["bootstrap_applied"]:
-                step_result = particle_filter.bootstrap_first_update(qpos, noisy_ft_reading, max_attempts=3)
+                step_result = particle_filter.bootstrap_first_update_from_synced_state(
+                    noisy_ft_reading,
+                    max_attempts=3,
+                )
                 stage_state["bootstrap_applied"] = True
             else:
-                step_result = particle_filter.step(qpos, noisy_ft_reading)
+                step_result = particle_filter.step_from_synced_state(noisy_ft_reading)
         else:
             particle_filter.predict(qpos)
             particle_filter.update(noisy_ft_reading)

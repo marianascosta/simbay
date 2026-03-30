@@ -189,11 +189,7 @@ class WarpParticleFilter:
         self._effective_sample_size = float(self.N)
         self._resample_count += 1
 
-    def step(self, control_input, observation) -> dict[str, float | bool]:
-        with annotate("warp_pf_propagate"):
-            self.particles = self.env.propagate(self.particles, control_input)
-        with annotate("warp_pf_likelihood"):
-            likelihoods = self.env.compute_likelihoods(self.particles, observation)
+    def _step_from_likelihoods(self, likelihoods: np.ndarray) -> dict[str, float | bool]:
         diagnostics = self.env.last_measurement_diagnostics()
         measurement_informative = self._measurement_is_informative(diagnostics)
         allow_resample = self._step_index >= self._resample_warmup_steps
@@ -251,6 +247,22 @@ class WarpParticleFilter:
             "resample_warmup_active": not allow_resample,
         }
 
+    def step(self, control_input, observation) -> dict[str, float | bool]:
+        with annotate("warp_pf_propagate"):
+            self.particles = self.env.propagate(self.particles, control_input)
+        with annotate("warp_pf_likelihood"):
+            likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        return self._step_from_likelihoods(likelihoods)
+
+    def step_from_synced_state(self, observation) -> dict[str, float | bool]:
+        # Keep mass process noise, but avoid advancing dynamics again after we
+        # have synchronized to the current real-robot state.
+        with annotate("warp_pf_propagate_masses_only"):
+            self.particles = self.env.propagate_masses_only(self.particles, 1)
+        with annotate("warp_pf_likelihood"):
+            likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        return self._step_from_likelihoods(likelihoods)
+
     def bootstrap_first_update(
         self,
         control_input,
@@ -260,6 +272,17 @@ class WarpParticleFilter:
     ) -> dict[str, float | bool]:
         del max_attempts
         result = self.step(control_input, observation)
+        result["bootstrap_attempts"] = 1
+        return result
+
+    def bootstrap_first_update_from_synced_state(
+        self,
+        observation,
+        *,
+        max_attempts: int = 3,
+    ) -> dict[str, float | bool]:
+        del max_attempts
+        result = self.step_from_synced_state(observation)
         result["bootstrap_attempts"] = 1
         return result
 
