@@ -12,7 +12,6 @@ import numpy as np
 from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import WARP_LIKELIHOOD_DEBUG_ENABLED
 from src.utils.settings import WARP_LIKELIHOOD_SPACE
-from src.utils.settings import WARP_MEASUREMENT_VARIANCE
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
 from src.utils.mujoco_utils import prepare_model_for_warp
@@ -60,7 +59,6 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._first_invalid_state_step: int | None = None
         self._likelihood_space = WARP_LIKELIHOOD_SPACE
         self._measurement_dim = 6 if self._likelihood_space == "wrench" else 3
-        self._measurement_variance = max(float(WARP_MEASUREMENT_VARIANCE), 1e-6)
 
     @property
     def num_particles(self) -> int:
@@ -73,6 +71,11 @@ class FrankaWarpEnv(ParticleEnvironment):
     def initialize_particles(self) -> np.ndarray:
         masses = self._rng.uniform(self.min, self.max, size=self._num_particles).astype(np.float32)
         self._batch = self._create_batch(masses, simplified_contacts=self._simplified_contacts_enabled)
+        if self._mj_model is None or self._mj_data is None:
+            raise RuntimeError("MuJoCo model/data must be initialized before Warp particle warmup.")
+        clean_qpos = self._require_finite_array(name="warmup_clean_qpos", values=self._mj_data.qpos).copy()
+        clean_qvel = self._require_finite_array(name="warmup_clean_qvel", values=self._mj_data.qvel).copy()
+        clean_ctrl = self._require_finite_array(name="warmup_clean_ctrl", values=self._mj_data.ctrl).copy()
         self.logger.info(
             {
                 **self.logging_data,
@@ -81,29 +84,41 @@ class FrankaWarpEnv(ParticleEnvironment):
             }
         )
         self._batch.warmup()
-        # Warmup compiles kernels; reset state so runtime starts from the same
-        # initial world state as the CPU path.
-        if self._mj_data is not None:
-            self._batch.set_state_all_worlds(
-                qpos=np.asarray(self._mj_data.qpos, dtype=np.float32),
-                qvel=np.asarray(self._mj_data.qvel, dtype=np.float32),
-                ctrl=np.asarray(self._mj_data.ctrl, dtype=np.float32),
-            )
-            self._batch.set_masses(masses)
+        # Warmup is compile-only. Discard warmup state and restore a clean,
+        # finite MuJoCo state before real particle updates begin.
+        mujoco.mj_resetData(self._mj_model, self._mj_data)
+        self._mj_data.qpos[:] = clean_qpos
+        self._mj_data.qvel[:] = clean_qvel
+        self._mj_data.ctrl[:] = clean_ctrl
+        if hasattr(self._mj_data, "act"):
+            self._mj_data.act[:] = 0.0
+        if hasattr(self._mj_data, "qacc_warmstart"):
+            self._mj_data.qacc_warmstart[:] = 0.0
+        self._mj_data.sensordata[:] = 0.0
+        self._require_finite_array(name="post_reset_qpos", values=self._mj_data.qpos)
+        self._require_finite_array(name="post_reset_qvel", values=self._mj_data.qvel)
+        self._require_finite_array(name="post_reset_ctrl", values=self._mj_data.ctrl)
+        mujoco.mj_forward(self._mj_model, self._mj_data)
+        self._require_finite_array(name="post_forward_qpos", values=self._mj_data.qpos)
+        self._require_finite_array(name="post_forward_qvel", values=self._mj_data.qvel)
+        self._require_finite_array(name="post_forward_ctrl", values=self._mj_data.ctrl)
+        self._masses = masses.copy()
+        self.sync_world_state(
+            qpos=np.asarray(self._mj_data.qpos, dtype=np.float32),
+            qvel=np.asarray(self._mj_data.qvel, dtype=np.float32),
+            ctrl=np.asarray(self._mj_data.ctrl, dtype=np.float32),
+        )
+        post_sync_counts = self._batch.state_nonfinite_counts() if self._batch is not None else {}
+        if post_sync_counts and self._has_nonfinite_state(post_sync_counts):
+            raise RuntimeError(f"Non-finite Warp state detected after warmup reset: {post_sync_counts}")
         self.logger.info(
             {
                 **self.logging_data,
                 "event": "warp_runtime_warmup_done",
-                "msg": "Finished warming up the Warp runtime.",
+                "msg": "Finished warming up the Warp runtime and restored a clean state.",
             }
         )
-        # Reset the underlying mjData so no NaNs survive the warmup step.
-        if self._mj_model is not None and self._mj_data is not None:
-            mujoco.mj_resetData(self._mj_model, self._mj_data)
-            self._mj_data.sensordata[:] = 0.0
-            mujoco.mj_forward(self._mj_model, self._mj_data)
         self._rng = np.random.default_rng()
-        self._masses = masses.copy()
         self._step_count = 0
         return masses
 
@@ -153,6 +168,12 @@ class FrankaWarpEnv(ParticleEnvironment):
     @staticmethod
     def _has_nonfinite_state(counts: dict[str, int]) -> bool:
         return any(value > 0 for value in counts.values())
+
+    def _require_finite_array(self, *, name: str, values: np.ndarray) -> np.ndarray:
+        array = np.asarray(values, dtype=np.float32)
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"Encountered non-finite values in {name}.")
+        return array
 
     def set_contact_mode(self, *, simplified_contacts: bool) -> None:
         if self._simplified_contacts_enabled == simplified_contacts:
@@ -263,8 +284,11 @@ class FrankaWarpEnv(ParticleEnvironment):
     def sync_world_state(self, *, qpos: np.ndarray, qvel: np.ndarray, ctrl: np.ndarray) -> None:
         if self._batch is None:
             raise RuntimeError("Warp batch must be initialized before state sync.")
+        qpos_np = self._require_finite_array(name="sync_qpos", values=qpos)
+        qvel_np = self._require_finite_array(name="sync_qvel", values=qvel)
+        ctrl_np = self._require_finite_array(name="sync_ctrl", values=ctrl)
         self._batch.set_masses(self._masses)
-        self._batch.set_state_all_worlds(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        self._batch.set_state_all_worlds(qpos=qpos_np, qvel=qvel_np, ctrl=ctrl_np)
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         del particles
@@ -287,7 +311,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         sim_observation64 = np.asarray(sim_observation, dtype=np.float64)
         diff = observation_used - sim_observation64
         dist_sq = np.sum(diff**2, axis=1)
-        R = self._measurement_variance
+        R = 1.0
         sim_force_finite = np.isfinite(sim_observation64)
         diff_finite = np.isfinite(diff)
         valid_force_particle = np.all(sim_force_finite, axis=1)
@@ -295,6 +319,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         valid_dist_particle = np.isfinite(dist_sq)
         invalid_world_mask = self._batch.invalid_world_mask() if self._batch is not None else np.zeros((self._num_particles,), dtype=bool)
         valid_likelihood_particle = valid_force_particle & valid_diff_particle & valid_dist_particle
+        invalid_likelihood_particle_count = int(np.count_nonzero(~valid_likelihood_particle))
         likelihoods = np.full((self._num_particles,), float("nan"), dtype=np.float64)
         if np.any(valid_likelihood_particle):
             likelihoods[valid_likelihood_particle] = np.exp(-0.5 * dist_sq[valid_likelihood_particle] / R)
@@ -413,6 +438,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             "valid_likelihood_particle_ratio": (
                 float(np.mean(valid_likelihood_particle)) if valid_likelihood_particle.size else 0.0
             ),
+            "invalid_likelihood_particle_count": float(invalid_likelihood_particle_count),
             "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
             "contact_count_mean": float(np.mean(contact_counts)) if contact_counts.size else 0.0,
             "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,

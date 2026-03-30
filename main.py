@@ -303,6 +303,9 @@ def phase_4_step_logic(
         viewer.sync()
     stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
 
+    if backend == "mujoco-warp":
+        particle_filter.sync_with_robot_state(real_robot)
+
     measurements = np.asarray(real_robot.get_sensor_reads(), dtype=np.float32).reshape(-1)
     if backend == "mujoco-warp":
         observation_dim = int(getattr(getattr(particle_filter, "env", None), "measurement_dim", 3))
@@ -382,6 +385,8 @@ def run_phase_4_lift(
                 "simbay.phase_trajectory_step_count": len(trajectory),
             }
         )
+        if backend == "mujoco-warp":
+            particle_filter.sync_with_robot_state(real_robot)
         for step, qpos in enumerate(trajectory):
             metrics.set_stage_duration(phase, time.perf_counter() - phase_started_at)
             with tracing_span(tracer, "step"):

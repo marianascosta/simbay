@@ -30,7 +30,6 @@ _WARP_MEMORY_FIELDS = (
 _STATE_TRANSFER_FIELDS = (
     "qpos",
     "qvel",
-    "act",
     "ctrl",
 )
 _NONFINITE_CHECK_FIELDS = (

@@ -17,7 +17,6 @@ def _normalize_weights(weights: np.ndarray, likelihoods: np.ndarray) -> np.ndarr
         posinf=0.0,
         neginf=0.0,
     )
-    updated += 1.0e-300
     total = float(np.sum(updated))
     if not np.isfinite(total) or total <= 0.0:
         return np.full_like(weights, 1.0 / weights.shape[0])
