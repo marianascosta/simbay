@@ -902,8 +902,16 @@ class _MetricsState:
     def update_process_rss(self, stage: str) -> None:
         self.process_rss_bytes.labels(*self._stage(stage)).set(get_process_memory_bytes())
 
-    def update_filter_state(self, ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
-        self.effective_sample_size.labels(*self._common()).set(ess)
+    def update_filter_state(
+        self,
+        effective_sample_size: float,
+        estimate: float,
+        wall_seconds: float,
+        cpu_seconds: float,
+        cpu_equivalent_cores: float,
+        particles: int,
+    ) -> None:
+        self.effective_sample_size.labels(*self._common()).set(effective_sample_size)
         self.mass_estimate_kg.labels(*self._common()).set(estimate)
         self.phase4_step_wall_seconds.labels(*self._common()).set(wall_seconds)
         self.phase4_step_cpu_seconds.labels(*self._common()).set(cpu_seconds)
@@ -1212,8 +1220,22 @@ def update_warp_memory(*, stage: str, bytes_in_use: int, peak_bytes_in_use: int,
     )
 
 
-def update_filter_state(ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
-    _require_state().update_filter_state(ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles)
+def update_filter_state(
+    effective_sample_size: float,
+    estimate: float,
+    wall_seconds: float,
+    cpu_seconds: float,
+    cpu_equivalent_cores: float,
+    particles: int,
+) -> None:
+    _require_state().update_filter_state(
+        effective_sample_size,
+        estimate,
+        wall_seconds,
+        cpu_seconds,
+        cpu_equivalent_cores,
+        particles,
+    )
 
 
 def update_weight_health(*, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
@@ -1388,7 +1410,7 @@ def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> N
 class LiftPhaseResult:
     history_estimates: list[float]
     history_particles: list[np.ndarray]
-    history_ess: list[float]
+    history_effective_sample_size: list[float]
     history_ci50_low: list[float]
     history_ci50_high: list[float]
     history_ci90_low: list[float]
@@ -1437,7 +1459,7 @@ def summarize_particle_state(particle_filter: Any, *, topk: int | None = None) -
         return {
             "count": 0,
             "estimate": 0.0,
-            "ess": 0.0,
+            "effective_sample_size": 0.0,
             "weight_sum": 0.0,
             "all_weights_finite": True,
             "all_particles_finite": True,
@@ -1466,7 +1488,7 @@ def summarize_particle_state(particle_filter: Any, *, topk: int | None = None) -
     return {
         "count": int(particles.size),
         "estimate": estimate,
-        "ess": float(1.0 / np.sum(np.square(weights))),
+        "effective_sample_size": float(1.0 / np.sum(np.square(weights))),
         "weight_sum": float(np.sum(weights)),
         "all_weights_finite": bool(np.all(np.isfinite(weights))),
         "all_particles_finite": bool(np.all(np.isfinite(particles))),
@@ -1538,7 +1560,9 @@ def maybe_record_particle_audit(
         "after_update": after_update,
         "delta": {
             "estimate_shift": float(after_update["estimate"] - before_update["estimate"]),
-            "ess_shift": float(after_update["ess"] - before_update["ess"]),
+            "effective_sample_size_shift": float(
+                after_update["effective_sample_size"] - before_update["effective_sample_size"]
+            ),
             "ci90_width_shift": float(
                 (after_update["ci90_high"] - after_update["ci90_low"])
                 - (before_update["ci90_high"] - before_update["ci90_low"])
@@ -1578,16 +1602,20 @@ def validate_particle_invariants(
         particle_max = float(np.max(particles))
         if not (particle_min - 1e-6 <= estimate <= particle_max + 1e-6):
             raise AssertionError(f"Particle estimate {estimate:.6f} escaped particle bounds at step {step}.")
-    ess = float(particle_filter.effective_sample_size())
-    if ess < 1.0 - 1e-6 or ess > float(particle_filter.N) + 1e-6:
-        raise AssertionError(f"ESS {ess:.6f} is outside [1, N] at step {step}.")
+    effective_sample_size = float(particle_filter.effective_sample_size())
+    if effective_sample_size < 1.0 - 1e-6 or effective_sample_size > float(particle_filter.N) + 1e-6:
+        raise AssertionError(
+            f"Effective Sample Size {effective_sample_size:.6f} is outside [1, N] at step {step}."
+        )
     if bool(step_result.get("resampled", False)) and not math.isclose(
-        ess,
+        effective_sample_size,
         float(particle_filter.N),
         rel_tol=1e-6,
         abs_tol=1e-6,
     ):
-        raise AssertionError(f"ESS {ess:.6f} did not reset after resampling at step {step}.")
+        raise AssertionError(
+            f"Effective Sample Size {effective_sample_size:.6f} did not reset after resampling at step {step}."
+        )
 
 
 def init_stage_state(stage_name: str) -> dict[str, Any] | None:
@@ -1596,7 +1624,7 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
     return {
         "history_estimates": [],
         "history_particles": [],
-        "history_ess": [],
+        "history_effective_sample_size": [],
         "history_ci50_low": [],
         "history_ci50_high": [],
         "history_ci90_low": [],
@@ -1751,8 +1779,7 @@ def update_phase_4_state(
     if hasattr(particle_filter, "particles"):
         latest_particles_snapshot = np.asarray(particle_filter.particles)
         state["latest_particles_snapshot"] = latest_particles_snapshot
-        if PARTICLE_HISTORY_ENABLED:
-            state["history_particles"].append(latest_particles_snapshot.copy())
+        state["history_particles"].append(latest_particles_snapshot.copy())
     if state["time_to_first_estimate_seconds"] < 0.0:
         state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
@@ -1808,7 +1835,7 @@ def update_phase_4_metrics(
     cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
     add_exemplar(run_id, step)
     update_filter_state(
-        ess=particle_filter.effective_sample_size(),
+        effective_sample_size=particle_filter.effective_sample_size(),
         estimate=current_estimate,
         wall_seconds=step_wall_duration,
         cpu_seconds=step_cpu_duration,
@@ -1840,7 +1867,7 @@ def update_phase_4_metrics(
         ci50_high = weighted_quantile(particle_values, weights_snapshot, 0.75)
         ci90_low = weighted_quantile(particle_values, weights_snapshot, 0.05)
         ci90_high = weighted_quantile(particle_values, weights_snapshot, 0.95)
-        state["history_ess"].append(float(particle_filter.effective_sample_size()))
+        state["history_effective_sample_size"].append(float(particle_filter.effective_sample_size()))
         state["history_ci50_low"].append(ci50_low)
         state["history_ci50_high"].append(ci50_high)
         state["history_ci90_low"].append(ci90_low)
@@ -1922,7 +1949,7 @@ def update_phase_4_metrics(
         )
     set_span_attributes(
         {
-            "simbay.ess": float(particle_filter.effective_sample_size()),
+            "simbay.effective_sample_size": float(particle_filter.effective_sample_size()),
             "simbay.resampled": bool(step_result.get("resampled", False)),
             "simbay.mass_estimate_kg": current_estimate,
             "simbay.step_wall_ms": step_wall_duration * 1000.0,
@@ -1996,6 +2023,46 @@ def phase_4_step_observability(
         step_wall_duration=step_wall_duration,
         step_cpu_duration=step_cpu_duration,
     )
+    current_estimate = float(particle_filter.estimate())
+    should_log_estimate_debug = (
+        step < 5
+        or step % 100 == 0
+        or bool(step_result.get("skipped_invalid_update", False))
+        or bool(step_result.get("uninformative_update", False))
+    )
+    if should_log_estimate_debug:
+        diagnostics = step_result.get("diagnostics", {})
+        particle_summary = summarize_particle_state(particle_filter, topk=3)
+        logger.info(
+            {
+                **log_data,
+                "event": "phase4_estimate_debug",
+                "msg": f"Phase 4 estimate debug at step {step}.",
+                "step": int(step),
+                "estimate_kg": current_estimate,
+                "true_mass_kg": float(true_mass),
+                "abs_error_kg": abs(current_estimate - float(true_mass)),
+                "effective_sample_size": float(
+                    step_result.get("effective_sample_size", particle_summary["effective_sample_size"])
+                ),
+                "resampled": bool(step_result.get("resampled", False)),
+                "skipped_invalid_update": bool(step_result.get("skipped_invalid_update", False)),
+                "uninformative_update": bool(step_result.get("uninformative_update", False)),
+                "particles_mean_kg": float(particle_summary["mean"]),
+                "particles_std_kg": float(particle_summary["std"]),
+                "ci90_low_kg": float(particle_summary["ci90_low"]),
+                "ci90_high_kg": float(particle_summary["ci90_high"]),
+                "likelihood_std": float(diagnostics.get("likelihood_std", 0.0)),
+                "likelihood_range": float(diagnostics.get("likelihood_range", 0.0)),
+                "dist_sq_min": float(diagnostics.get("dist_sq_min", 0.0)),
+                "dist_sq_max": float(diagnostics.get("dist_sq_max", 0.0)),
+                "dist_sq_mean": float(diagnostics.get("dist_sq_mean", 0.0)),
+                "obs_norm": float(diagnostics.get("obs_norm", 0.0)),
+                "sim_force_norm_mean": float(diagnostics.get("sim_force_norm_mean", 0.0)),
+                "active_contact_particle_ratio": float(diagnostics.get("active_contact_particle_ratio", 0.0)),
+                "repaired_world_count": int(diagnostics.get("repaired_world_count", 0.0)),
+            }
+        )
     maybe_record_particle_audit(
         stage_state,
         run_id=run_id,
@@ -2049,7 +2116,7 @@ def finalize_phase_4_metrics(
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
         history_particles=state["history_particles"],
-        history_ess=state["history_ess"],
+        history_effective_sample_size=state["history_effective_sample_size"],
         history_ci50_low=state["history_ci50_low"],
         history_ci50_high=state["history_ci50_high"],
         history_ci90_low=state["history_ci90_low"],

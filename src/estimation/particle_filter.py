@@ -90,14 +90,15 @@ class ParticleFilter:
     def resample(self):
         """
         Refocuses the particle cloud by eliminating low-weight particles and
-        cloning high-weight particles if the Effective Sample Size (ESS) drops
+        cloning high-weight particles if the effective sample size drops
         below a critical threshold.
         """
-        # Compute the Effective Sample Size (ESS) to measure how many particles
+        # Compute the effective sample size to measure how many particles
         # are actually contributing useful information.
         Neff = 1.0 / np.sum(self.weights**2)
 
-        # Only resample if ESS drops below 50%. This prevents degeneracy while
+        # Only resample if effective sample size drops below 50%.
+        # This prevents degeneracy while
         # saving computational overhead when the particle cloud is still healthy.
         if Neff < self.N / 2:
 
@@ -121,7 +122,7 @@ class ParticleFilter:
 
     def effective_sample_size(self) -> float:
         """
-        Return the current effective sample size (ESS).
+        Return the current effective sample size.
         """
         return float(1.0 / np.sum(self.weights**2))
 

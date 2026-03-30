@@ -150,12 +150,15 @@ class WarpBatch:
         )
 
     def step(self, control_input: np.ndarray, masses: np.ndarray) -> None:
-        np.copyto(self._body_mass_column_np, np.asarray(masses, dtype=np.float32))
-        _assign_warp_array(self._model.body_mass, self._body_mass_np)
+        self.set_masses(masses)
         self._ctrl_np[:] = np.asarray(control_input, dtype=np.float32)
         _assign_warp_array(self._data.ctrl, self._ctrl_np)
 
         mjw.step(self._model, self._data)
+
+    def set_masses(self, masses: np.ndarray) -> None:
+        np.copyto(self._body_mass_column_np, np.asarray(masses, dtype=np.float32))
+        _assign_warp_array(self._model.body_mass, self._body_mass_np)
 
     def rollout(self, control_inputs: np.ndarray, mass_trajectory: np.ndarray) -> None:
         steps = int(control_inputs.shape[0])
@@ -169,6 +172,37 @@ class WarpBatch:
             self._ctrl_np[:] = control_inputs_np[step_idx]
             _assign_warp_array(self._data.ctrl, self._ctrl_np)
             mjw.step(self._model, self._data)
+
+    def set_state_all_worlds(
+        self,
+        *,
+        qpos: np.ndarray,
+        qvel: np.ndarray,
+        ctrl: np.ndarray,
+    ) -> None:
+        qpos_np = np.asarray(qpos, dtype=np.float32).reshape(1, -1)
+        qvel_np = np.asarray(qvel, dtype=np.float32).reshape(1, -1)
+        ctrl_np = np.asarray(ctrl, dtype=np.float32).reshape(1, -1)
+
+        data_qpos = getattr(self._data, "qpos", None)
+        data_qvel = getattr(self._data, "qvel", None)
+        data_ctrl = getattr(self._data, "ctrl", None)
+        data_act = getattr(self._data, "act", None)
+        data_qacc_warmstart = getattr(self._data, "qacc_warmstart", None)
+
+        if data_qpos is not None:
+            _assign_warp_array(data_qpos, np.broadcast_to(qpos_np, (self._size, qpos_np.shape[1])).copy())
+        if data_qvel is not None:
+            _assign_warp_array(data_qvel, np.broadcast_to(qvel_np, (self._size, qvel_np.shape[1])).copy())
+        if data_ctrl is not None:
+            self._ctrl_np[:] = ctrl_np[:, : self._ctrl_dim]
+            _assign_warp_array(data_ctrl, self._ctrl_np)
+        if data_act is not None:
+            zeros_act = np.zeros_like(np.asarray(data_act.numpy()))
+            _assign_warp_array(data_act, zeros_act)
+        if data_qacc_warmstart is not None:
+            zeros_qacc = np.zeros_like(np.asarray(data_qacc_warmstart.numpy()))
+            _assign_warp_array(data_qacc_warmstart, zeros_qacc)
 
     def sensor_slice(self, start: int, width: int) -> np.ndarray:
         return self._data.sensordata.numpy()[:, start : start + width]

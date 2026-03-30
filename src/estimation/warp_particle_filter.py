@@ -11,6 +11,8 @@ import numpy as np
 
 from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import WARP_LIKELIHOOD_DEBUG_ENABLED
+from src.utils.settings import WARP_LIKELIHOOD_SPACE
+from src.utils.settings import WARP_MEASUREMENT_VARIANCE
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
 from src.utils.mujoco_utils import prepare_model_for_warp
@@ -22,8 +24,6 @@ from .warp_batch import WarpBatch
 
 class FrankaWarpEnv(ParticleEnvironment):
     """Batched MJWarp particle environment for mass estimation."""
-
-    _MEASUREMENT_VARIANCE = 1.0
 
     def __init__(
         self,
@@ -46,7 +46,8 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._nconmax = nconmax
         self._njmax = njmax
         self._batch: WarpBatch | None = None
-        self._simplified_contacts_enabled = False
+        # Default to simplified contacts so Warp can compile and run the replay path faster.
+        self._simplified_contacts_enabled = True
         self._rng = np.random.default_rng(42)
         self._masses = np.empty((0,), dtype=np.float32)
         self._step_count = 0
@@ -62,10 +63,17 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._recovery_masses = np.empty((0,), dtype=np.float32)
         self._recovery_step_count = 0
         self._recovery_rng_state = self._rng.bit_generator.state
+        self._likelihood_space = WARP_LIKELIHOOD_SPACE
+        self._measurement_dim = 6 if self._likelihood_space == "wrench" else 3
+        self._measurement_variance = max(float(WARP_MEASUREMENT_VARIANCE), 1e-6)
 
     @property
     def num_particles(self) -> int:
         return self._num_particles
+
+    @property
+    def measurement_dim(self) -> int:
+        return self._measurement_dim
 
     def initialize_particles(self) -> np.ndarray:
         masses = self._rng.uniform(self.min, self.max, size=self._num_particles).astype(np.float32)
@@ -250,6 +258,30 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         return self._masses.copy()
 
+    def propagate_masses_only(self, particles: np.ndarray, steps: int) -> np.ndarray:
+        step_count = max(int(steps), 0)
+        current = np.asarray(particles, dtype=np.float32)
+        if step_count <= 0:
+            return current.copy()
+        noise = self._rng.standard_normal((step_count, self._num_particles)).astype(np.float32) * self.std_dev
+        next_particles = np.clip(
+            current + np.sum(noise, axis=0),
+            self.min,
+            self.max,
+        ).astype(np.float32)
+        self._masses = next_particles.copy()
+        if self._batch is not None:
+            self._batch.set_masses(self._masses)
+        self._step_count += step_count
+        return next_particles
+
+    def sync_world_state(self, *, qpos: np.ndarray, qvel: np.ndarray, ctrl: np.ndarray) -> None:
+        if self._batch is None:
+            raise RuntimeError("Warp batch must be initialized before state sync.")
+        self._batch.set_masses(self._masses)
+        self._batch.set_state_all_worlds(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        self.capture_recovery_snapshot()
+
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         del particles
         if self._batch is None:
@@ -261,21 +293,40 @@ class FrankaWarpEnv(ParticleEnvironment):
                 repaired_worlds = self._batch.repair_invalid_worlds_from_snapshot()
         with annotate("warp_sensor_slice"):
             sim_forces = self._batch.sensor_slice(self.force_adr, 3)
-            sim_torques = self._batch.sensor_slice(self.torque_adr, 3)
-        sim_wrench = np.concatenate([sim_forces, sim_torques], axis=1)
-        observation_np = np.asarray(observation, dtype=np.float32)
-        diff = observation_np - sim_wrench
+            if self._measurement_dim == 6:
+                sim_torques = self._batch.sensor_slice(self.torque_adr, 3)
+                sim_observation = np.concatenate([sim_forces, sim_torques], axis=1)
+            else:
+                sim_torques = np.zeros_like(sim_forces)
+                sim_observation = sim_forces
+        observation_np = np.asarray(observation, dtype=np.float64).reshape(-1)
+        if observation_np.size < self._measurement_dim:
+            raise ValueError(
+                f"Expected at least {self._measurement_dim} observation values, got {observation_np.size}."
+            )
+        observation_used = observation_np[: self._measurement_dim]
+        sim_observation64 = np.asarray(sim_observation, dtype=np.float64)
+        diff = observation_used - sim_observation64
         dist_sq = np.sum(diff**2, axis=1)
-        log_likelihoods = -0.5 * dist_sq / self._MEASUREMENT_VARIANCE
-        finite_log_likelihoods = np.isfinite(log_likelihoods)
-        if np.any(finite_log_likelihoods):
-            log_likelihoods = log_likelihoods - np.max(log_likelihoods[finite_log_likelihoods])
-        likelihoods = np.exp(log_likelihoods)
-        sim_force_finite = np.isfinite(sim_wrench)
+        sim_force_finite = np.isfinite(sim_observation64)
         diff_finite = np.isfinite(diff)
+        valid_force_particle = np.all(sim_force_finite, axis=1)
+        valid_diff_particle = np.all(diff_finite, axis=1)
+        valid_dist_particle = np.isfinite(dist_sq)
+        invalid_world_mask = self._batch.invalid_world_mask() if self._batch is not None else np.zeros((self._num_particles,), dtype=bool)
+        valid_likelihood_particle = valid_force_particle & valid_diff_particle & valid_dist_particle
+
+        log_likelihoods = np.full((self._num_particles,), -np.inf, dtype=np.float64)
+        log_likelihoods[valid_likelihood_particle] = (
+            -0.5 * dist_sq[valid_likelihood_particle] / self._measurement_variance
+        )
+        if np.any(valid_likelihood_particle):
+            max_log_likelihood = np.max(log_likelihoods[valid_likelihood_particle])
+            log_likelihoods[valid_likelihood_particle] -= max_log_likelihood
+        likelihoods = np.zeros((self._num_particles,), dtype=np.float64)
+        likelihoods[valid_likelihood_particle] = np.exp(log_likelihoods[valid_likelihood_particle])
         likelihood_finite = np.isfinite(likelihoods)
-        valid_force_particle = np.isfinite(sim_wrench).all(axis=1)
-        sim_force_nonfinite_count = int(sim_wrench.size - np.count_nonzero(sim_force_finite))
+        sim_force_nonfinite_count = int(sim_observation.size - np.count_nonzero(sim_force_finite))
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
         likelihood_nonfinite_count = int(likelihoods.size - np.count_nonzero(likelihood_finite))
         sensor_invalid_now = sim_force_nonfinite_count > 0 or diff_nonfinite_count > 0 or likelihood_nonfinite_count > 0
@@ -306,13 +357,16 @@ class FrankaWarpEnv(ParticleEnvironment):
             state_invalid_transition = False
         contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
 
-        force_norms = np.linalg.norm(sim_forces, axis=1)
+        force_norms = np.linalg.norm(np.asarray(sim_forces, dtype=np.float64), axis=1)
         diff_norms = np.linalg.norm(diff, axis=1)
         sim_force_signal_particle_ratio = float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
         contact_metric_available = float(contact_counts.size > 0)
         contact_force_mismatch = float(
             contact_counts.size > 0 and float(np.max(contact_counts)) == 0.0 and sim_force_signal_particle_ratio > 0.0
         )
+        finite_dist_sq = dist_sq[np.isfinite(dist_sq)]
+        finite_diff_norms = diff_norms[np.isfinite(diff_norms)]
+        finite_force_norms = force_norms[np.isfinite(force_norms)]
         if sensor_invalid_transition:
             self.logger.warning(
                 {
@@ -345,29 +399,35 @@ class FrankaWarpEnv(ParticleEnvironment):
             )
 
         self._last_measurement_diagnostics = {
-            "obs_fx": float(observation_np[0]),
-            "obs_fy": float(observation_np[1]),
-            "obs_fz": float(observation_np[2]),
-            "obs_norm": float(np.linalg.norm(observation_np)),
-            "sim_force_norm_min": float(np.min(force_norms)),
-            "sim_force_norm_max": float(np.max(force_norms)),
-            "sim_force_norm_mean": float(np.mean(force_norms)),
+            "obs_fx": float(observation_used[0]) if observation_used.size > 0 else 0.0,
+            "obs_fy": float(observation_used[1]) if observation_used.size > 1 else 0.0,
+            "obs_fz": float(observation_used[2]) if observation_used.size > 2 else 0.0,
+            "obs_tx": float(observation_used[3]) if observation_used.size > 3 else 0.0,
+            "obs_ty": float(observation_used[4]) if observation_used.size > 4 else 0.0,
+            "obs_tz": float(observation_used[5]) if observation_used.size > 5 else 0.0,
+            "obs_norm": float(np.linalg.norm(observation_used)),
+            "sim_force_norm_min": float(np.min(finite_force_norms)) if finite_force_norms.size else float("nan"),
+            "sim_force_norm_max": float(np.max(finite_force_norms)) if finite_force_norms.size else float("nan"),
+            "sim_force_norm_mean": float(np.mean(finite_force_norms)) if finite_force_norms.size else float("nan"),
             "sim_force_axis_std_x": float(np.std(sim_forces[:, 0])),
             "sim_force_axis_std_y": float(np.std(sim_forces[:, 1])),
             "sim_force_axis_std_z": float(np.std(sim_forces[:, 2])),
             "sim_torque_axis_std_x": float(np.std(sim_torques[:, 0])),
             "sim_torque_axis_std_y": float(np.std(sim_torques[:, 1])),
             "sim_torque_axis_std_z": float(np.std(sim_torques[:, 2])),
-            "dist_sq_min": float(np.min(dist_sq)),
-            "dist_sq_max": float(np.max(dist_sq)),
-            "dist_sq_mean": float(np.mean(dist_sq)),
-            "diff_norm_min": float(np.min(diff_norms)),
-            "diff_norm_max": float(np.max(diff_norms)),
-            "diff_norm_mean": float(np.mean(diff_norms)),
+            "dist_sq_min": float(np.min(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+            "dist_sq_max": float(np.max(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+            "dist_sq_mean": float(np.mean(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+            "diff_norm_min": float(np.min(finite_diff_norms)) if finite_diff_norms.size else float("nan"),
+            "diff_norm_max": float(np.max(finite_diff_norms)) if finite_diff_norms.size else float("nan"),
+            "diff_norm_mean": float(np.mean(finite_diff_norms)) if finite_diff_norms.size else float("nan"),
             "sim_force_finite_ratio": float(np.mean(sim_force_finite)) if sim_force_finite.size else 0.0,
             "diff_finite_ratio": float(np.mean(diff_finite)) if diff_finite.size else 0.0,
             "likelihood_finite_ratio": (float(np.mean(likelihood_finite)) if likelihood_finite.size else 0.0),
             "valid_force_particle_ratio": (float(np.mean(valid_force_particle)) if valid_force_particle.size else 0.0),
+            "valid_likelihood_particle_ratio": (
+                float(np.mean(valid_likelihood_particle)) if valid_likelihood_particle.size else 0.0
+            ),
             "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
             "contact_count_mean": float(np.mean(contact_counts)) if contact_counts.size else 0.0,
             "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,
@@ -390,6 +450,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             "sensordata_nonfinite_count": float(state_nonfinite_counts["sensordata_nonfinite_count"]),
             "ctrl_nonfinite_count": float(state_nonfinite_counts["ctrl_nonfinite_count"]),
             "qacc_warmstart_nonfinite_count": float(state_nonfinite_counts.get("qacc_warmstart_nonfinite_count", 0)),
+            "invalid_world_count": float(np.count_nonzero(invalid_world_mask)),
             "repaired_world_count": float(np.count_nonzero(repaired_worlds)),
             "likelihood_min": float(np.min(likelihoods)),
             "likelihood_max": float(np.max(likelihoods)),
@@ -399,26 +460,27 @@ class FrankaWarpEnv(ParticleEnvironment):
         }
         if WARP_LIKELIHOOD_DEBUG_ENABLED:
             best_idx = int(np.argmax(likelihoods)) if likelihoods.size else -1
-            sim_force_mean = np.mean(sim_wrench, axis=0) if sim_wrench.size else np.zeros((6,), dtype=np.float32)
-            sim_force_std = np.std(sim_wrench, axis=0) if sim_wrench.size else np.zeros((6,), dtype=np.float32)
-            sim_force_best = sim_wrench[best_idx] if best_idx >= 0 else np.zeros((6,), dtype=np.float32)
+            sim_force_mean = np.mean(sim_observation64, axis=0) if sim_observation64.size else np.zeros((self._measurement_dim,), dtype=np.float64)
+            sim_force_std = np.std(sim_observation64, axis=0) if sim_observation64.size else np.zeros((self._measurement_dim,), dtype=np.float64)
+            sim_force_best = sim_observation64[best_idx] if best_idx >= 0 else np.zeros((self._measurement_dim,), dtype=np.float64)
             best_mass = float(self._masses[best_idx]) if best_idx >= 0 and self._masses.size else 0.0
             self.logger.debug(
                 {
                     **self.logging_data,
                     "event": "warp_likelihood_debug",
                     "step": self._step_count,
-                    "observation_shape": tuple(observation_np.shape),
-                    "sim_shape": tuple(sim_wrench.shape),
-                    "observation": observation_np.tolist(),
+                    "likelihood_space": self._likelihood_space,
+                    "observation_shape": tuple(observation_used.shape),
+                    "sim_shape": tuple(sim_observation.shape),
+                    "observation": observation_used.tolist(),
                     "sim_wrench_mean": sim_force_mean.tolist(),
                     "sim_wrench_std": sim_force_std.tolist(),
                     "sim_wrench_best": sim_force_best.tolist(),
                     "best_particle_index": best_idx,
                     "best_particle_mass": best_mass,
-                    "dist_sq_min": float(np.min(dist_sq)),
-                    "dist_sq_max": float(np.max(dist_sq)),
-                    "dist_sq_mean": float(np.mean(dist_sq)),
+                    "dist_sq_min": float(np.min(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+                    "dist_sq_max": float(np.max(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
+                    "dist_sq_mean": float(np.mean(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
                     "likelihood_min": float(np.min(likelihoods)),
                     "likelihood_max": float(np.max(likelihoods)),
                     "likelihood_mean": float(np.mean(likelihoods)),

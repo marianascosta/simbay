@@ -17,7 +17,7 @@ local-mujoco-warp:
 	SIMBAY_ENVIRONMENT=dev SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 poetry run python main.py
 
 docker-mujoco:
-	docker compose -f docker-compose.mujoco.yml up --build simbay-mujoco
+	SIMBAY_BACKEND=cpu SIMBAY_DOCKER_TARGET=base SIMBAY_ENABLE_NSIGHT=0 docker compose -f docker-compose.yml up --build -d
 
 docker-mujoco-warp:
-	docker compose -f docker-compose.mujoco-warp.yml up --build simbay
+	SIMBAY_BACKEND=mujoco-warp SIMBAY_DOCKER_TARGET=cuda docker compose -f docker-compose.yml up --build -d 

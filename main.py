@@ -27,6 +27,7 @@ from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
 from src.utils.settings import OBSERVABILITY_ENABLED
 from src.utils.settings import RUN_ID
+from src.utils.settings import WARP_MEASUREMENT_CONTACT_MODE
 from src.utils.tracing import get_tracer
 from src.utils.tracing import trace_call
 from src.utils.tracing import force_flush_tracing
@@ -160,8 +161,7 @@ def ik_planning(
     )
     if backend == "mujoco-warp":
         particle_filter.set_contact_mode(simplified_contacts=True)
-        particle_filter.warmup_runtime([len(traj1), len(traj2)])
-        logger.info({**log_data, "msg": f"Finished backend runtime warm-up for the {backend} backend.", "backend": backend})
+        logger.info({**log_data, "msg": f"Configured replay mode for the {backend} backend.", "backend": backend})
     return {
         "traj1": traj1,
         "traj2": traj2,
@@ -280,8 +280,8 @@ def pf_replay(
         }
     )
     if backend == "mujoco-warp":
-        # Warp can replay phases 1-3 as a single batched rollout because these
-        # phases only need state propagation, not per-step measurement updates.
+        # Keep per-particle world evolution through phases 1-3 so phase-4
+        # likelihoods start from physically consistent particle states.
         particle_filter.predict_trajectory(trajectory)
     else:
         for qpos in trajectory:
@@ -312,8 +312,13 @@ def phase_4_step_logic(
         viewer.sync()
     stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
 
-    measurements = np.asarray(real_robot.get_sensor_reads())
-    noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=measurements.shape)
+    measurements = np.asarray(real_robot.get_sensor_reads(), dtype=np.float32).reshape(-1)
+    if backend == "mujoco-warp":
+        observation_dim = int(getattr(getattr(particle_filter, "env", None), "measurement_dim", 3))
+        measurements_for_update = measurements[:observation_dim]
+    else:
+        measurements_for_update = measurements
+    noisy_ft_reading = measurements_for_update + np.random.normal(0, 0.5, size=measurements_for_update.shape)
     step_index = len(stage_state["history_estimates"])
     before_update = metrics.maybe_capture_particle_audit(
         stage_state,
@@ -337,7 +342,7 @@ def phase_4_step_logic(
             if did_resample:
                 particle_filter.resample()
             step_result = {
-                "ess": particle_filter.effective_sample_size(),
+                "effective_sample_size": particle_filter.effective_sample_size(),
                 "resampled": did_resample,
                 "resample_count": getattr(
                     particle_filter,
@@ -445,13 +450,14 @@ def run_phase_4_lift(
 
 def generate_particle_filter_plot(
     *,
+    backend: str,
     run_id: str,
     history_estimates: list[float],
     true_mass: float,
     env: Any,
     history_particles: list[np.ndarray] | None = None,
     num_particles: int | None = None,
-    history_ess: list[float] | None = None,
+    history_effective_sample_size: list[float] | None = None,
     history_ci50_low: list[float] | None = None,
     history_ci50_high: list[float] | None = None,
     history_ci90_low: list[float] | None = None,
@@ -463,7 +469,7 @@ def generate_particle_filter_plot(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    fig, (ax_mass, ax_ess) = plt.subplots(
+    fig, (ax_mass, ax_effective_sample_size) = plt.subplots(
         2,
         1,
         figsize=(11, 8),
@@ -476,13 +482,24 @@ def generate_particle_filter_plot(
         num_steps = len(history_particles)
         for t in range(num_steps):
             ax_mass.scatter([t] * num_particles, history_particles[t], color="steelblue", alpha=0.05, s=15)
-    if history_ci90_low is not None and history_ci90_high is not None and len(history_ci90_low) == len(history_estimates):
+    use_credible_intervals = backend != "mujoco-warp"
+    if (
+        use_credible_intervals
+        and history_ci90_low is not None
+        and history_ci90_high is not None
+        and len(history_ci90_low) == len(history_estimates)
+    ):
         ax_mass.fill_between(steps, history_ci90_low, history_ci90_high, color="cornflowerblue", alpha=0.18, label="90% credible interval")
-    if history_ci50_low is not None and history_ci50_high is not None and len(history_ci50_low) == len(history_estimates):
+    if (
+        use_credible_intervals
+        and history_ci50_low is not None
+        and history_ci50_high is not None
+        and len(history_ci50_low) == len(history_estimates)
+    ):
         ax_mass.fill_between(steps, history_ci50_low, history_ci50_high, color="royalblue", alpha=0.28, label="50% credible interval")
     ax_mass.plot(steps, history_estimates, color="firebrick", linewidth=2.5, label="Filter estimate")
     ax_mass.axhline(y=true_mass, color="darkgreen", linestyle="--", linewidth=2, label=f"True mass ({true_mass} kg)")
-    if history_resampled is not None:
+    if history_resampled is not None and backend != "mujoco-warp":
         resample_steps = [step for step, resampled in enumerate(history_resampled) if resampled]
         if resample_steps:
             ax_mass.vlines(resample_steps, env.min, env.max, colors="black", alpha=0.12, linewidth=1, label="Resample")
@@ -495,15 +512,30 @@ def generate_particle_filter_plot(
     ax_mass.set_ylim(env.min, env.max)
     ax_mass.legend(loc="upper right")
     ax_mass.grid(True, linestyle=":", alpha=0.7)
-    if history_ess is not None and len(history_ess) == len(history_estimates):
-        ax_ess.plot(steps, history_ess, color="darkorange", linewidth=2, label="ESS")
+    if history_effective_sample_size is not None and len(history_effective_sample_size) == len(history_estimates):
+        ax_effective_sample_size.plot(
+            steps,
+            history_effective_sample_size,
+            color="darkorange",
+            linewidth=2,
+            label="Effective Sample Size",
+        )
         if num_particles is not None:
-            ax_ess.axhline(y=num_particles / 2.0, color="gray", linestyle="--", linewidth=1.5, label="Resample threshold")
-            ax_ess.set_ylim(0.0, max(float(num_particles), max(history_ess, default=0.0) * 1.05))
-        ax_ess.legend(loc="upper right")
-    ax_ess.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    ax_ess.set_ylabel("ESS", fontsize=12)
-    ax_ess.grid(True, linestyle=":", alpha=0.7)
+            ax_effective_sample_size.axhline(
+                y=num_particles / 2.0,
+                color="gray",
+                linestyle="--",
+                linewidth=1.5,
+                label="Resample threshold",
+            )
+            ax_effective_sample_size.set_ylim(
+                0.0,
+                max(float(num_particles), max(history_effective_sample_size, default=0.0) * 1.05),
+            )
+        ax_effective_sample_size.legend(loc="upper right")
+    ax_effective_sample_size.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    ax_effective_sample_size.set_ylabel("Effective Sample Size", fontsize=12)
+    ax_effective_sample_size.grid(True, linestyle=":", alpha=0.7)
     output_dir = Path("temp")
     output_dir.mkdir(exist_ok=True)
     output_path = output_dir / "particle_filter_evolution.png"
@@ -619,7 +651,8 @@ def run_simbay_mujoco_warp(
         metrics.finish_stage(phase_token)
         logger.info({**log_data, "msg": "Finished phase 2 (descent)."})
 
-    particle_filter.set_contact_mode(simplified_contacts=False)
+    use_simplified_measurement_contacts = WARP_MEASUREMENT_CONTACT_MODE != "full"
+    particle_filter.set_contact_mode(simplified_contacts=use_simplified_measurement_contacts)
     particle_filter.warmup_runtime([len(traj3)])
     phase_token = metrics.start_stage("phase_3_grip")
     logger.info({**log_data, "msg": "Started phase 3 (grip)."})
@@ -708,7 +741,7 @@ def main(run_id: str = RUN_ID) -> None:
     traj3 = planning_result["traj3"]
     traj4 = planning_result["traj4"]
 
-    history_ess: list[float] | None = None
+    history_effective_sample_size: list[float] | None = None
     history_ci50_low: list[float] | None = None
     history_ci50_high: list[float] | None = None
     history_ci90_low: list[float] | None = None
@@ -749,7 +782,7 @@ def main(run_id: str = RUN_ID) -> None:
         )
         history_estimates = lift_result.history_estimates
         history_particles = lift_result.history_particles
-        history_ess = lift_result.history_ess
+        history_effective_sample_size = lift_result.history_effective_sample_size
         history_ci50_low = lift_result.history_ci50_low
         history_ci50_high = lift_result.history_ci50_high
         history_ci90_low = lift_result.history_ci90_low
@@ -767,13 +800,14 @@ def main(run_id: str = RUN_ID) -> None:
 
     logger.info({**log_data, "msg": "Started generating the output plots."})
     output_path = generate_particle_filter_plot(
+        backend=backend,
         run_id=run_id,
         history_estimates=history_estimates,
         true_mass=true_mass,
         env=env,
         history_particles=history_particles,
         num_particles=num_particles,
-        history_ess=history_ess,
+        history_effective_sample_size=history_effective_sample_size,
         history_ci50_low=history_ci50_low,
         history_ci50_high=history_ci50_high,
         history_ci90_low=history_ci90_low,
