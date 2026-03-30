@@ -2045,6 +2045,12 @@ def phase_4_step_observability(
                 "effective_sample_size": float(
                     step_result.get("effective_sample_size", particle_summary["effective_sample_size"])
                 ),
+                "pre_resample_effective_sample_size": float(
+                    step_result.get(
+                        "pre_resample_effective_sample_size",
+                        step_result.get("effective_sample_size", particle_summary["effective_sample_size"]),
+                    )
+                ),
                 "resampled": bool(step_result.get("resampled", False)),
                 "skipped_invalid_update": bool(step_result.get("skipped_invalid_update", False)),
                 "uninformative_update": bool(step_result.get("uninformative_update", False)),

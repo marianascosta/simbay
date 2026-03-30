@@ -13,6 +13,7 @@ from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import WARP_FORCE_MEASUREMENT_VARIANCE
 from src.utils.settings import WARP_LIKELIHOOD_DEBUG_ENABLED
 from src.utils.settings import WARP_LIKELIHOOD_SPACE
+from src.utils.settings import WARP_LIKELIHOOD_TEMPERATURE
 from src.utils.settings import WARP_TORQUE_MEASUREMENT_VARIANCE
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
@@ -61,6 +62,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._first_invalid_state_step: int | None = None
         self._likelihood_space = WARP_LIKELIHOOD_SPACE
         self._measurement_dim = 6 if self._likelihood_space == "wrench" else 3
+        self._likelihood_temperature = max(float(WARP_LIKELIHOOD_TEMPERATURE), 1e-6)
         self._force_measurement_variance = max(float(WARP_FORCE_MEASUREMENT_VARIANCE), 1e-6)
         self._torque_measurement_variance = max(float(WARP_TORQUE_MEASUREMENT_VARIANCE), 1e-6)
         if self._measurement_dim == 6:
@@ -352,7 +354,9 @@ class FrankaWarpEnv(ParticleEnvironment):
         if np.any(valid_likelihood_particle):
             valid_dist_sq = dist_sq[valid_likelihood_particle]
             shifted_dist_sq = valid_dist_sq - float(np.min(valid_dist_sq))
-            likelihoods[valid_likelihood_particle] = np.exp(-0.5 * shifted_dist_sq)
+            likelihoods[valid_likelihood_particle] = np.exp(
+                -0.5 * shifted_dist_sq / self._likelihood_temperature
+            )
         likelihood_finite = np.isfinite(likelihoods)
         sim_force_nonfinite_count = int(sim_observation.size - np.count_nonzero(sim_force_finite))
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
@@ -440,6 +444,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             "obs_ty": float(observation_used[4]) if observation_used.size > 4 else 0.0,
             "obs_tz": float(observation_used[5]) if observation_used.size > 5 else 0.0,
             "obs_norm": float(np.linalg.norm(observation_used)),
+            "likelihood_temperature": float(self._likelihood_temperature),
             "force_measurement_variance": float(self._force_measurement_variance),
             "torque_measurement_variance": float(self._torque_measurement_variance),
             "sim_force_norm_min": float(np.min(finite_force_norms)) if finite_force_norms.size else float("nan"),

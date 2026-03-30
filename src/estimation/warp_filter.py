@@ -193,6 +193,8 @@ class WarpParticleFilter:
         diagnostics = self.env.last_measurement_diagnostics()
         measurement_informative = self._measurement_is_informative(diagnostics)
         allow_resample = self._step_index >= self._resample_warmup_steps
+        pre_resample_weights = _normalize_weights(self.weights, likelihoods)
+        pre_resample_ess = _effective_sample_size(pre_resample_weights)
 
         offset = float(self._rng.uniform())
         (
@@ -213,7 +215,7 @@ class WarpParticleFilter:
                 self.env.resample_states(indexes)
             self._resample_count += 1
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
-        finite_weights = self.weights[np.isfinite(self.weights)]
+        finite_weights = pre_resample_weights[np.isfinite(pre_resample_weights)]
         if finite_weights.size:
             clipped_weights = np.clip(finite_weights, np.finfo(np.float64).tiny, 1.0)
             logw_std = float(np.std(np.log(clipped_weights)))
@@ -246,6 +248,7 @@ class WarpParticleFilter:
             "uniform_weight_max_deviation": uniform_weight_max_dev,
             "collapsed_to_uniform": collapsed_to_uniform,
             "logw_std": logw_std,
+            "pre_resample_effective_sample_size": float(pre_resample_ess),
             "diagnostics": diagnostics,
             "skipped_invalid_update": False,
             "skipped_invalid_updates": self._skipped_invalid_updates,
