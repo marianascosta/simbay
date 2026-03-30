@@ -1,5 +1,6 @@
 import math
 import inspect
+import json
 import os
 import subprocess
 import threading
@@ -18,6 +19,11 @@ from prometheus_client import Gauge
 from prometheus_client import make_wsgi_app
 
 from .logging_utils import get_process_memory_bytes
+from .settings import PARTICLE_AUDIT_ENABLED
+from .settings import PARTICLE_AUDIT_SAMPLE_EVERY
+from .settings import PARTICLE_AUDIT_TOPK
+from .settings import PARTICLE_HISTORY_ENABLED
+from .settings import PARTICLE_INVARIANT_CHECKS_ENABLED
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
 from .tracing import add_exemplar
 from .tracing import force_flush_tracing
@@ -896,8 +902,16 @@ class _MetricsState:
     def update_process_rss(self, stage: str) -> None:
         self.process_rss_bytes.labels(*self._stage(stage)).set(get_process_memory_bytes())
 
-    def update_filter_state(self, ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
-        self.effective_sample_size.labels(*self._common()).set(ess)
+    def update_filter_state(
+        self,
+        effective_sample_size: float,
+        estimate: float,
+        wall_seconds: float,
+        cpu_seconds: float,
+        cpu_equivalent_cores: float,
+        particles: int,
+    ) -> None:
+        self.effective_sample_size.labels(*self._common()).set(effective_sample_size)
         self.mass_estimate_kg.labels(*self._common()).set(estimate)
         self.phase4_step_wall_seconds.labels(*self._common()).set(wall_seconds)
         self.phase4_step_cpu_seconds.labels(*self._common()).set(cpu_seconds)
@@ -1206,8 +1220,22 @@ def update_warp_memory(*, stage: str, bytes_in_use: int, peak_bytes_in_use: int,
     )
 
 
-def update_filter_state(ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
-    _require_state().update_filter_state(ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles)
+def update_filter_state(
+    effective_sample_size: float,
+    estimate: float,
+    wall_seconds: float,
+    cpu_seconds: float,
+    cpu_equivalent_cores: float,
+    particles: int,
+) -> None:
+    _require_state().update_filter_state(
+        effective_sample_size,
+        estimate,
+        wall_seconds,
+        cpu_seconds,
+        cpu_equivalent_cores,
+        particles,
+    )
 
 
 def update_weight_health(*, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
@@ -1381,6 +1409,13 @@ def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> N
 @dataclass(frozen=True)
 class LiftPhaseResult:
     history_estimates: list[float]
+    history_particles: list[np.ndarray]
+    history_effective_sample_size: list[float]
+    history_ci50_low: list[float]
+    history_ci50_high: list[float]
+    history_ci90_low: list[float]
+    history_ci90_high: list[float]
+    history_resampled: list[bool]
     pf_wall_durations: list[float]
     pf_cpu_durations: list[float]
     invalid_sensor_events: int
@@ -1407,11 +1442,194 @@ def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) 
     return float(np.interp(quantile, cumulative, sorted_values))
 
 
+def _safe_particle_weights(particle_filter: Any) -> np.ndarray:
+    weights = np.asarray(particle_filter.weights, dtype=np.float64).reshape(-1)
+    total = float(np.sum(weights))
+    if total > 0.0:
+        return weights / total
+    if weights.size == 0:
+        return weights
+    return np.full_like(weights, 1.0 / weights.size)
+
+
+def summarize_particle_state(particle_filter: Any, *, topk: int | None = None) -> dict[str, Any]:
+    particles = np.asarray(particle_filter.particles, dtype=np.float64).reshape(-1)
+    weights = _safe_particle_weights(particle_filter)
+    if particles.size == 0:
+        return {
+            "count": 0,
+            "estimate": 0.0,
+            "effective_sample_size": 0.0,
+            "weight_sum": 0.0,
+            "all_weights_finite": True,
+            "all_particles_finite": True,
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "ci50_low": 0.0,
+            "ci50_high": 0.0,
+            "ci90_low": 0.0,
+            "ci90_high": 0.0,
+            "top_particles": [],
+        }
+    estimate = float(np.sum(particles * weights))
+    top_count = min(topk if topk is not None else PARTICLE_AUDIT_TOPK, particles.size)
+    top_indexes = np.argsort(weights)[-top_count:][::-1]
+    top_particles = [
+        {
+            "rank": rank + 1,
+            "index": int(index),
+            "particle": float(particles[index]),
+            "weight": float(weights[index]),
+        }
+        for rank, index in enumerate(top_indexes)
+    ]
+    return {
+        "count": int(particles.size),
+        "estimate": estimate,
+        "effective_sample_size": float(1.0 / np.sum(np.square(weights))),
+        "weight_sum": float(np.sum(weights)),
+        "all_weights_finite": bool(np.all(np.isfinite(weights))),
+        "all_particles_finite": bool(np.all(np.isfinite(particles))),
+        "min": float(np.min(particles)),
+        "max": float(np.max(particles)),
+        "mean": float(np.mean(particles)),
+        "std": float(np.std(particles)),
+        "ci50_low": weighted_quantile(particles, weights, 0.25),
+        "ci50_high": weighted_quantile(particles, weights, 0.75),
+        "ci90_low": weighted_quantile(particles, weights, 0.05),
+        "ci90_high": weighted_quantile(particles, weights, 0.95),
+        "top_particles": top_particles,
+    }
+
+
+def maybe_capture_particle_audit(
+    state: dict[str, Any] | None,
+    *,
+    step: int,
+    particle_filter: Any,
+    qpos: np.ndarray,
+    observation: np.ndarray,
+) -> dict[str, Any] | None:
+    if state is None or not PARTICLE_AUDIT_ENABLED:
+        return None
+    if step != 0 and (step + 1) % PARTICLE_AUDIT_SAMPLE_EVERY != 0:
+        return None
+    snapshot = summarize_particle_state(particle_filter)
+    snapshot["step"] = int(step)
+    snapshot["qpos"] = np.asarray(qpos, dtype=np.float64).reshape(-1).tolist()
+    snapshot["observation"] = np.asarray(observation, dtype=np.float64).reshape(-1).tolist()
+    snapshot["observation_norm"] = float(np.linalg.norm(observation))
+    return snapshot
+
+
+def _write_particle_audit_record(path: str | None, record: dict[str, Any]) -> None:
+    if not path:
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as audit_file:
+        audit_file.write(json.dumps(record, sort_keys=True))
+        audit_file.write("\n")
+
+
+def maybe_record_particle_audit(
+    state: dict[str, Any] | None,
+    *,
+    run_id: str,
+    backend: str,
+    true_mass: float,
+    step: int,
+    before_update: dict[str, Any] | None,
+    after_update: dict[str, Any],
+    step_result: dict[str, Any],
+) -> None:
+    if state is None or not PARTICLE_AUDIT_ENABLED or before_update is None:
+        return
+    if state.get("particle_audit_path") is None:
+        safe_run_id = str(run_id).replace(os.sep, "_")
+        state["particle_audit_path"] = os.path.join("temp", f"particle_audit_{safe_run_id}.jsonl")
+    record = {
+        "run_id": run_id,
+        "backend": backend,
+        "step": int(step),
+        "true_mass": float(true_mass),
+        "before_update": before_update,
+        "after_update": after_update,
+        "delta": {
+            "estimate_shift": float(after_update["estimate"] - before_update["estimate"]),
+            "effective_sample_size_shift": float(
+                after_update["effective_sample_size"] - before_update["effective_sample_size"]
+            ),
+            "ci90_width_shift": float(
+                (after_update["ci90_high"] - after_update["ci90_low"])
+                - (before_update["ci90_high"] - before_update["ci90_low"])
+            ),
+        },
+        "resampled": bool(step_result.get("resampled", False)),
+        "resample_count": int(step_result.get("resample_count", 0)),
+        "skipped_invalid_update": bool(step_result.get("skipped_invalid_update", False)),
+        "uninformative_update": bool(step_result.get("uninformative_update", False)),
+        "uniform_weight_l1_distance": float(step_result.get("uniform_weight_l1_distance", 0.0)),
+        "uniform_weight_max_deviation": float(step_result.get("uniform_weight_max_deviation", 0.0)),
+        "diagnostics": step_result.get("diagnostics", {}),
+    }
+    _write_particle_audit_record(state.get("particle_audit_path"), record)
+
+
+def validate_particle_invariants(
+    particle_filter: Any,
+    *,
+    step: int,
+    step_result: dict[str, Any],
+) -> None:
+    if not PARTICLE_INVARIANT_CHECKS_ENABLED:
+        return
+    particles = np.asarray(particle_filter.particles, dtype=np.float64).reshape(-1)
+    weights = np.asarray(particle_filter.weights, dtype=np.float64).reshape(-1)
+    if not np.all(np.isfinite(particles)):
+        raise AssertionError(f"Non-finite particle values detected at step {step}.")
+    if not np.all(np.isfinite(weights)):
+        raise AssertionError(f"Non-finite particle weights detected at step {step}.")
+    weight_sum = float(np.sum(weights))
+    if not math.isclose(weight_sum, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+        raise AssertionError(f"Particle weights summed to {weight_sum:.9f} at step {step}.")
+    if particles.size:
+        estimate = float(particle_filter.estimate())
+        particle_min = float(np.min(particles))
+        particle_max = float(np.max(particles))
+        if not (particle_min - 1e-6 <= estimate <= particle_max + 1e-6):
+            raise AssertionError(f"Particle estimate {estimate:.6f} escaped particle bounds at step {step}.")
+    effective_sample_size = float(particle_filter.effective_sample_size())
+    if effective_sample_size < 1.0 - 1e-6 or effective_sample_size > float(particle_filter.N) + 1e-6:
+        raise AssertionError(
+            f"Effective Sample Size {effective_sample_size:.6f} is outside [1, N] at step {step}."
+        )
+    if bool(step_result.get("resampled", False)) and not math.isclose(
+        effective_sample_size,
+        float(particle_filter.N),
+        rel_tol=1e-6,
+        abs_tol=1e-6,
+    ):
+        raise AssertionError(
+            f"Effective Sample Size {effective_sample_size:.6f} did not reset after resampling at step {step}."
+        )
+
+
 def init_stage_state(stage_name: str) -> dict[str, Any] | None:
     if stage_name != "phase_4_lift":
         return None
     return {
         "history_estimates": [],
+        "history_particles": [],
+        "history_effective_sample_size": [],
+        "history_ci50_low": [],
+        "history_ci50_high": [],
+        "history_ci90_low": [],
+        "history_ci90_high": [],
+        "history_resampled": [],
         "pf_wall_durations": [],
         "pf_cpu_durations": [],
         "robot_execute_total": 0.0,
@@ -1430,6 +1648,7 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
         "convergence_time_to_5pct_seconds": -1.0,
         "convergence_time_to_10pct_seconds": -1.0,
         "latest_particles_snapshot": None,
+        "particle_audit_path": None,
     }
 
 
@@ -1558,7 +1777,9 @@ def update_phase_4_state(
     current_estimate = float(particle_filter.estimate())
     state["history_estimates"].append(current_estimate)
     if hasattr(particle_filter, "particles"):
-        state["latest_particles_snapshot"] = np.asarray(particle_filter.particles).copy()
+        latest_particles_snapshot = np.asarray(particle_filter.particles)
+        state["latest_particles_snapshot"] = latest_particles_snapshot
+        state["history_particles"].append(latest_particles_snapshot.copy())
     if state["time_to_first_estimate_seconds"] < 0.0:
         state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
@@ -1614,7 +1835,7 @@ def update_phase_4_metrics(
     cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
     add_exemplar(run_id, step)
     update_filter_state(
-        ess=particle_filter.effective_sample_size(),
+        effective_sample_size=particle_filter.effective_sample_size(),
         estimate=current_estimate,
         wall_seconds=step_wall_duration,
         cpu_seconds=step_cpu_duration,
@@ -1640,15 +1861,18 @@ def update_phase_4_metrics(
     )
     latest_particles_snapshot = state["latest_particles_snapshot"]
     if latest_particles_snapshot is not None:
-        weights_snapshot = np.asarray(particle_filter.weights, dtype=np.float64).reshape(-1)
+        weights_snapshot = _safe_particle_weights(particle_filter)
         particle_values = np.asarray(latest_particles_snapshot, dtype=np.float64).reshape(-1)
-        particle_weight_sum = float(np.sum(weights_snapshot))
-        if particle_weight_sum > 0.0:
-            weights_snapshot = weights_snapshot / particle_weight_sum
         ci50_low = weighted_quantile(particle_values, weights_snapshot, 0.25)
         ci50_high = weighted_quantile(particle_values, weights_snapshot, 0.75)
         ci90_low = weighted_quantile(particle_values, weights_snapshot, 0.05)
         ci90_high = weighted_quantile(particle_values, weights_snapshot, 0.95)
+        state["history_effective_sample_size"].append(float(particle_filter.effective_sample_size()))
+        state["history_ci50_low"].append(ci50_low)
+        state["history_ci50_high"].append(ci50_high)
+        state["history_ci90_low"].append(ci90_low)
+        state["history_ci90_high"].append(ci90_high)
+        state["history_resampled"].append(bool(step_result.get("resampled", False)))
         safe_weights = np.clip(weights_snapshot, np.finfo(np.float64).tiny, 1.0)
         weight_entropy = float(-np.sum(safe_weights * np.log(safe_weights)))
         max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
@@ -1725,7 +1949,7 @@ def update_phase_4_metrics(
         )
     set_span_attributes(
         {
-            "simbay.ess": float(particle_filter.effective_sample_size()),
+            "simbay.effective_sample_size": float(particle_filter.effective_sample_size()),
             "simbay.resampled": bool(step_result.get("resampled", False)),
             "simbay.mass_estimate_kg": current_estimate,
             "simbay.step_wall_ms": step_wall_duration * 1000.0,
@@ -1799,6 +2023,65 @@ def phase_4_step_observability(
         step_wall_duration=step_wall_duration,
         step_cpu_duration=step_cpu_duration,
     )
+    current_estimate = float(particle_filter.estimate())
+    should_log_estimate_debug = (
+        step < 5
+        or step % 100 == 0
+        or bool(step_result.get("skipped_invalid_update", False))
+        or bool(step_result.get("uninformative_update", False))
+    )
+    if should_log_estimate_debug:
+        diagnostics = step_result.get("diagnostics", {})
+        particle_summary = summarize_particle_state(particle_filter, topk=3)
+        logger.info(
+            {
+                **log_data,
+                "event": "phase4_estimate_debug",
+                "msg": f"Phase 4 estimate debug at step {step}.",
+                "step": int(step),
+                "estimate_kg": current_estimate,
+                "true_mass_kg": float(true_mass),
+                "abs_error_kg": abs(current_estimate - float(true_mass)),
+                "effective_sample_size": float(
+                    step_result.get("effective_sample_size", particle_summary["effective_sample_size"])
+                ),
+                "pre_resample_effective_sample_size": float(
+                    step_result.get(
+                        "pre_resample_effective_sample_size",
+                        step_result.get("effective_sample_size", particle_summary["effective_sample_size"]),
+                    )
+                ),
+                "resampled": bool(step_result.get("resampled", False)),
+                "skipped_invalid_update": bool(step_result.get("skipped_invalid_update", False)),
+                "uninformative_update": bool(step_result.get("uninformative_update", False)),
+                "particles_mean_kg": float(particle_summary["mean"]),
+                "particles_std_kg": float(particle_summary["std"]),
+                "ci90_low_kg": float(particle_summary["ci90_low"]),
+                "ci90_high_kg": float(particle_summary["ci90_high"]),
+                "likelihood_std": float(diagnostics.get("likelihood_std", 0.0)),
+                "likelihood_range": float(diagnostics.get("likelihood_range", 0.0)),
+                "dist_sq_min": float(diagnostics.get("dist_sq_min", 0.0)),
+                "dist_sq_max": float(diagnostics.get("dist_sq_max", 0.0)),
+                "dist_sq_mean": float(diagnostics.get("dist_sq_mean", 0.0)),
+                "dist_sq_std": float(diagnostics.get("dist_sq_std", 0.0)),
+                "obs_norm": float(diagnostics.get("obs_norm", 0.0)),
+                "sim_force_norm_mean": float(diagnostics.get("sim_force_norm_mean", 0.0)),
+                "sim_force_norm_std": float(diagnostics.get("sim_force_norm_std", 0.0)),
+                "logw_std": float(step_result.get("logw_std", 0.0)),
+                "active_contact_particle_ratio": float(diagnostics.get("active_contact_particle_ratio", 0.0)),
+                "repaired_world_count": int(diagnostics.get("repaired_world_count", 0.0)),
+            }
+        )
+    maybe_record_particle_audit(
+        stage_state,
+        run_id=run_id,
+        backend=backend,
+        true_mass=true_mass,
+        step=step,
+        before_update=step_result.get("before_update"),
+        after_update=summarize_particle_state(particle_filter),
+        step_result=step_result,
+    )
 
 
 def finalize_phase_4_metrics(
@@ -1841,6 +2124,13 @@ def finalize_phase_4_metrics(
     force_flush_tracing()
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
+        history_particles=state["history_particles"],
+        history_effective_sample_size=state["history_effective_sample_size"],
+        history_ci50_low=state["history_ci50_low"],
+        history_ci50_high=state["history_ci50_high"],
+        history_ci90_low=state["history_ci90_low"],
+        history_ci90_high=state["history_ci90_high"],
+        history_resampled=state["history_resampled"],
         pf_wall_durations=state["pf_wall_durations"],
         pf_cpu_durations=state["pf_cpu_durations"],
         invalid_sensor_events=state["invalid_sensor_events"],
@@ -1852,9 +2142,9 @@ def finalize_phase_4_metrics(
     )
 
 
-def init_metrics(run_id: str = "unknown") -> None:
+def init_metrics(run_id: str = "unknown", *, enabled: bool = True) -> None:
     global _STATE
-    _STATE = _MetricsState(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
+    _STATE = _MetricsState(enabled=enabled, port=8000, run_id=run_id).initialize_defaults().start_runtime()
 
 
 def shutdown_metrics() -> None:

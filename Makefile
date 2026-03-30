@@ -1,58 +1,23 @@
-.PHONY: install shell run run-warp run-macos run-local-observability check format lint docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
+.PHONY: bootstrap install install-dev local-mujoco local-mujoco-warp docker-mujoco docker-mujoco-warp
 
-PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+bootstrap:
+	python -m pip install --upgrade pip
+	python -m pip install poetry
 
 install:
 	poetry install --no-root
 
-shell:
-	poetry shell
+install-dev:
+	poetry install --no-root --with dev
 
-run:
-	poetry run python main.py
+local-mujoco:
+	SIMBAY_ENVIRONMENT=dev SIMBAY_BACKEND=cpu SIMBAY_HEADLESS=0 poetry run mjpython main.py
 
-run-warp:
-	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 poetry run python main.py
+local-mujoco-warp:
+	SIMBAY_ENVIRONMENT=dev SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 poetry run python main.py
 
-run-local-observability:
-	poetry run python main.py
+docker-mujoco:
+	SIMBAY_BACKEND=cpu SIMBAY_DOCKER_TARGET=base SIMBAY_ENABLE_NSIGHT=0 docker compose -f docker-compose.yml up --build -d
 
-run-macos:
-	"$(PROJECT_ROOT)/.venv/bin/python" "$(PROJECT_ROOT)/.venv/bin/mjpython" main.py
-
-check:
-	poetry run python -m compileall main.py src
-
-make-smoke-test:
-	SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py
-
-make-smoke-test-warp:
-	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py
-
-docker-build:
-	docker compose build
-
-docker-run:
-	docker compose up --build
-	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"
-
-docker-simbay-up:
-	docker compose up --build -d simbay
-
-docker-simbay-profile:
-	SIMBAY_ENABLE_NSIGHT=1 docker compose up --build simbay
-
-docker-simbay-down:
-	docker compose stop simbay
-
-bootstrap:
-	pip install poetry
-
-setup-precommit:
-	poetry run pre-commit install
-
-format:
-	poetry run black -l 120 ./
-
-lint:
-	poetry run black --check -l 120 ./
+docker-mujoco-warp:
+	SIMBAY_BACKEND=mujoco-warp SIMBAY_DOCKER_TARGET=cuda docker compose -f docker-compose.yml up --build -d 

@@ -141,8 +141,8 @@
                       <geom mesh="link7_4" material="white" class="visual"/>
                       <geom mesh="link7_5" material="white" class="visual"/>
                       <geom mesh="link7_6" material="white" class="visual"/>
-                      <body name="fr3v2_link8" pos="0 0 0.107" quat="0.9238795 0 0 -0.3826834">
-                        <site name="gripper" pos="0 0 0.1" rgba="0 1 0 1" size="0.01"/>
+                      <body name="fr3v2_link8" pos="0 0 0.107">
+                        <site name="gripper" pos="0 0 0.1034" quat="0.9238795 0 0 -0.3826834" rgba="0 1 0 0" size="0.01" type="sphere"/>
                       </body>
                     </body>
                   </body>

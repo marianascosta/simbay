@@ -1155,7 +1155,7 @@
         {
           "editorMode": "code",
           "expr": "simbay_effective_sample_size{run_id=~\"$run_id\"}",
-          "legendFormat": "ess",
+          "legendFormat": "effective_sample_size",
           "range": true,
           "refId": "A"
         },

@@ -389,7 +389,7 @@ def _summarize_run(
             "final_rss_bytes": float(pf_summary.get("final_rss_bytes", 0.0)),
             "pf_update_particle_steps_per_second": float(phase4_pf_update["particle_steps_per_second"]),
             "pf_update_ms_per_particle_step": float(phase4_pf_update["ms_per_particle_step"]),
-            "ess_final": _snapshot_value(snapshot, "simbay_effective_sample_size"),
+            "effective_sample_size_final": _snapshot_value(snapshot, "simbay_effective_sample_size"),
             "resample_count": _snapshot_value(snapshot, "simbay_resample_count"),
             "resample_rate": _snapshot_value(snapshot, "simbay_resample_rate"),
             "credible_interval_50_width_kg": _snapshot_value(snapshot, "simbay_credible_interval_50_width_kg"),

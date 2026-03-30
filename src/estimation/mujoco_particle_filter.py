@@ -1,3 +1,5 @@
+import logging
+
 import mujoco
 import numpy as np
 
@@ -14,10 +16,12 @@ from .base import ParticleEnvironment
 @trace_public_methods("simbay.mujoco_env")
 class FrankaMuJoCoEnv(ParticleEnvironment):
     def __init__(self, limits: tuple[float, float], num_particles: int):
+        self.logger = logging.getLogger("simbay.mujoco_env")
         self.min, self.max = limits
         self.robots: list[MujocoRobot] = []
 
         self._num_particles = num_particles
+        self._likelihood_step = 0
 
         self.std_dev = 0.005  # This is our process noise (Q).
 
@@ -76,7 +80,23 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         }
 
     def resample_states(self, indexes: np.ndarray) -> None:
-        self.robots = [self.robots[i] for i in indexes]
+        indexes_np = np.asarray(indexes, dtype=np.int32)
+        if indexes_np.size != len(self.robots):
+            raise ValueError(f"Expected {len(self.robots)} indexes, got {indexes_np.size}.")
+
+        # Preserve one unique MuJoCo world per particle. We copy selected source
+        # states into the existing destination robot pool instead of aliasing.
+        selected_qpos = [self.robots[int(src_idx)].data.qpos.copy() for src_idx in indexes_np]
+        selected_qvel = [self.robots[int(src_idx)].data.qvel.copy() for src_idx in indexes_np]
+        selected_ctrl = [self.robots[int(src_idx)].data.ctrl.copy() for src_idx in indexes_np]
+        selected_mass = [float(self.robots[int(src_idx)].model.body_mass[self.block_body_id]) for src_idx in indexes_np]
+
+        for dst_idx, robot in enumerate(self.robots):
+            robot.data.qpos[:] = selected_qpos[dst_idx]
+            robot.data.qvel[:] = selected_qvel[dst_idx]
+            robot.data.ctrl[:] = selected_ctrl[dst_idx]
+            robot.model.body_mass[self.block_body_id] = selected_mass[dst_idx]
+            mujoco.mj_forward(robot.model, robot.data)  # type: ignore
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         # 1. Apply process noise to the mathematical state (the Artificial Random Walk)
@@ -94,6 +114,7 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         return particles
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
+        self._likelihood_step += 1
         # 1. OPTIMIZATION: List comprehension is much faster than a standard for-loop append
         sim_z = np.array([robot.get_sensor_reads() for robot in self.robots])
 
@@ -107,5 +128,27 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
 
         # 4. Calculate likelihood
         likelihoods = np.exp(-0.5 * dist_sq / R)
+
+        self.logger.debug(
+            {
+                "event": "cpu_likelihood_debug",
+                "step": self._likelihood_step,
+                "observation_shape": tuple(np.asarray(observation).shape),
+                "sim_shape": tuple(sim_z.shape),
+                "unique_robot_objects": len({id(robot) for robot in self.robots}),
+                "sim_axis_std_x": float(np.std(sim_z[:, 0])) if sim_z.size else 0.0,
+                "sim_axis_std_y": float(np.std(sim_z[:, 1])) if sim_z.size else 0.0,
+                "sim_axis_std_z": float(np.std(sim_z[:, 2])) if sim_z.size else 0.0,
+                "sim_axis_std_tx": float(np.std(sim_z[:, 3])) if sim_z.shape[1] > 3 else 0.0,
+                "sim_axis_std_ty": float(np.std(sim_z[:, 4])) if sim_z.shape[1] > 4 else 0.0,
+                "sim_axis_std_tz": float(np.std(sim_z[:, 5])) if sim_z.shape[1] > 5 else 0.0,
+                "dist_sq_min": float(np.min(dist_sq)),
+                "dist_sq_max": float(np.max(dist_sq)),
+                "dist_sq_mean": float(np.mean(dist_sq)),
+                "likelihood_min": float(np.min(likelihoods)),
+                "likelihood_max": float(np.max(likelihoods)),
+                "likelihood_mean": float(np.mean(likelihoods)),
+            }
+        )
 
         return likelihoods

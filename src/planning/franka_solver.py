@@ -23,7 +23,7 @@ class FrankaSmartSolver:
         set_span_attributes({"planning.cache_hit": cls._model is not None})
         if cls._model is None:
             # Update this path to your specific robot-only XML
-            xml_path = os.path.join("assets", "franka_fr3_v2", "fr3v2.xml")
+            xml_path = os.path.join("models", "fr3v2_nohand.xml")
 
             if not os.path.exists(xml_path):
                 raise FileNotFoundError(f"Franka XML not found at {xml_path}")

@@ -3,16 +3,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: cuda
+      target: "${SIMBAY_DOCKER_TARGET:-cuda}"
     container_name: simbay
     depends_on:
       - tempo
     environment:
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-500}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
       SIMBAY_HEADLESS: "1"
       SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
-      SIMBAY_DOCKER_TARGET: "cuda"
+      SIMBAY_DOCKER_TARGET: "${SIMBAY_DOCKER_TARGET:-cuda}"
       SIMBAY_ENABLE_NSIGHT: "${SIMBAY_ENABLE_NSIGHT:-1}"
+      SIMBAY_ENVIRONMENT: "${SIMBAY_ENVIRONMENT:-docker-dev}"
+      SIMBAY_OBSERVABILITY_ENABLED: "${SIMBAY_OBSERVABILITY_ENABLED:-1}"
+      SIMBAY_OTEL_ENDPOINT: "${SIMBAY_OTEL_ENDPOINT:-http://tempo:4317}"
 
     mem_limit: 10g
     volumes:

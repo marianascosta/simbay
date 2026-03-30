@@ -2,7 +2,7 @@
 # 1. IMPORTS
 # ==========================================
 import logging
-import os
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -27,12 +27,19 @@ def load_mujoco_model(xml_path):
     The OS caches this file in RAM automatically, making it safe and lightning-fast
     to call this 100 times in a loop for the Particle Filter.
     """
-    set_span_attributes({"mujoco.xml_path": str(xml_path)})
+    candidate = Path(xml_path)
+    if not candidate.exists():
+        project_root = Path(__file__).resolve().parents[2]
+        fallback = project_root / candidate
+        if fallback.exists():
+            candidate = fallback
+    resolved_xml_path = str(candidate)
+    set_span_attributes({"mujoco.xml_path": resolved_xml_path})
     try:
-        model = mujoco.MjModel.from_xml_path(xml_path)  # type: ignore
+        model = mujoco.MjModel.from_xml_path(resolved_xml_path)  # type: ignore
         data = mujoco.MjData(model)  # type: ignore
     except ValueError as e:
-        raise ValueError(f"Error loading MuJoCo XML from {xml_path}: {e}")
+        raise ValueError(f"Error loading MuJoCo XML from {resolved_xml_path}: {e}")
 
     # Configure initial state
     data.qpos[:7] = FRANKA_HOME_QPOS
@@ -116,10 +123,8 @@ def prepare_model_for_warp(model) -> None:
     model.geom_margin[:] = 0.0
     model.geom_gap[:] = 0.0
 
-    # Preserve the previous batched-backend collision model: only the floor,
-    # fingertip-pad boxes, and the object participate in contact. Mesh and
-    # sphere geoms are disabled to keep Warp aligned with the prior runtime
-    # behavior and force signal characteristics.
+    # Keep the batched Warp path focused on the object, floor, and fingertip-pad
+    # box geoms. This avoids paying for full robot mesh contact in approach/descent.
     for geom_index in range(model.ngeom):
         geom_type = model.geom_type[geom_index]
         if geom_type in (mujoco.mjtGeom.mjGEOM_MESH, mujoco.mjtGeom.mjGEOM_SPHERE):
@@ -138,9 +143,7 @@ def initialize_mujoco_env(object_properties=DEFAULT_OBJECT_PROPS):
             "mujoco.object_type": str(object_properties["type"]),
         }
     )
-    xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
-
-    model, data = load_mujoco_model(xml_path)
+    model, data = load_mujoco_model(Path("models") / "scene.xml")
     modify_object_properties(model, data, "object", object_properties)
 
     return MujocoRobot(model, data)

@@ -1,0 +1,20 @@
+services:
+  simbay-mujoco:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base
+    container_name: simbay-mujoco
+    environment:
+      SIMBAY_ENVIRONMENT: "docker-dev"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
+      SIMBAY_BACKEND: "cpu"
+      SIMBAY_HEADLESS: "1"
+      SIMBAY_DOCKER_TARGET: "base"
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    ports:
+      - "8000:8000"
+    stdin_open: true
+    tty: true
