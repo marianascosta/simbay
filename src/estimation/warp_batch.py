@@ -13,6 +13,8 @@ import numpy as np
 import mujoco_warp as mjw
 import warp as wp
 
+from src.utils.settings import WARP_SET_CONST_ON_MASS_UPDATE
+
 logger = logging.getLogger("simbay.warp_batch")
 
 _RESAMPLE_STATE_FIELDS = ("qpos", "qvel", "ctrl")
@@ -67,6 +69,7 @@ class WarpBatch:
         self._size = int(len(masses))
         self._ctrl_dim = int(mj_model.nu)
         self._ctrl_np = np.zeros((self._size, self._ctrl_dim), dtype=np.float32)
+        self._set_const_on_mass_update = bool(WARP_SET_CONST_ON_MASS_UPDATE)
 
         logger.info(
             {
@@ -74,6 +77,7 @@ class WarpBatch:
                 "event": "warp_batch_init",
                 "msg": f"Initialised the Warp batch with {self._size} worlds.",
                 "nworld": self._size,
+                "set_const_on_mass_update": self._set_const_on_mass_update,
             }
         )
 
@@ -150,6 +154,8 @@ class WarpBatch:
     def set_masses(self, masses: np.ndarray) -> None:
         np.copyto(self._body_mass_column_np, np.asarray(masses, dtype=np.float32))
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
+        if self._set_const_on_mass_update:
+            mjw.set_const(self._model, self._data)
 
     def rollout(self, control_inputs: np.ndarray, mass_trajectory: np.ndarray) -> None:
         steps = int(control_inputs.shape[0])
@@ -160,6 +166,8 @@ class WarpBatch:
         for step_idx in range(steps):
             np.copyto(self._body_mass_column_np, mass_trajectory_np[step_idx])
             _assign_warp_array(self._model.body_mass, self._body_mass_np)
+            if self._set_const_on_mass_update:
+                mjw.set_const(self._model, self._data)
             self._ctrl_np[:] = control_inputs_np[step_idx]
             _assign_warp_array(self._data.ctrl, self._ctrl_np)
             mjw.step(self._model, self._data)

@@ -287,7 +287,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         sim_observation64 = np.asarray(sim_observation, dtype=np.float64)
         diff = observation_used - sim_observation64
         dist_sq = np.sum(diff**2, axis=1)
-        R = 1.0
+        R = self._measurement_variance
         sim_force_finite = np.isfinite(sim_observation64)
         diff_finite = np.isfinite(diff)
         valid_force_particle = np.all(sim_force_finite, axis=1)
@@ -328,12 +328,29 @@ class FrankaWarpEnv(ParticleEnvironment):
             self._state_invalid_active = state_invalid_now
         else:
             state_invalid_transition = False
-        contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
+        raw_contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
+        contact_counts_shape_valid = raw_contact_counts.size == self._num_particles
+        contact_counts = (
+            raw_contact_counts
+            if contact_counts_shape_valid
+            else np.zeros((self._num_particles,), dtype=np.int32)
+        )
 
         force_norms = np.linalg.norm(np.asarray(sim_forces, dtype=np.float64), axis=1)
         diff_norms = np.linalg.norm(diff, axis=1)
+        finite_force_norms_all = force_norms[np.isfinite(force_norms)]
+        masses64 = np.asarray(self._masses, dtype=np.float64)
+        mass_finite_mask = np.isfinite(masses64)
+        finite_mass_values = masses64[mass_finite_mask]
+        paired_mask = mass_finite_mask & np.isfinite(force_norms)
+        mass_force_norm_corr = float("nan")
+        if np.count_nonzero(paired_mask) >= 2:
+            paired_masses = masses64[paired_mask]
+            paired_force_norms = force_norms[paired_mask]
+            if np.std(paired_masses) > 1e-9 and np.std(paired_force_norms) > 1e-9:
+                mass_force_norm_corr = float(np.corrcoef(paired_masses, paired_force_norms)[0, 1])
         sim_force_signal_particle_ratio = float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
-        contact_metric_available = float(contact_counts.size > 0)
+        contact_metric_available = float(contact_counts_shape_valid and contact_counts.size > 0)
         contact_force_mismatch = float(
             contact_counts.size > 0 and float(np.max(contact_counts)) == 0.0 and sim_force_signal_particle_ratio > 0.0
         )
@@ -371,12 +388,18 @@ class FrankaWarpEnv(ParticleEnvironment):
             "sim_force_norm_min": float(np.min(finite_force_norms)) if finite_force_norms.size else float("nan"),
             "sim_force_norm_max": float(np.max(finite_force_norms)) if finite_force_norms.size else float("nan"),
             "sim_force_norm_mean": float(np.mean(finite_force_norms)) if finite_force_norms.size else float("nan"),
+            "sim_force_norm_std": float(np.std(finite_force_norms_all)) if finite_force_norms_all.size else float("nan"),
             "sim_force_axis_std_x": float(np.nanstd(sim_forces[:, 0])),
             "sim_force_axis_std_y": float(np.nanstd(sim_forces[:, 1])),
             "sim_force_axis_std_z": float(np.nanstd(sim_forces[:, 2])),
             "sim_torque_axis_std_x": float(np.nanstd(sim_torques[:, 0])),
             "sim_torque_axis_std_y": float(np.nanstd(sim_torques[:, 1])),
             "sim_torque_axis_std_z": float(np.nanstd(sim_torques[:, 2])),
+            "particle_mass_min": float(np.min(finite_mass_values)) if finite_mass_values.size else float("nan"),
+            "particle_mass_max": float(np.max(finite_mass_values)) if finite_mass_values.size else float("nan"),
+            "particle_mass_mean": float(np.mean(finite_mass_values)) if finite_mass_values.size else float("nan"),
+            "particle_mass_std": float(np.std(finite_mass_values)) if finite_mass_values.size else float("nan"),
+            "mass_force_norm_corr": mass_force_norm_corr,
             "dist_sq_min": float(np.min(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
             "dist_sq_max": float(np.max(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
             "dist_sq_mean": float(np.mean(finite_dist_sq)) if finite_dist_sq.size else float("nan"),
@@ -395,6 +418,7 @@ class FrankaWarpEnv(ParticleEnvironment):
             "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,
             "active_contact_particle_ratio": (float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0),
             "contact_metric_available": contact_metric_available,
+            "contact_count_worlds_reported": float(raw_contact_counts.size),
             "contact_force_mismatch": contact_force_mismatch,
             "sim_force_nonfinite_count": float(sim_force_nonfinite_count),
             "diff_nonfinite_count": float(diff_nonfinite_count),
