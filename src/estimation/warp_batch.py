@@ -207,9 +207,37 @@ class WarpBatch:
 
     def contact_counts(self) -> np.ndarray:
         ncon = getattr(self._data, "ncon", None)
-        if ncon is None:
-            return np.zeros((self._size,), dtype=np.int32)
-        return np.asarray(ncon.numpy(), dtype=np.int32).reshape(-1)
+        if ncon is not None:
+            counts = np.asarray(ncon.numpy(), dtype=np.int32).reshape(-1)
+            if counts.size == self._size:
+                return counts
+
+        # MuJoCo Warp tracks contacts globally across worlds via nacon and
+        # per-contact world ids. Reconstruct per-world counts from these fields.
+        counts = np.zeros((self._size,), dtype=np.int32)
+        nacon = getattr(self._data, "nacon", None)
+        contact = getattr(self._data, "contact", None)
+        contact_worldid = getattr(contact, "worldid", None) if contact is not None else None
+        if nacon is None or contact_worldid is None:
+            return counts
+
+        nacon_np = np.asarray(nacon.numpy(), dtype=np.int32).reshape(-1)
+        if nacon_np.size == 0:
+            return counts
+        total_contacts = int(max(nacon_np[0], 0))
+
+        world_ids = np.asarray(contact_worldid.numpy(), dtype=np.int32).reshape(-1)
+        if world_ids.size == 0:
+            return counts
+
+        active_count = min(total_contacts, world_ids.size)
+        if active_count <= 0:
+            return counts
+        active_world_ids = world_ids[:active_count]
+        valid = (active_world_ids >= 0) & (active_world_ids < self._size)
+        if np.any(valid):
+            np.add.at(counts, active_world_ids[valid], 1)
+        return counts
 
     def state_nonfinite_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
