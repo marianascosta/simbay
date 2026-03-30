@@ -10,8 +10,10 @@ import mujoco
 import numpy as np
 
 from src.utils.settings import DEFAULT_OBJECT_PROPS
+from src.utils.settings import WARP_FORCE_MEASUREMENT_VARIANCE
 from src.utils.settings import WARP_LIKELIHOOD_DEBUG_ENABLED
 from src.utils.settings import WARP_LIKELIHOOD_SPACE
+from src.utils.settings import WARP_TORQUE_MEASUREMENT_VARIANCE
 from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
 from src.utils.mujoco_utils import prepare_model_for_warp
@@ -59,6 +61,30 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._first_invalid_state_step: int | None = None
         self._likelihood_space = WARP_LIKELIHOOD_SPACE
         self._measurement_dim = 6 if self._likelihood_space == "wrench" else 3
+        self._force_measurement_variance = max(float(WARP_FORCE_MEASUREMENT_VARIANCE), 1e-6)
+        self._torque_measurement_variance = max(float(WARP_TORQUE_MEASUREMENT_VARIANCE), 1e-6)
+        if self._measurement_dim == 6:
+            self._measurement_variance_diag = np.array(
+                [
+                    self._force_measurement_variance,
+                    self._force_measurement_variance,
+                    self._force_measurement_variance,
+                    self._torque_measurement_variance,
+                    self._torque_measurement_variance,
+                    self._torque_measurement_variance,
+                ],
+                dtype=np.float64,
+            )
+        else:
+            self._measurement_variance_diag = np.array(
+                [
+                    self._force_measurement_variance,
+                    self._force_measurement_variance,
+                    self._force_measurement_variance,
+                ],
+                dtype=np.float64,
+            )
+        self._measurement_std_diag = np.sqrt(self._measurement_variance_diag)
 
     @property
     def num_particles(self) -> int:
@@ -278,6 +304,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._masses = next_particles.copy()
         if self._batch is not None:
             self._batch.set_masses(self._masses)
+            self._batch.forward()
         self._step_count += step_count
         return next_particles
 
@@ -289,6 +316,7 @@ class FrankaWarpEnv(ParticleEnvironment):
         ctrl_np = self._require_finite_array(name="sync_ctrl", values=ctrl)
         self._batch.set_masses(self._masses)
         self._batch.set_state_all_worlds(qpos=qpos_np, qvel=qvel_np, ctrl=ctrl_np)
+        self._batch.forward()
 
     def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
         del particles
@@ -310,10 +338,10 @@ class FrankaWarpEnv(ParticleEnvironment):
         observation_used = observation_np[: self._measurement_dim]
         sim_observation64 = np.asarray(sim_observation, dtype=np.float64)
         diff = observation_used - sim_observation64
-        dist_sq = np.sum(diff**2, axis=1)
-        R = 1.0
+        scaled_diff = diff / self._measurement_std_diag[np.newaxis, :]
+        dist_sq = np.sum(scaled_diff**2, axis=1)
         sim_force_finite = np.isfinite(sim_observation64)
-        diff_finite = np.isfinite(diff)
+        diff_finite = np.isfinite(scaled_diff)
         valid_force_particle = np.all(sim_force_finite, axis=1)
         valid_diff_particle = np.all(diff_finite, axis=1)
         valid_dist_particle = np.isfinite(dist_sq)
@@ -322,7 +350,9 @@ class FrankaWarpEnv(ParticleEnvironment):
         invalid_likelihood_particle_count = int(np.count_nonzero(~valid_likelihood_particle))
         likelihoods = np.full((self._num_particles,), float("nan"), dtype=np.float64)
         if np.any(valid_likelihood_particle):
-            likelihoods[valid_likelihood_particle] = np.exp(-0.5 * dist_sq[valid_likelihood_particle] / R)
+            valid_dist_sq = dist_sq[valid_likelihood_particle]
+            shifted_dist_sq = valid_dist_sq - float(np.min(valid_dist_sq))
+            likelihoods[valid_likelihood_particle] = np.exp(-0.5 * shifted_dist_sq)
         likelihood_finite = np.isfinite(likelihoods)
         sim_force_nonfinite_count = int(sim_observation.size - np.count_nonzero(sim_force_finite))
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
@@ -410,6 +440,8 @@ class FrankaWarpEnv(ParticleEnvironment):
             "obs_ty": float(observation_used[4]) if observation_used.size > 4 else 0.0,
             "obs_tz": float(observation_used[5]) if observation_used.size > 5 else 0.0,
             "obs_norm": float(np.linalg.norm(observation_used)),
+            "force_measurement_variance": float(self._force_measurement_variance),
+            "torque_measurement_variance": float(self._torque_measurement_variance),
             "sim_force_norm_min": float(np.min(finite_force_norms)) if finite_force_norms.size else float("nan"),
             "sim_force_norm_max": float(np.max(finite_force_norms)) if finite_force_norms.size else float("nan"),
             "sim_force_norm_mean": float(np.mean(finite_force_norms)) if finite_force_norms.size else float("nan"),

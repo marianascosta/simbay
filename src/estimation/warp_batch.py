@@ -150,6 +150,14 @@ class WarpBatch:
 
         mjw.step(self._model, self._data)
 
+    def forward(self) -> None:
+        forward_fn = getattr(mjw, "forward", None)
+        if callable(forward_fn):
+            forward_fn(self._model, self._data)
+            return
+        # Defensive fallback for older Mujoco-Warp builds.
+        mjw.step(self._model, self._data)
+
     def set_masses(self, masses: np.ndarray) -> None:
         np.copyto(self._body_mass_column_np, np.asarray(masses, dtype=np.float32))
         _assign_warp_array(self._model.body_mass, self._body_mass_np)

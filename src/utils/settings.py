@@ -13,6 +13,14 @@ def _read_bool(name: str, default: bool = False) -> bool:
     default_value = "1" if default else "0"
     return os.getenv(name, default_value).lower() in _TRUE_VALUES
 
+
+def _read_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return float(default)
+
+
 RUN_ID = os.getenv("SIMBAY_RUN_ID") or datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 HEADLESS = _read_bool("SIMBAY_HEADLESS", default=True)
 BACKEND = os.getenv("SIMBAY_BACKEND", "cpu").lower()
@@ -30,10 +38,15 @@ PARTICLE_HISTORY_ENABLED = _read_bool("SIMBAY_PARTICLE_HISTORY", default=False)
 WARP_LIKELIHOOD_DEBUG_ENABLED = _read_bool("SIMBAY_WARP_LIKELIHOOD_DEBUG", default=False)
 _WARP_LIKELIHOOD_SPACE_RAW = os.getenv("SIMBAY_WARP_LIKELIHOOD_SPACE", "wrench").strip().lower()
 WARP_LIKELIHOOD_SPACE = _WARP_LIKELIHOOD_SPACE_RAW if _WARP_LIKELIHOOD_SPACE_RAW in {"force", "wrench"} else "wrench"
-try:
-    WARP_MEASUREMENT_VARIANCE = max(float(os.getenv("SIMBAY_WARP_MEASUREMENT_VARIANCE", "1.0")), 1e-6)
-except ValueError:
-    WARP_MEASUREMENT_VARIANCE = 1.0
+WARP_MEASUREMENT_VARIANCE = max(_read_float("SIMBAY_WARP_MEASUREMENT_VARIANCE", 1.0), 1e-6)
+WARP_FORCE_MEASUREMENT_VARIANCE = max(
+    _read_float("SIMBAY_WARP_FORCE_MEASUREMENT_VARIANCE", WARP_MEASUREMENT_VARIANCE),
+    1e-6,
+)
+WARP_TORQUE_MEASUREMENT_VARIANCE = max(
+    _read_float("SIMBAY_WARP_TORQUE_MEASUREMENT_VARIANCE", WARP_MEASUREMENT_VARIANCE),
+    1e-6,
+)
 try:
     WARP_RESAMPLE_WARMUP_STEPS = max(int(os.getenv("SIMBAY_WARP_RESAMPLE_WARMUP_STEPS", "0")), 0)
 except ValueError:
