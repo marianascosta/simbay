@@ -7,6 +7,11 @@ services:
     container_name: simbay
     depends_on:
       - tempo
+      - prometheus
+      - grafana
+      - node-exporter
+      - loki
+      - promtail
     environment:
       SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
       SIMBAY_HEADLESS: "1"
@@ -26,7 +31,6 @@ services:
     image: prom/prometheus:latest
     container_name: simbay-prometheus
     depends_on:
-      - simbay
       - node-exporter
     command:
       - --config.file=/etc/prometheus/prometheus.yml

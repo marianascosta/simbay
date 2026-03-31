@@ -78,7 +78,7 @@ def setup(
     if backend == "mujoco-warp":
         env = FrankaWarpEnv(limits, num_particles, logging_data=log_data)
         particle_filter = WarpParticleFilter(env, logging_data=log_data)
-    elif backend == "cpu":
+    elif backend == "mujoco":
         env = FrankaMuJoCoEnv(limits, num_particles)
         particle_filter = ParticleFilter(env, logging_data=log_data)
     else:
@@ -511,13 +511,28 @@ def run_phase_4_lift(
 def generate_particle_filter_plot(
     *,
     history_estimates: list[float],
+    particle_history: list[np.ndarray],
     true_mass: float,
     env: Any,
+    backend: str,
+    num_particles: int,
+    run_id: str,
 ) -> Path:
     plt.figure(figsize=(10, 6))
-    plt.plot(range(len(history_estimates)), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
+    num_steps = len(history_estimates)
+    steps_to_plot = min(num_steps, len(particle_history))
+    for t in range(steps_to_plot):
+        snapshot = np.asarray(particle_history[t], dtype=np.float64).reshape(-1)
+        if snapshot.size == 0:
+            continue
+        plt.scatter([t] * snapshot.shape[0], snapshot, color="blue", alpha=0.05, s=15)
+    plt.plot(range(num_steps), history_estimates, color="red", linewidth=3, label="Filter Estimate (Mean)")
     plt.axhline(y=true_mass, color="green", linestyle="--", linewidth=2, label=f"True Mass ({true_mass} kg)")
-    plt.title("Particle Filter: Mass Estimation Evolution", fontsize=14, fontweight="bold")
+    plt.title(
+        f"Particle Filter: Mass Estimation Evolution ({backend}, {num_particles} particles)",
+        fontsize=14,
+        fontweight="bold",
+    )
     plt.xlabel("Simulation Step (Lifting Phase)", fontsize=12)
     plt.ylabel("Estimated Mass (kg)", fontsize=12)
     plt.ylim(env.min, env.max)
@@ -525,7 +540,8 @@ def generate_particle_filter_plot(
     plt.grid(True, linestyle=":", alpha=0.7)
     output_dir = Path("temp")
     output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / "particle_filter_evolution.png"
+    safe_run_id = run_id.replace(":", "-")
+    output_path = output_dir / f"particle_filter_evolution_{safe_run_id}.png"
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
     return output_path
@@ -681,8 +697,12 @@ def main(run_id: str = RUN_ID) -> None:
     logger.info({**log_data, "msg": "Started generating the output plots."})
     output_path = generate_particle_filter_plot(
         history_estimates=history_estimates,
+        particle_history=lift_result.particle_history,
         true_mass=true_mass,
         env=env,
+        backend=backend,
+        num_particles=num_particles,
+        run_id=run_id,
     )
     logger.info({**log_data, "msg": f"Saved the particle filter plot to {output_path}.", "path": str(output_path)})
 

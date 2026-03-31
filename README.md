@@ -20,7 +20,7 @@ Run commands inside the environment with `poetry run ...`.
 - `src/kinematics/`: IK and solver logic
 - `src/planning/`: trajectory planning
 - `src/estimation/`: particle-filter environment and estimator
-- `models/`: active MuJoCo XML entrypoints (`scene.xml`, `fr3v2_nohand.xml`)
+- `assets/franka_fr3_v2/scene.xml` and `assets/franka_fr3_v2/fr3v2.xml`: active MuJoCo XML entrypoints
 - `assets/franka_fr3_v2/assets/`: FR3 mesh assets used by the XML models
 
 ## Running on macOS

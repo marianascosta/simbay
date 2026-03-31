@@ -1381,6 +1381,7 @@ def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> N
 @dataclass(frozen=True)
 class LiftPhaseResult:
     history_estimates: list[float]
+    particle_history: list[np.ndarray]
     pf_wall_durations: list[float]
     pf_cpu_durations: list[float]
     invalid_sensor_events: int
@@ -1412,6 +1413,7 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
         return None
     return {
         "history_estimates": [],
+        "particle_history": [],
         "pf_wall_durations": [],
         "pf_cpu_durations": [],
         "robot_execute_total": 0.0,
@@ -1559,6 +1561,7 @@ def update_phase_4_state(
     state["history_estimates"].append(current_estimate)
     if hasattr(particle_filter, "particles"):
         state["latest_particles_snapshot"] = np.asarray(particle_filter.particles).copy()
+        state["particle_history"].append(np.asarray(particle_filter.particles).copy())
     if state["time_to_first_estimate_seconds"] < 0.0:
         state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
@@ -1841,6 +1844,7 @@ def finalize_phase_4_metrics(
     force_flush_tracing()
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
+        particle_history=state["particle_history"],
         pf_wall_durations=state["pf_wall_durations"],
         pf_cpu_durations=state["pf_cpu_durations"],
         invalid_sensor_events=state["invalid_sensor_events"],
