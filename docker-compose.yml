@@ -13,7 +13,7 @@ services:
       - loki
       - promtail
     environment:
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-100}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-400}"
       SIMBAY_HEADLESS: "1"
       SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
       SIMBAY_DOCKER_TARGET: "base"
@@ -22,6 +22,7 @@ services:
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
+      - ./plots:/app/plots
       - ./temp:/app/temp
     ports:
       - "8000:8000"

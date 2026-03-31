@@ -43,6 +43,8 @@ temp/
 *.qvel
 Backups/
 backup
+.tools
+plots
 
 # --- OS Specific ---
 .DS_Store
