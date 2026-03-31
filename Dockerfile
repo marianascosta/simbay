@@ -19,6 +19,7 @@ RUN poetry install --no-interaction --no-ansi
 COPY assets ./assets
 COPY src ./src
 COPY main.py ./
+COPY models ./models
 CMD ["python", "main.py"]
 
 
@@ -58,4 +59,5 @@ RUN poetry install --no-interaction --no-ansi
 COPY assets ./assets
 COPY src ./src
 COPY main.py ./
+COPY models ./models
 CMD ["python", "main.py"]

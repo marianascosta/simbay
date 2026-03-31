@@ -20,7 +20,8 @@ Run commands inside the environment with `poetry run ...`.
 - `src/kinematics/`: IK and solver logic
 - `src/planning/`: trajectory planning
 - `src/estimation/`: particle-filter environment and estimator
-- `assets/franka_fr3_v2/`: MuJoCo XML, meshes, and robot assets
+- `models/`: active MuJoCo XML entrypoints (`scene.xml`, `fr3v2_nohand.xml`)
+- `assets/franka_fr3_v2/assets/`: FR3 mesh assets used by the XML models
 
 ## Running on macOS
 
@@ -37,14 +38,20 @@ not depend on `poetry` or `pyenv` resolving the active environment correctly.
 
 ## Observability
 
-For the full local monitoring stack:
+Start the CPU-friendly local monitoring stack with the Makefile helper:
 
 ```sh
-docker compose --profile gpu up --build
+make docker-run
 ```
 
-This starts the app metrics endpoint, Prometheus, Grafana, and `node-exporter`
-in one workflow. Omit `--profile gpu` if you do not want `dcgm-exporter`.
+That command opens the usual app metrics view plus Prometheus, Grafana, and
+`node-exporter`. Enable the NVIDIA-only parts (the `cuda` build, `dcgm-exporter`,
+and the reserved GPU device) by setting `SIMBAY_ENABLE_GPU=1` before running the
+target:
+
+```sh
+SIMBAY_ENABLE_GPU=1 make docker-run
+```
 
 ## Profiling
 
