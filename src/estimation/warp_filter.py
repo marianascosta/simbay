@@ -104,6 +104,7 @@ class WarpParticleFilter:
         self._last_good_particles = self.particles.copy()
         self._last_good_weights = self.weights.copy()
         self._last_good_ess = self._ess
+        self._last_likelihoods = np.ones((self.N,), dtype=np.float64)
 
         state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
         self.state_bytes_total = state_bytes_total
@@ -181,13 +182,71 @@ class WarpParticleFilter:
     def _save_last_good_snapshot(self) -> None:
         diagnostics = self.env.last_measurement_diagnostics()
         if not self._measurement_is_valid(diagnostics):
+            self.logger.info(
+                {
+                    **self.logging_data,
+                    "event": "warp_recovery_snapshot_capture_skipped_invalid",
+                    "msg": (
+                        "Skipped capturing a last-good Warp snapshot because the "
+                        "measurement diagnostics were invalid."
+                    ),
+                    "step": self._step_index,
+                    "likelihood_finite_ratio": diagnostics.get(
+                        "likelihood_finite_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "diff_nonfinite_count": diagnostics.get(
+                        "diff_nonfinite_count", 0.0
+                    ),
+                    "likelihood_nonfinite_count": diagnostics.get(
+                        "likelihood_nonfinite_count", 0.0
+                    ),
+                    "qpos_nonfinite_count": diagnostics.get(
+                        "qpos_nonfinite_count", 0.0
+                    ),
+                    "qvel_nonfinite_count": diagnostics.get(
+                        "qvel_nonfinite_count", 0.0
+                    ),
+                    "sensordata_nonfinite_count": diagnostics.get(
+                        "sensordata_nonfinite_count", 0.0
+                    ),
+                    "ctrl_nonfinite_count": diagnostics.get(
+                        "ctrl_nonfinite_count", 0.0
+                    ),
+                }
+            )
             return
         if diagnostics.get("repaired_world_count", 0.0) > 0.0:
+            self.logger.info(
+                {
+                    **self.logging_data,
+                    "event": "warp_recovery_snapshot_capture_skipped_repaired",
+                    "msg": (
+                        "Skipped capturing a last-good Warp snapshot because world "
+                        "repair happened in the same update."
+                    ),
+                    "step": self._step_index,
+                    "repaired_world_count": diagnostics.get(
+                        "repaired_world_count", 0.0
+                    ),
+                }
+            )
             return
         self._last_good_particles = self.particles.copy()
         self._last_good_weights = self.weights.copy()
         self._last_good_ess = float(self._ess)
         self.env.capture_recovery_snapshot()
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "warp_recovery_snapshot_capture_succeeded",
+                "msg": "Captured a last-good Warp snapshot after a valid update.",
+                "step": self._step_index,
+                "ess": float(self._ess),
+            }
+        )
 
     def _skip_invalid_update(
         self,
@@ -199,6 +258,19 @@ class WarpParticleFilter:
             self.particles = self._last_good_particles.copy()
             self.weights = self._last_good_weights.copy()
             self._ess = float(self._last_good_ess)
+        else:
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_invalid_update_restore_unavailable",
+                    "msg": (
+                        "Could not restore a last-good Warp snapshot while skipping "
+                        "an invalid update."
+                    ),
+                    "step": self._step_index,
+                    "attempt": attempt,
+                }
+            )
         self._skipped_invalid_updates += 1
         self.logger.warning(
             {
@@ -264,6 +336,7 @@ class WarpParticleFilter:
 
     def update(self, observation) -> None:
         likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
         diagnostics = self.env.last_measurement_diagnostics()
         if self._measurement_is_valid(diagnostics) and self._measurement_is_informative(diagnostics):
             self.weights = _normalize_weights(self.weights, likelihoods)
@@ -290,6 +363,7 @@ class WarpParticleFilter:
             self.particles = self.env.propagate(self.particles, control_input)
         with annotate("warp_pf_likelihood"):
             likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
         diagnostics = self.env.last_measurement_diagnostics()
         if not self._measurement_is_valid(diagnostics):
             return self._skip_invalid_update(diagnostics)
@@ -336,6 +410,7 @@ class WarpParticleFilter:
             "skipped_invalid_updates": self._skipped_invalid_updates,
             "bootstrap_attempts": 1,
             "uninformative_update": False,
+            "likelihoods": self._last_likelihoods.copy(),
         }
 
     def bootstrap_first_update(

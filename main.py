@@ -2,10 +2,8 @@ import gc
 import math
 import signal
 import time
-from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -21,6 +19,13 @@ from src.planning import plan_linear_trajectory
 from src.utils import metrics
 from src.utils.logging_utils import logger as simbay_logger
 from src.utils.mujoco_utils import initialize_mujoco_env
+from src.utils.plots import generate_particle_cloud_gif
+from src.utils.plots import generate_particle_filter_plots
+from src.utils.plots import generate_likelihood_landscape_gif
+from src.utils.plots import generate_posterior_kde_gif
+from src.utils.plots import generate_posterior_evolution_gif
+from src.utils.plots import generate_real_robot_execution_gif
+from src.utils.plots import generate_wall_duration_vs_ess_gif
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import FRANKA_HOME_QPOS
@@ -464,7 +469,25 @@ def phase_4_step_logic(
                 "uniform_weight_l1_distance": 0.0,
                 "uniform_weight_max_deviation": 0.0,
                 "collapsed_to_uniform": False,
+                "likelihoods": np.asarray(
+                    getattr(particle_filter, "_last_likelihoods", np.ones(particle_filter.N)),
+                    dtype=np.float64,
+                ).copy(),
             }
+    if "likelihoods" not in step_result:
+        step_result["likelihoods"] = np.asarray(
+            getattr(particle_filter, "_last_likelihoods", np.ones(particle_filter.N)),
+            dtype=np.float64,
+        ).copy()
+    step_result["likelihood_particles"] = np.asarray(
+        particle_filter.particles, dtype=np.float64
+    ).copy()
+    step_result["real_sensor_reading"] = np.asarray(
+        measurements, dtype=np.float64
+    ).copy()
+    step_result["mean_particle_sensor_reading"] = np.asarray(
+        particle_filter.env.mean_particle_sensor_reads(), dtype=np.float64
+    ).copy()
     return step_result
 
 
@@ -558,167 +581,6 @@ def run_phase_4_lift(
             trajectory=trajectory,
             particle_filter=particle_filter,
         )
-
-
-def generate_particle_filter_plot(
-    *,
-    history_estimates: list[float],
-    ess_history: list[float],
-    particle_history: list[np.ndarray],
-    true_mass: float,
-    env: Any,
-    backend: str,
-    num_particles: int,
-    run_id: str,
-) -> Path:
-    fig, axes = plt.subplots(1, 2, figsize=(17, 6.8), facecolor="white")
-    mass_ax, ess_ax = axes
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-    primary_marker = "#1e3a8a"
-    reference_color = "#ea580c"
-    fig.suptitle(
-        f"Particle Filter Lift Summary\n{backend} backend • {num_particles} particles",
-        fontsize=18,
-        fontweight="bold",
-        color="#1f2933",
-        y=1.02,
-    )
-    mass_ax.set_facecolor("white")
-    ess_ax.set_facecolor("white")
-    for ax in axes:
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_color("#c8c4ba")
-        ax.spines["bottom"].set_color("#c8c4ba")
-        ax.tick_params(colors="#52606d")
-        ax.grid(True, linestyle="--", linewidth=0.8, alpha=0.25, color="#7b8794")
-
-    num_steps = len(history_estimates)
-    steps_to_plot = min(num_steps, len(particle_history))
-    for t in range(steps_to_plot):
-        snapshot = np.asarray(particle_history[t], dtype=np.float64).reshape(-1)
-        if snapshot.size == 0:
-            continue
-        mass_ax.scatter(
-            [t] * snapshot.shape[0], snapshot, color=primary_fill, alpha=0.12, s=18
-        )
-    mass_steps = range(num_steps)
-    mass_ax.plot(
-        mass_steps,
-        history_estimates,
-        color=primary_color,
-        linewidth=3.2,
-        label="Filter Estimate (Mean)",
-    )
-    mass_ax.fill_between(
-        mass_steps,
-        history_estimates,
-        true_mass,
-        color=primary_fill,
-        alpha=0.22,
-    )
-    mass_ax.axhline(
-        y=true_mass,
-        color=reference_color,
-        linestyle="--",
-        linewidth=2,
-        label=f"True Mass ({true_mass} kg)",
-    )
-    if history_estimates:
-        mass_ax.scatter(
-            [num_steps - 1],
-            [history_estimates[-1]],
-            color=primary_marker,
-            s=52,
-            zorder=4,
-        )
-    mass_ax.set_title(
-        "Mass Estimation Evolution",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    mass_ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    mass_ax.set_ylabel("Estimated Mass (kg)", fontsize=12)
-    mass_ax.set_ylim(env.min, env.max)
-    mass_ax.legend(loc="lower right", frameon=False)
-    if history_estimates:
-        final_error_kg = abs(true_mass - history_estimates[-1])
-        mass_ax.text(
-            0.02,
-            0.04,
-            f"Final estimate: {history_estimates[-1]:.3f} kg\nFinal error: {final_error_kg:.3f} kg",
-            transform=mass_ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
-        )
-
-    ess_steps = range(len(ess_history))
-    threshold = num_particles / 2
-    ess_ax.fill_between(
-        ess_steps,
-        ess_history,
-        0,
-        color=primary_fill,
-        alpha=0.22,
-    )
-    ess_ax.plot(ess_steps, ess_history, color=primary_color, linewidth=2.8, label="ESS")
-    ess_ax.axhline(
-        y=threshold,
-        color=reference_color,
-        linestyle="--",
-        linewidth=1.8,
-        label="Resample Threshold",
-    )
-    if ess_history:
-        ess_ax.scatter(
-            [len(ess_history) - 1],
-            [ess_history[-1]],
-            color=primary_marker,
-            s=52,
-            zorder=4,
-        )
-    ess_ax.set_title(
-        "Effective Sample Size",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ess_ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    ess_ax.set_ylabel("ESS Particles", fontsize=12)
-    ess_ax.set_xlim(0, max(len(ess_history) - 1, 0))
-    ess_ax.set_ylim(
-        0,
-        (
-            max(float(num_particles), max(ess_history, default=0.0)) * 1.05
-            if ess_history
-            else float(num_particles)
-        ),
-    )
-    ess_ax.legend(loc="lower right", frameon=False)
-    if ess_history:
-        ess_ax.text(
-            0.02,
-            0.04,
-            f"Final ESS: {ess_history[-1]:.1f}\nResample threshold: {threshold:.1f}",
-            transform=ess_ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
-        )
-
-    output_dir = Path("temp")
-    output_dir.mkdir(exist_ok=True)
-    safe_run_id = run_id.replace(":", "-")
-    output_path = output_dir / f"particle_filter_evolution_{safe_run_id}.png"
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
 
 
 @trace_call("simbay.main", span_name="main")
@@ -939,23 +801,147 @@ def main(run_id: str = RUN_ID) -> None:
     )
 
     logger.info({**log_data, "msg": "Started generating the output plots."})
-    output_path = generate_particle_filter_plot(
+    output_paths = generate_particle_filter_plots(
         history_estimates=history_estimates,
         ess_history=lift_result.ess_history,
+        resample_events=lift_result.resample_events,
+        gpu_utilization_history=lift_result.gpu_utilization_history,
+        gpu_vram_utilization_history=lift_result.gpu_vram_utilization_history,
+        real_sensor_history=lift_result.real_sensor_history,
+        mean_particle_sensor_history=lift_result.mean_particle_sensor_history,
         particle_history=lift_result.particle_history,
+        pf_wall_durations=lift_result.pf_wall_durations,
         true_mass=true_mass,
         env=env,
         backend=backend,
         num_particles=num_particles,
         run_id=run_id,
     )
+    for plot_name, output_path in output_paths.items():
+        logger.info(
+            {
+                **log_data,
+                "msg": f"Saved the {plot_name} plot to {output_path}.",
+                "plot_name": plot_name,
+                "path": str(output_path),
+            }
+        )
+    particle_cloud_gif_path = generate_particle_cloud_gif(
+        particle_history=lift_result.particle_history,
+        history_estimates=history_estimates,
+        likelihood_diagnostics_history=lift_result.likelihood_diagnostics_history,
+        true_mass=true_mass,
+        env=env,
+        run_id=run_id,
+        backend=backend,
+        num_particles=num_particles,
+        max_step=300,
+    )
     logger.info(
         {
             **log_data,
-            "msg": f"Saved the particle filter plot to {output_path}.",
-            "path": str(output_path),
+            "msg": f"Saved the particle cloud GIF to {particle_cloud_gif_path}.",
+            "path": str(particle_cloud_gif_path),
         }
     )
+    posterior_gif_path = generate_posterior_evolution_gif(
+        particle_history=lift_result.particle_history,
+        history_estimates=history_estimates,
+        resample_events=lift_result.resample_events,
+        true_mass=true_mass,
+        env=env,
+        run_id=run_id,
+        backend=backend,
+        num_particles=num_particles,
+        max_step=300,
+    )
+    logger.info(
+        {
+            **log_data,
+            "msg": f"Saved the particle posterior GIF to {posterior_gif_path}.",
+            "path": str(posterior_gif_path),
+        }
+    )
+    posterior_kde_gif_path = generate_posterior_kde_gif(
+        particle_history=lift_result.particle_history,
+        ess_history=lift_result.ess_history,
+        true_mass=true_mass,
+        env=env,
+        run_id=run_id,
+        backend=backend,
+        num_particles=num_particles,
+        max_step=300,
+    )
+    logger.info(
+        {
+            **log_data,
+            "msg": f"Saved the particle posterior KDE GIF to {posterior_kde_gif_path}.",
+            "path": str(posterior_kde_gif_path),
+        }
+    )
+    likelihood_landscape_gif_path = generate_likelihood_landscape_gif(
+        likelihood_history=lift_result.likelihood_history,
+        likelihood_particle_history=lift_result.likelihood_particle_history,
+        particle_history=lift_result.particle_history,
+        ess_history=lift_result.ess_history,
+        true_mass=true_mass,
+        env=env,
+        run_id=run_id,
+        backend=backend,
+        num_particles=num_particles,
+        max_step=300,
+    )
+    logger.info(
+        {
+            **log_data,
+            "msg": f"Saved the likelihood landscape GIF to {likelihood_landscape_gif_path}.",
+            "path": str(likelihood_landscape_gif_path),
+        }
+    )
+    wall_duration_vs_ess_gif_path = generate_wall_duration_vs_ess_gif(
+        ess_history=lift_result.ess_history,
+        pf_wall_durations=lift_result.pf_wall_durations,
+        resample_events=lift_result.resample_events,
+        num_particles=num_particles,
+        run_id=run_id,
+        backend=backend,
+        max_step=300,
+    )
+    logger.info(
+        {
+            **log_data,
+            "msg": f"Saved the wall-duration-vs-ESS GIF to {wall_duration_vs_ess_gif_path}.",
+            "path": str(wall_duration_vs_ess_gif_path),
+        }
+    )
+    try:
+        real_robot_gif_path = generate_real_robot_execution_gif(
+            model=real_robot.model,
+            trajectories=[
+                ("Approach", traj1),
+                ("Descend", traj2),
+                ("Grip", traj3),
+                ("Lift", traj4),
+            ],
+            dt=dt,
+            run_id=run_id,
+            backend=backend,
+        )
+        logger.info(
+            {
+                **log_data,
+                "msg": f"Saved the real robot execution GIF to {real_robot_gif_path}.",
+                "path": str(real_robot_gif_path),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            {
+                **log_data,
+                "msg": "Skipped generating the real robot execution GIF because offscreen rendering failed.",
+                "error": str(exc),
+            }
+        )
 
     gc.collect()
     logger.info(

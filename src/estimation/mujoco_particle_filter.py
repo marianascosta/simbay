@@ -78,14 +78,25 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
     def resample_states(self, indexes: np.ndarray) -> None:
         indexes_np = np.asarray(indexes, dtype=np.int32)
         if indexes_np.size != len(self.robots):
-            raise ValueError(f"Expected {len(self.robots)} indexes, got {indexes_np.size}.")
+            raise ValueError(
+                f"Expected {len(self.robots)} indexes, got {indexes_np.size}."
+            )
 
         # Preserve one unique MuJoCo world per particle by copying the selected
         # state into the existing robot pool instead of aliasing robot objects.
-        selected_qpos = [self.robots[int(src_idx)].data.qpos.copy() for src_idx in indexes_np]
-        selected_qvel = [self.robots[int(src_idx)].data.qvel.copy() for src_idx in indexes_np]
-        selected_ctrl = [self.robots[int(src_idx)].data.ctrl.copy() for src_idx in indexes_np]
-        selected_mass = [float(self.robots[int(src_idx)].model.body_mass[self.block_body_id]) for src_idx in indexes_np]
+        selected_qpos = [
+            self.robots[int(src_idx)].data.qpos.copy() for src_idx in indexes_np
+        ]
+        selected_qvel = [
+            self.robots[int(src_idx)].data.qvel.copy() for src_idx in indexes_np
+        ]
+        selected_ctrl = [
+            self.robots[int(src_idx)].data.ctrl.copy() for src_idx in indexes_np
+        ]
+        selected_mass = [
+            float(self.robots[int(src_idx)].model.body_mass[self.block_body_id])
+            for src_idx in indexes_np
+        ]
 
         for dst_idx, robot in enumerate(self.robots):
             robot.data.qpos[:] = selected_qpos[dst_idx]
@@ -109,7 +120,9 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
 
         return particles
 
-    def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
+    def compute_likelihoods(
+        self, particles: np.ndarray, observation: np.ndarray
+    ) -> np.ndarray:
         # 1. OPTIMIZATION: List comprehension is much faster than a standard for-loop append
         sim_z = np.array([robot.get_sensor_reads() for robot in self.robots])
 
@@ -125,3 +138,11 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         likelihoods = np.exp(-0.5 * dist_sq / R)
 
         return likelihoods
+
+    def mean_particle_sensor_reads(self) -> np.ndarray:
+        if not self.robots:
+            return np.zeros((3,), dtype=np.float64)
+        sim_z = np.array(
+            [robot.get_sensor_reads() for robot in self.robots], dtype=np.float64
+        )
+        return np.mean(sim_z, axis=0)

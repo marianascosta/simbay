@@ -41,7 +41,9 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         xml_path = os.path.join("assets", "franka_fr3_v2", "scene.xml")
         self._mj_model, self._mj_data = load_mujoco_model(xml_path)
-        modify_object_properties(self._mj_model, self._mj_data, "object", DEFAULT_OBJECT_PROPS)
+        modify_object_properties(
+            self._mj_model, self._mj_data, "object", DEFAULT_OBJECT_PROPS
+        )
         prepare_model_for_warp(self._mj_model)
 
         self.block_body_id = mujoco.mj_name2id(
@@ -80,7 +82,9 @@ class FrankaWarpEnv(ParticleEnvironment):
         return self._num_particles
 
     def initialize_particles(self) -> np.ndarray:
-        masses = self._rng.uniform(self.min, self.max, size=self._num_particles).astype(np.float32)
+        masses = self._rng.uniform(self.min, self.max, size=self._num_particles).astype(
+            np.float32
+        )
         self._batch = WarpBatch(
             self._mj_model,
             self._mj_data,
@@ -94,7 +98,9 @@ class FrankaWarpEnv(ParticleEnvironment):
             {
                 **self.logging_data,
                 "event": "warp_runtime_warmup_start",
-                "msg": (f"Started warming up the Warp runtime with {self._num_particles} particles."),
+                "msg": (
+                    f"Started warming up the Warp runtime with {self._num_particles} particles."
+                ),
             }
         )
         self._batch.warmup()
@@ -114,7 +120,10 @@ class FrankaWarpEnv(ParticleEnvironment):
         if self._batch is None:
             raise RuntimeError("Warp batch must be initialized before propagation.")
 
-        noise = self._rng.standard_normal(self._num_particles).astype(np.float32) * self.std_dev
+        noise = (
+            self._rng.standard_normal(self._num_particles).astype(np.float32)
+            * self.std_dev
+        )
         next_particles = np.clip(
             np.asarray(particles, dtype=np.float32) + noise,
             self.min,
@@ -135,7 +144,12 @@ class FrankaWarpEnv(ParticleEnvironment):
         if controls.size == 0:
             return self._masses.copy()
 
-        noise = self._rng.standard_normal((controls.shape[0], self._num_particles)).astype(np.float32) * self.std_dev
+        noise = (
+            self._rng.standard_normal((controls.shape[0], self._num_particles)).astype(
+                np.float32
+            )
+            * self.std_dev
+        )
         mass_trajectory = np.clip(
             np.cumsum(noise, axis=0) + self._masses[np.newaxis, :],
             self.min,
@@ -149,15 +163,64 @@ class FrankaWarpEnv(ParticleEnvironment):
 
         return self._masses.copy()
 
-    def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
+    def compute_likelihoods(
+        self, particles: np.ndarray, observation: np.ndarray
+    ) -> np.ndarray:
         del particles
         if self._batch is None:
-            raise RuntimeError("Warp batch must be initialized before likelihood evaluation.")
+            raise RuntimeError(
+                "Warp batch must be initialized before likelihood evaluation."
+            )
         repaired_worlds = np.zeros((self._num_particles,), dtype=bool)
         pre_counts = self._batch.state_nonfinite_counts()
         if any(value > 0 for value in pre_counts.values()):
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_world_repair_check_started",
+                    "msg": (
+                        "Starting Warp world repair because non-finite backend state "
+                        "was detected before likelihood evaluation."
+                    ),
+                    "step": self._step_count,
+                    "snapshot_ready": self._recovery_snapshot_ready,
+                    "qpos_nonfinite_count": int(pre_counts["qpos_nonfinite_count"]),
+                    "qvel_nonfinite_count": int(pre_counts["qvel_nonfinite_count"]),
+                    "sensordata_nonfinite_count": int(
+                        pre_counts["sensordata_nonfinite_count"]
+                    ),
+                    "ctrl_nonfinite_count": int(pre_counts["ctrl_nonfinite_count"]),
+                }
+            )
             with annotate("warp_repair_invalid_worlds"):
                 repaired_worlds = self._batch.repair_invalid_worlds_from_snapshot()
+            repaired_world_count = int(np.count_nonzero(repaired_worlds))
+            post_repair_counts = self._batch.state_nonfinite_counts()
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_world_repair_finished",
+                    "msg": (
+                        "Finished Warp world repair attempt after detecting an invalid "
+                        "backend state."
+                    ),
+                    "step": self._step_count,
+                    "snapshot_ready": self._recovery_snapshot_ready,
+                    "repaired_world_count": repaired_world_count,
+                    "remaining_qpos_nonfinite_count": int(
+                        post_repair_counts["qpos_nonfinite_count"]
+                    ),
+                    "remaining_qvel_nonfinite_count": int(
+                        post_repair_counts["qvel_nonfinite_count"]
+                    ),
+                    "remaining_sensordata_nonfinite_count": int(
+                        post_repair_counts["sensordata_nonfinite_count"]
+                    ),
+                    "remaining_ctrl_nonfinite_count": int(
+                        post_repair_counts["ctrl_nonfinite_count"]
+                    ),
+                }
+            )
         with annotate("warp_sensor_slice"):
             sim_forces = self._batch.sensor_slice(self.force_adr, 3)
         observation_np = np.asarray(observation, dtype=np.float32)
@@ -166,17 +229,29 @@ class FrankaWarpEnv(ParticleEnvironment):
         log_likelihoods = -0.5 * dist_sq / self._MEASUREMENT_VARIANCE
         finite_log_likelihoods = np.isfinite(log_likelihoods)
         if np.any(finite_log_likelihoods):
-            log_likelihoods = log_likelihoods - np.max(log_likelihoods[finite_log_likelihoods])
+            log_likelihoods = log_likelihoods - np.max(
+                log_likelihoods[finite_log_likelihoods]
+            )
         likelihoods = np.exp(log_likelihoods)
         sim_force_finite = np.isfinite(sim_forces)
         diff_finite = np.isfinite(diff)
         likelihood_finite = np.isfinite(likelihoods)
         valid_force_particle = np.isfinite(sim_forces).all(axis=1)
-        sim_force_nonfinite_count = int(sim_forces.size - np.count_nonzero(sim_force_finite))
+        sim_force_nonfinite_count = int(
+            sim_forces.size - np.count_nonzero(sim_force_finite)
+        )
         diff_nonfinite_count = int(diff.size - np.count_nonzero(diff_finite))
-        likelihood_nonfinite_count = int(likelihoods.size - np.count_nonzero(likelihood_finite))
-        sensor_invalid_now = sim_force_nonfinite_count > 0 or diff_nonfinite_count > 0 or likelihood_nonfinite_count > 0
-        sensor_invalid_transition = sensor_invalid_now and not self._sensor_invalid_active
+        likelihood_nonfinite_count = int(
+            likelihoods.size - np.count_nonzero(likelihood_finite)
+        )
+        sensor_invalid_now = (
+            sim_force_nonfinite_count > 0
+            or diff_nonfinite_count > 0
+            or likelihood_nonfinite_count > 0
+        )
+        sensor_invalid_transition = (
+            sensor_invalid_now and not self._sensor_invalid_active
+        )
         if sensor_invalid_transition:
             self._invalid_sensor_events += 1
             if self._first_invalid_sensor_step is None:
@@ -191,8 +266,12 @@ class FrankaWarpEnv(ParticleEnvironment):
         }
         if self._batch is not None:
             state_nonfinite_counts = self._batch.state_nonfinite_counts()
-            state_invalid_now = any(value > 0 for value in state_nonfinite_counts.values())
-            state_invalid_transition = state_invalid_now and not self._state_invalid_active
+            state_invalid_now = any(
+                value > 0 for value in state_nonfinite_counts.values()
+            )
+            state_invalid_transition = (
+                state_invalid_now and not self._state_invalid_active
+            )
             if state_invalid_transition:
                 self._invalid_state_events += 1
                 if self._first_invalid_state_step is None:
@@ -200,14 +279,22 @@ class FrankaWarpEnv(ParticleEnvironment):
             self._state_invalid_active = state_invalid_now
         else:
             state_invalid_transition = False
-        contact_counts = self._batch.contact_counts() if self._batch is not None else np.zeros((0,), dtype=np.int32)
+        contact_counts = (
+            self._batch.contact_counts()
+            if self._batch is not None
+            else np.zeros((0,), dtype=np.int32)
+        )
 
         force_norms = np.linalg.norm(sim_forces, axis=1)
         diff_norms = np.linalg.norm(diff, axis=1)
-        sim_force_signal_particle_ratio = float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
+        sim_force_signal_particle_ratio = (
+            float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
+        )
         contact_metric_available = float(contact_counts.size > 0)
         contact_force_mismatch = float(
-            contact_counts.size > 0 and float(np.max(contact_counts)) == 0.0 and sim_force_signal_particle_ratio > 0.0
+            contact_counts.size > 0
+            and float(np.max(contact_counts)) == 0.0
+            and sim_force_signal_particle_ratio > 0.0
         )
 
         if sensor_invalid_transition:
@@ -236,8 +323,12 @@ class FrankaWarpEnv(ParticleEnvironment):
                 {
                     **self.logging_data,
                     "event": "warp_repaired_invalid_worlds",
-                    "msg": (f"Repaired invalid Warp worlds at step {self._step_count}."),
+                    "msg": (
+                        f"Repaired invalid Warp worlds at step {self._step_count}."
+                    ),
                     "step": self._step_count,
+                    "repaired_world_count": int(np.count_nonzero(repaired_worlds)),
+                    "snapshot_ready": self._recovery_snapshot_ready,
                 }
             )
 
@@ -255,14 +346,30 @@ class FrankaWarpEnv(ParticleEnvironment):
             "diff_norm_min": float(np.min(diff_norms)),
             "diff_norm_max": float(np.max(diff_norms)),
             "diff_norm_mean": float(np.mean(diff_norms)),
-            "sim_force_finite_ratio": float(np.mean(sim_force_finite)) if sim_force_finite.size else 0.0,
-            "diff_finite_ratio": float(np.mean(diff_finite)) if diff_finite.size else 0.0,
-            "likelihood_finite_ratio": (float(np.mean(likelihood_finite)) if likelihood_finite.size else 0.0),
-            "valid_force_particle_ratio": (float(np.mean(valid_force_particle)) if valid_force_particle.size else 0.0),
+            "sim_force_finite_ratio": (
+                float(np.mean(sim_force_finite)) if sim_force_finite.size else 0.0
+            ),
+            "diff_finite_ratio": (
+                float(np.mean(diff_finite)) if diff_finite.size else 0.0
+            ),
+            "likelihood_finite_ratio": (
+                float(np.mean(likelihood_finite)) if likelihood_finite.size else 0.0
+            ),
+            "valid_force_particle_ratio": (
+                float(np.mean(valid_force_particle))
+                if valid_force_particle.size
+                else 0.0
+            ),
             "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
-            "contact_count_mean": float(np.mean(contact_counts)) if contact_counts.size else 0.0,
-            "contact_count_max": float(np.max(contact_counts)) if contact_counts.size else 0.0,
-            "active_contact_particle_ratio": (float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0),
+            "contact_count_mean": (
+                float(np.mean(contact_counts)) if contact_counts.size else 0.0
+            ),
+            "contact_count_max": (
+                float(np.max(contact_counts)) if contact_counts.size else 0.0
+            ),
+            "active_contact_particle_ratio": (
+                float(np.mean(contact_counts > 0)) if contact_counts.size else 0.0
+            ),
             "contact_metric_available": contact_metric_available,
             "contact_force_mismatch": contact_force_mismatch,
             "sim_force_nonfinite_count": float(sim_force_nonfinite_count),
@@ -271,15 +378,27 @@ class FrankaWarpEnv(ParticleEnvironment):
             "invalid_sensor_events": float(self._invalid_sensor_events),
             "invalid_state_events": float(self._invalid_state_events),
             "first_invalid_sensor_step": float(
-                self._first_invalid_sensor_step if self._first_invalid_sensor_step is not None else -1
+                self._first_invalid_sensor_step
+                if self._first_invalid_sensor_step is not None
+                else -1
             ),
             "first_invalid_state_step": float(
-                self._first_invalid_state_step if self._first_invalid_state_step is not None else -1
+                self._first_invalid_state_step
+                if self._first_invalid_state_step is not None
+                else -1
             ),
-            "qpos_nonfinite_count": float(state_nonfinite_counts["qpos_nonfinite_count"]),
-            "qvel_nonfinite_count": float(state_nonfinite_counts["qvel_nonfinite_count"]),
-            "sensordata_nonfinite_count": float(state_nonfinite_counts["sensordata_nonfinite_count"]),
-            "ctrl_nonfinite_count": float(state_nonfinite_counts["ctrl_nonfinite_count"]),
+            "qpos_nonfinite_count": float(
+                state_nonfinite_counts["qpos_nonfinite_count"]
+            ),
+            "qvel_nonfinite_count": float(
+                state_nonfinite_counts["qvel_nonfinite_count"]
+            ),
+            "sensordata_nonfinite_count": float(
+                state_nonfinite_counts["sensordata_nonfinite_count"]
+            ),
+            "ctrl_nonfinite_count": float(
+                state_nonfinite_counts["ctrl_nonfinite_count"]
+            ),
             "repaired_world_count": float(np.count_nonzero(repaired_worlds)),
             "likelihood_min": float(np.min(likelihoods)),
             "likelihood_max": float(np.max(likelihoods)),
@@ -289,6 +408,12 @@ class FrankaWarpEnv(ParticleEnvironment):
         }
 
         return likelihoods
+
+    def mean_particle_sensor_reads(self) -> np.ndarray:
+        if self._batch is None:
+            return np.zeros((3,), dtype=np.float32)
+        sim_forces = self._batch.sensor_slice(self.force_adr, 3)
+        return np.mean(sim_forces, axis=0, dtype=np.float32)
 
     def last_measurement_diagnostics(self) -> dict[str, float]:
         return self._last_measurement_diagnostics.copy()
@@ -303,7 +428,9 @@ class FrankaWarpEnv(ParticleEnvironment):
     def warmup_runtime(self, rollout_lengths) -> list[int]:
         if self._batch is None:
             raise RuntimeError("Warp batch must be initialized before warmup.")
-        normalized_lengths = sorted({int(length) for length in rollout_lengths if int(length) > 0})
+        normalized_lengths = sorted(
+            {int(length) for length in rollout_lengths if int(length) > 0}
+        )
         for length in normalized_lengths:
             self._batch.warmup_rollout(length)
         self.logger.info(
@@ -323,17 +450,58 @@ class FrankaWarpEnv(ParticleEnvironment):
         self._recovery_masses = self._masses.copy()
         self._recovery_step_count = self._step_count
         self._recovery_rng_state = self._rng.bit_generator.state
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "warp_recovery_snapshot_captured",
+                "msg": "Captured a Warp recovery snapshot for future world repair.",
+                "step": self._step_count,
+            }
+        )
 
     def restore_recovery_snapshot(self) -> bool:
         if self._batch is None or not self._recovery_snapshot_ready:
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_recovery_snapshot_restore_skipped",
+                    "msg": "Skipped restoring a Warp recovery snapshot because none is available.",
+                    "step": self._step_count,
+                    "snapshot_ready": self._recovery_snapshot_ready,
+                }
+            )
             return False
         if not self._batch.restore_recovery_snapshot():
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_recovery_snapshot_restore_failed",
+                    "msg": "Failed to restore the Warp recovery snapshot in the batch backend.",
+                    "step": self._step_count,
+                }
+            )
             return False
         self._masses = self._recovery_masses.copy()
         self._step_count = int(self._recovery_step_count)
         self._rng.bit_generator.state = self._recovery_rng_state
         counts = self._batch.state_nonfinite_counts()
-        return not any(value > 0 for value in counts.values())
+        restore_valid = not any(value > 0 for value in counts.values())
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "warp_recovery_snapshot_restored",
+                "msg": "Restored the Warp recovery snapshot.",
+                "step": self._step_count,
+                "restore_valid": restore_valid,
+                "qpos_nonfinite_count": int(counts["qpos_nonfinite_count"]),
+                "qvel_nonfinite_count": int(counts["qvel_nonfinite_count"]),
+                "sensordata_nonfinite_count": int(
+                    counts["sensordata_nonfinite_count"]
+                ),
+                "ctrl_nonfinite_count": int(counts["ctrl_nonfinite_count"]),
+            }
+        )
+        return restore_valid
 
     def memory_profile(self) -> dict[str, int | float | str]:
         if self._batch is not None:

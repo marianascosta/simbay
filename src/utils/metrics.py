@@ -1669,6 +1669,14 @@ def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> N
 class LiftPhaseResult:
     history_estimates: list[float]
     ess_history: list[float]
+    resample_events: list[bool]
+    likelihood_diagnostics_history: list[dict[str, float]]
+    likelihood_history: list[np.ndarray]
+    likelihood_particle_history: list[np.ndarray]
+    gpu_utilization_history: list[float]
+    gpu_vram_utilization_history: list[float]
+    real_sensor_history: list[np.ndarray]
+    mean_particle_sensor_history: list[np.ndarray]
     particle_history: list[np.ndarray]
     pf_wall_durations: list[float]
     pf_cpu_durations: list[float]
@@ -1704,6 +1712,14 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
     return {
         "history_estimates": [],
         "ess_history": [],
+        "resample_events": [],
+        "likelihood_diagnostics_history": [],
+        "likelihood_history": [],
+        "likelihood_particle_history": [],
+        "gpu_utilization_history": [],
+        "gpu_vram_utilization_history": [],
+        "real_sensor_history": [],
+        "mean_particle_sensor_history": [],
         "particle_history": [],
         "pf_wall_durations": [],
         "pf_cpu_durations": [],
@@ -1771,6 +1787,22 @@ def update_warp_memory_metrics(env: Any, *, stage: str) -> None:
         bytes_limit=int(env_memory_profile["bytes_limit"]),
         state_bytes_estimate=int(env_memory_profile.get("state_bytes_estimate", 0)),
     )
+
+
+def read_gpu_utilization_pct() -> float | None:
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None
+    return float(gpu_metrics["utilization_pct"])
+
+
+def read_gpu_vram_utilization_pct() -> float | None:
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None
+    return float(gpu_metrics["fb_utilization_pct"])
 
 
 def observed_stage(stage: str, *, env_arg: str | None = None):
@@ -1860,8 +1892,43 @@ def update_phase_4_state(
 ) -> dict[str, float]:
     current_estimate = float(particle_filter.estimate())
     current_ess = float(step_result.get("ess", particle_filter.effective_sample_size()))
+    current_gpu_utilization = read_gpu_utilization_pct()
+    current_gpu_vram_utilization = read_gpu_vram_utilization_pct()
     state["history_estimates"].append(current_estimate)
     state["ess_history"].append(current_ess)
+    state["resample_events"].append(bool(step_result.get("resampled", False)))
+    state["likelihood_diagnostics_history"].append(
+        dict(step_result.get("diagnostics", {}))
+    )
+    state["likelihood_history"].append(
+        np.asarray(step_result.get("likelihoods", np.array([], dtype=np.float64))).copy()
+    )
+    state["likelihood_particle_history"].append(
+        np.asarray(
+            step_result.get("likelihood_particles", np.array([], dtype=np.float64))
+        ).copy()
+    )
+    state["gpu_utilization_history"].append(
+        float(current_gpu_utilization)
+        if current_gpu_utilization is not None
+        else float("nan")
+    )
+    state["gpu_vram_utilization_history"].append(
+        float(current_gpu_vram_utilization)
+        if current_gpu_vram_utilization is not None
+        else float("nan")
+    )
+    state["real_sensor_history"].append(
+        np.asarray(
+            step_result.get("real_sensor_reading", np.zeros((3,))), dtype=np.float64
+        ).copy()
+    )
+    state["mean_particle_sensor_history"].append(
+        np.asarray(
+            step_result.get("mean_particle_sensor_reading", np.zeros((3,))),
+            dtype=np.float64,
+        ).copy()
+    )
     if hasattr(particle_filter, "particles"):
         state["latest_particles_snapshot"] = np.asarray(
             particle_filter.particles
@@ -2222,6 +2289,14 @@ def finalize_phase_4_metrics(
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
         ess_history=state["ess_history"],
+        resample_events=state["resample_events"],
+        likelihood_diagnostics_history=state["likelihood_diagnostics_history"],
+        likelihood_history=state["likelihood_history"],
+        likelihood_particle_history=state["likelihood_particle_history"],
+        gpu_utilization_history=state["gpu_utilization_history"],
+        gpu_vram_utilization_history=state["gpu_vram_utilization_history"],
+        real_sensor_history=state["real_sensor_history"],
+        mean_particle_sensor_history=state["mean_particle_sensor_history"],
         particle_history=state["particle_history"],
         pf_wall_durations=state["pf_wall_durations"],
         pf_cpu_durations=state["pf_cpu_durations"],
