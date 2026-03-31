@@ -76,7 +76,23 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         }
 
     def resample_states(self, indexes: np.ndarray) -> None:
-        self.robots = [self.robots[i] for i in indexes]
+        indexes_np = np.asarray(indexes, dtype=np.int32)
+        if indexes_np.size != len(self.robots):
+            raise ValueError(f"Expected {len(self.robots)} indexes, got {indexes_np.size}.")
+
+        # Preserve one unique MuJoCo world per particle by copying the selected
+        # state into the existing robot pool instead of aliasing robot objects.
+        selected_qpos = [self.robots[int(src_idx)].data.qpos.copy() for src_idx in indexes_np]
+        selected_qvel = [self.robots[int(src_idx)].data.qvel.copy() for src_idx in indexes_np]
+        selected_ctrl = [self.robots[int(src_idx)].data.ctrl.copy() for src_idx in indexes_np]
+        selected_mass = [float(self.robots[int(src_idx)].model.body_mass[self.block_body_id]) for src_idx in indexes_np]
+
+        for dst_idx, robot in enumerate(self.robots):
+            robot.data.qpos[:] = selected_qpos[dst_idx]
+            robot.data.qvel[:] = selected_qvel[dst_idx]
+            robot.data.ctrl[:] = selected_ctrl[dst_idx]
+            robot.model.body_mass[self.block_body_id] = selected_mass[dst_idx]
+            mujoco.mj_forward(robot.model, robot.data)  # type: ignore
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         # 1. Apply process noise to the mathematical state (the Artificial Random Walk)
