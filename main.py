@@ -432,6 +432,14 @@ def run_phase_4_lift(
 ) -> metrics.LiftPhaseResult:
     phase = "phase_4_lift"
     stage_state = metrics.init_stage_state(phase)
+    if (
+        stage_state is not None
+        and hasattr(particle_filter, "particles")
+        and np.asarray(stage_state["initial_particles"]).size == 0
+    ):
+        stage_state["initial_particles"] = np.asarray(
+            particle_filter.particles, dtype=np.float64
+        ).copy()
     phase_started_at = time.perf_counter()
     set_span_attributes(
         {
@@ -732,8 +740,6 @@ def main(run_id: str = RUN_ID) -> None:
             history_estimates=history_estimates,
             ess_history=lift_result.ess_history,
             resample_events=lift_result.resample_events,
-            gpu_utilization_history=lift_result.gpu_utilization_history,
-            gpu_vram_utilization_history=lift_result.gpu_vram_utilization_history,
             real_sensor_history=lift_result.real_sensor_history,
             mean_particle_sensor_history=lift_result.mean_particle_sensor_history,
             initial_particles=lift_result.initial_particles,

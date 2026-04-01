@@ -1330,134 +1330,6 @@ def plot_relative_error(
         )
 
 
-def plot_gpu_usage(
-    ax: Any,
-    *,
-    gpu_utilization_history: list[float],
-) -> None:
-    gpu_steps = range(len(gpu_utilization_history))
-    valid_gpu_values = [
-        value for value in gpu_utilization_history if not np.isnan(value)
-    ]
-    if valid_gpu_values:
-        ax.fill_between(
-            gpu_steps, gpu_utilization_history, 0, color=_PRIMARY_FILL, alpha=0.18
-        )
-        ax.plot(
-            gpu_steps,
-            gpu_utilization_history,
-            color=_PRIMARY_COLOR,
-            linewidth=2.5,
-            label="GPU utilization",
-        )
-        ax.scatter(
-            [len(gpu_utilization_history) - 1],
-            [gpu_utilization_history[-1]],
-            color=_PRIMARY_MARKER,
-            s=40,
-            zorder=3,
-        )
-        ax.axhline(
-            y=np.mean(valid_gpu_values),
-            color=_REFERENCE_COLOR,
-            linewidth=1.6,
-            linestyle="--",
-            label="Average",
-        )
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No GPU usage samples recorded",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=12,
-            color=_TEXT_COLOR,
-        )
-
-    _set_panel_title(ax, "GPU Utilization")
-    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
-    ax.set_ylabel("Utilization (%)", fontsize=12)
-    ax.set_xlim(0, max(len(gpu_utilization_history), 1) - 1)
-    ax.set_ylim(*_percentage_axis_limits(gpu_utilization_history))
-    if valid_gpu_values:
-        _style_legend(ax, loc="lower right")
-        _add_stat_block(
-            ax,
-            (
-                f"Peak GPU: {np.max(valid_gpu_values):.1f}%\n"
-                f"Average GPU: {np.mean(valid_gpu_values):.1f}%"
-            ),
-        )
-
-
-def plot_vram_usage(
-    ax: Any,
-    *,
-    gpu_vram_utilization_history: list[float],
-) -> None:
-    vram_steps = range(len(gpu_vram_utilization_history))
-    valid_vram_values = [
-        value for value in gpu_vram_utilization_history if not np.isnan(value)
-    ]
-    if valid_vram_values:
-        ax.fill_between(
-            vram_steps,
-            gpu_vram_utilization_history,
-            0,
-            color=_PRIMARY_FILL,
-            alpha=0.18,
-        )
-        ax.plot(
-            vram_steps,
-            gpu_vram_utilization_history,
-            color=_PRIMARY_COLOR,
-            linewidth=2.5,
-            label="VRAM utilization",
-        )
-        ax.scatter(
-            [len(gpu_vram_utilization_history) - 1],
-            [gpu_vram_utilization_history[-1]],
-            color=_PRIMARY_MARKER,
-            s=40,
-            zorder=3,
-        )
-        ax.axhline(
-            y=np.mean(valid_vram_values),
-            color=_REFERENCE_COLOR,
-            linewidth=1.6,
-            linestyle="--",
-            label="Average",
-        )
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No VRAM usage samples recorded",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=12,
-            color=_TEXT_COLOR,
-        )
-
-    _set_panel_title(ax, "VRAM Utilization")
-    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
-    ax.set_ylabel("VRAM Utilization (%)", fontsize=12)
-    ax.set_xlim(0, max(len(gpu_vram_utilization_history), 1) - 1)
-    ax.set_ylim(*_percentage_axis_limits(gpu_vram_utilization_history))
-    if valid_vram_values:
-        _style_legend(ax, loc="lower right")
-        _add_stat_block(
-            ax,
-            (
-                f"Peak VRAM: {np.max(valid_vram_values):.1f}%\n"
-                f"Average VRAM: {np.mean(valid_vram_values):.1f}%"
-            ),
-        )
-
-
 def plot_sensor_comparison(
     ax: Any,
     *,
@@ -1736,8 +1608,6 @@ def generate_particle_filter_overview_plot(
     history_estimates: list[float],
     ess_history: list[float],
     resample_events: list[bool],
-    gpu_utilization_history: list[float],
-    gpu_vram_utilization_history: list[float],
     real_sensor_history: list[np.ndarray],
     mean_particle_sensor_history: list[np.ndarray],
     initial_particles: np.ndarray,
@@ -1753,8 +1623,8 @@ def generate_particle_filter_overview_plot(
         output_name="particle_filter_overview",
         title="Particle Filter Overview",
         subtitle=_plot_subtitle(backend, num_particles),
-        figsize=(18, 19),
-        nrows=4,
+        figsize=(18, 14),
+        nrows=3,
         ncols=2,
         plot_builders=[
             lambda ax: plot_mass_estimation_evolution(
@@ -1779,14 +1649,6 @@ def generate_particle_filter_overview_plot(
                 ax,
                 resample_events=resample_events,
             ),
-            lambda ax: plot_gpu_usage(
-                ax,
-                gpu_utilization_history=gpu_utilization_history,
-            ),
-            lambda ax: plot_vram_usage(
-                ax,
-                gpu_vram_utilization_history=gpu_vram_utilization_history,
-            ),
             lambda ax: plot_sensor_comparison(
                 ax,
                 real_sensor_history=real_sensor_history,
@@ -1801,8 +1663,6 @@ def generate_particle_filter_plots(
     history_estimates: list[float],
     ess_history: list[float],
     resample_events: list[bool],
-    gpu_utilization_history: list[float],
-    gpu_vram_utilization_history: list[float],
     real_sensor_history: list[np.ndarray],
     mean_particle_sensor_history: list[np.ndarray],
     initial_particles: np.ndarray,
@@ -1864,28 +1724,6 @@ def generate_particle_filter_plots(
             plot_builder=lambda ax: plot_resample_events_timeline(
                 ax,
                 resample_events=resample_events,
-            ),
-        ),
-        "gpu_usage": _save_single_plot(
-            run_id=run_id,
-            output_name="gpu_usage",
-            title="GPU Utilization Over Time",
-            subtitle=subtitle,
-            figsize=(12, 4.8),
-            plot_builder=lambda ax: plot_gpu_usage(
-                ax,
-                gpu_utilization_history=gpu_utilization_history,
-            ),
-        ),
-        "vram_usage": _save_single_plot(
-            run_id=run_id,
-            output_name="vram_usage",
-            title="GPU Memory Utilization Over Time",
-            subtitle=subtitle,
-            figsize=(12, 4.8),
-            plot_builder=lambda ax: plot_vram_usage(
-                ax,
-                gpu_vram_utilization_history=gpu_vram_utilization_history,
             ),
         ),
         "steps_per_second": _save_single_plot(
