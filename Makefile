@@ -37,7 +37,7 @@ local-mujoco-warp:
 	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 $(MUJOCO_CMD)
 
 docker-mujoco:
-	SIMBAY_BACKEND=mujoco SIMBAY_HEADLESS=1 docker compose up --build -d simbay
+	SIMBAY_BACKEND=mujoco SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=$${SIMBAY_PARTICLES:-400} docker compose up --build -d simbay
 
 docker-mujoco-warp:
 	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_ENABLE_GPU=1 docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile gpu up --build -d simbay

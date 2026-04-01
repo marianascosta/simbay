@@ -1,3 +1,5 @@
+import logging
+
 import mujoco
 import numpy as np
 
@@ -13,7 +15,14 @@ from .base import ParticleEnvironment
 
 @trace_public_methods("simbay.mujoco_env")
 class FrankaMuJoCoEnv(ParticleEnvironment):
-    def __init__(self, limits: tuple[float, float], num_particles: int):
+    def __init__(
+        self,
+        limits: tuple[float, float],
+        num_particles: int,
+        logging_data: dict[str, object] | None = None,
+    ):
+        self.logger = logging.getLogger("simbay.mujoco_env")
+        self.logging_data = dict(logging_data or {})
         self.min, self.max = limits
         self.robots: list[MujocoRobot] = []
 
@@ -28,8 +37,18 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
     def initialize_particles(self) -> np.ndarray:
         # Generate the initial uniform guesses for the block's mass
         masses = np.random.uniform(self.min, self.max, size=self.num_particles)
+        progress_interval = max(1, self.num_particles // 10)
 
-        for mass in masses:
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "mujoco_particle_world_init_started",
+                "msg": f"Started initializing {self.num_particles} MuJoCo particle worlds.",
+                "particles": self.num_particles,
+            }
+        )
+
+        for index, mass in enumerate(masses, start=1):
             # CRITICAL: Use .copy() so each robot gets a unique dictionary!
             object_properties = DEFAULT_OBJECT_PROPS.copy()
             object_properties["mass"] = mass
@@ -37,10 +56,32 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
             robot = initialize_mujoco_env(object_properties)
             self.robots.append(robot)
 
+            if index == self.num_particles or index % progress_interval == 0:
+                self.logger.info(
+                    {
+                        **self.logging_data,
+                        "event": "mujoco_particle_world_init_progress",
+                        "msg": (
+                            f"Initialized {index}/{self.num_particles} MuJoCo particle worlds."
+                        ),
+                        "particles_initialized": index,
+                        "particles": self.num_particles,
+                    }
+                )
+
         # Cache the C++ memory ID for the block (they are all identical models,
         # so the ID is the same for all 100 robots)
         self.block_body_id = mujoco.mj_name2id(  # type: ignore
             self.robots[0].model, mujoco.mjtObj.mjOBJ_BODY, "object"  # type: ignore
+        )
+
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "mujoco_particle_world_init_finished",
+                "msg": f"Finished initializing {self.num_particles} MuJoCo particle worlds.",
+                "particles": self.num_particles,
+            }
         )
 
         return masses

@@ -93,7 +93,7 @@ def setup(
         env = FrankaWarpEnv(limits, num_particles, logging_data=log_data)
         particle_filter = WarpParticleFilter(env, logging_data=log_data)
     elif backend == "mujoco":
-        env = FrankaMuJoCoEnv(limits, num_particles)
+        env = FrankaMuJoCoEnv(limits, num_particles, logging_data=log_data)
         particle_filter = ParticleFilter(env, logging_data=log_data)
     else:
         raise AssertionError(f"Unexpected backend: {backend}")

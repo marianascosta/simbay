@@ -15,7 +15,7 @@ services:
     environment:
       SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-400}"
       SIMBAY_HEADLESS: "1"
-      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
+      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco}"
       SIMBAY_DOCKER_TARGET: "base"
       SIMBAY_ENABLE_NSIGHT: "${SIMBAY_ENABLE_NSIGHT:-1}"
 

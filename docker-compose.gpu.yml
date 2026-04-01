@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
       target: cuda
     environment:
+      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
       SIMBAY_DOCKER_TARGET: "cuda"
     deploy:
       resources:
