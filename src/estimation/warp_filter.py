@@ -4,6 +4,7 @@ import numpy as np
 
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.profiling import annotate
+from src.utils.tracing import trace_public_methods
 
 from .warp_particle_filter import FrankaWarpEnv
 
@@ -25,6 +26,9 @@ def _normalize_weights(weights: np.ndarray, likelihoods: np.ndarray) -> np.ndarr
     total = max(float(np.sum(updated)), tiny)
     return updated / total
 
+
+def _all_particles_invalid(diagnostics: dict[str, float]) -> bool:
+    return bool(diagnostics.get("all_particles_invalid", 0.0) >= 1.0)
 
 def _effective_sample_size(weights: np.ndarray) -> float:
     return float(1.0 / np.sum(weights**2))
@@ -82,6 +86,10 @@ def _update_and_optionally_resample(
     return updated_weights, particles, ess, indexes, False
 
 
+@trace_public_methods(
+    "simbay.warp_particle_filter",
+    exclude={"estimate", "effective_sample_size", "memory_profile"},
+)
 class WarpParticleFilter:
     """NumPy-backed particle filter for the Warp environment."""
 
@@ -95,15 +103,12 @@ class WarpParticleFilter:
         init_memory_after = get_process_memory_bytes()
         self.N = int(self.particles.shape[0])
 
-        self.weights = np.full((self.N,), 1.0 / self.N, dtype=self.particles.dtype)
+        self.weights = np.full((self.N,), 1.0 / self.N, dtype=np.float64)
         self._rng = np.random.default_rng(7)
         self._ess = float(self.N)
         self._step_index = 0
         self._resample_count = 0
-        self._skipped_invalid_updates = 0
-        self._last_good_particles = self.particles.copy()
-        self._last_good_weights = self.weights.copy()
-        self._last_good_ess = self._ess
+        self._last_likelihoods = np.ones((self.N,), dtype=np.float64)
 
         state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
         self.state_bytes_total = state_bytes_total
@@ -155,120 +160,41 @@ class WarpParticleFilter:
     def predict_trajectory(self, trajectory) -> None:
         self.particles = self.env.predict_trajectory(trajectory)
 
-    @staticmethod
-    def _measurement_is_valid(diagnostics: dict[str, float]) -> bool:
-        return (
-            diagnostics.get("likelihood_finite_ratio", 0.0) >= 1.0
-            and diagnostics.get("sim_force_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("diff_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("likelihood_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("qpos_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("qvel_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("sensordata_nonfinite_count", 0.0) == 0.0
-            and diagnostics.get("ctrl_nonfinite_count", 0.0) == 0.0
-        )
-
-    @staticmethod
-    def _measurement_is_informative(diagnostics: dict[str, float]) -> bool:
-        return (
-            diagnostics.get("likelihood_std", 0.0) > 1e-3
-            or diagnostics.get("likelihood_range", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_x", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_y", 0.0) > 1e-3
-            or diagnostics.get("sim_force_axis_std_z", 0.0) > 1e-3
-        )
-
-    def _save_last_good_snapshot(self) -> None:
-        diagnostics = self.env.last_measurement_diagnostics()
-        if not self._measurement_is_valid(diagnostics):
-            return
-        if diagnostics.get("repaired_world_count", 0.0) > 0.0:
-            return
-        self._last_good_particles = self.particles.copy()
-        self._last_good_weights = self.weights.copy()
-        self._last_good_ess = float(self._ess)
-        self.env.capture_recovery_snapshot()
-
-    def _skip_invalid_update(
-        self,
-        diagnostics: dict[str, float],
-        attempt: int = 1,
-    ) -> dict[str, float | bool]:
-        restored = self.env.restore_recovery_snapshot()
-        if restored:
-            self.particles = self._last_good_particles.copy()
-            self.weights = self._last_good_weights.copy()
-            self._ess = float(self._last_good_ess)
-        self._skipped_invalid_updates += 1
-        self.logger.warning(
-            {
-                **self.logging_data,
-                "event": "warp_invalid_update_skipped",
-                "msg": (f"Skipped an invalid Warp update at step {self._step_index} " f"on attempt {attempt}."),
-                "step": self._step_index,
-                "attempt": attempt,
-                "restored": restored,
-            }
-        )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
-        result = {
-            "ess": float(self._ess),
-            "resampled": False,
-            "resample_count": self._resample_count,
-            "uniform_weight_l1_distance": uniform_weight_l1,
-            "uniform_weight_max_deviation": uniform_weight_max_dev,
-            "collapsed_to_uniform": collapsed_to_uniform,
-            "diagnostics": diagnostics,
-            "skipped_invalid_update": True,
-            "skipped_invalid_updates": self._skipped_invalid_updates,
-            "bootstrap_attempts": attempt,
-            "uninformative_update": False,
-        }
-        self._step_index += 1
-        return result
-
-    def _skip_uninformative_update(
-        self,
-        diagnostics: dict[str, float],
-    ) -> dict[str, float | bool]:
-        restored = self.env.restore_recovery_snapshot()
-        if restored:
-            self.particles = self._last_good_particles.copy()
-            self.weights = self._last_good_weights.copy()
-            self._ess = float(self._last_good_ess)
-        self.logger.warning(
-            {
-                **self.logging_data,
-                "event": "warp_uninformative_update_skipped",
-                "msg": f"Skipped an uninformative Warp update at step {self._step_index}.",
-                "step": self._step_index,
-                "restored": restored,
-            }
-        )
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
-        result = {
-            "ess": float(self._ess),
-            "resampled": False,
-            "resample_count": self._resample_count,
-            "uniform_weight_l1_distance": uniform_weight_l1,
-            "uniform_weight_max_deviation": uniform_weight_max_dev,
-            "collapsed_to_uniform": collapsed_to_uniform,
-            "diagnostics": diagnostics,
-            "skipped_invalid_update": False,
-            "skipped_invalid_updates": self._skipped_invalid_updates,
-            "bootstrap_attempts": 1,
-            "uninformative_update": True,
-        }
-        self._step_index += 1
-        return result
-
     def update(self, observation) -> None:
         likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
         diagnostics = self.env.last_measurement_diagnostics()
-        if self._measurement_is_valid(diagnostics) and self._measurement_is_informative(diagnostics):
+        if _all_particles_invalid(diagnostics):
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_all_particles_invalid_update_skipped",
+                    "msg": (
+                        "Skipped the Warp measurement update because "
+                        "`all_particles_invalid` was true. The code left "
+                        "`self.weights` and `self._ess` unchanged for this step."
+                    ),
+                    "step": self._step_index,
+                    "ess_before_skip": float(self._ess),
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
+                    "invalid_force_particle_ratio": diagnostics.get(
+                        "invalid_force_particle_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "likelihood_nonfinite_count": diagnostics.get(
+                        "likelihood_nonfinite_count", 0.0
+                    ),
+                }
+            )
+        else:
             self.weights = _normalize_weights(self.weights, likelihoods)
-            self._save_last_good_snapshot()
-        self._ess = _effective_sample_size(self.weights)
+            self._ess = _effective_sample_size(self.weights)
+            if self._ess < self.N / 2:
+                self.resample()
         self._step_index += 1
 
     def resample(self) -> None:
@@ -290,37 +216,97 @@ class WarpParticleFilter:
             self.particles = self.env.propagate(self.particles, control_input)
         with annotate("warp_pf_likelihood"):
             likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
         diagnostics = self.env.last_measurement_diagnostics()
-        if not self._measurement_is_valid(diagnostics):
-            return self._skip_invalid_update(diagnostics)
-        if not self._measurement_is_informative(diagnostics):
-            return self._skip_uninformative_update(diagnostics)
-
-        offset = float(self._rng.uniform())
-        (
-            self.weights,
-            self.particles,
-            self._ess,
-            indexes,
-            did_resample,
-        ) = _update_and_optionally_resample(self.weights, self.particles, likelihoods, offset)
-        if did_resample:
-            with annotate("warp_pf_resample_states"):
-                self.env.resample_states(indexes)
-            self._resample_count += 1
-        self._save_last_good_snapshot()
-        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
-        if collapsed_to_uniform and (
-            diagnostics.get("invalid_sensor_events", 0.0) > 0.0
-            or diagnostics.get("invalid_state_events", 0.0) > 0.0
-            or diagnostics.get("likelihood_finite_ratio", 1.0) < 1.0
-        ):
+        did_resample = False
+        if _all_particles_invalid(diagnostics):
             self.logger.warning(
                 {
                     **self.logging_data,
-                    "event": "warp_weight_update_uninformative",
-                    "msg": (f"Detected an uninformative Warp weight update at step " f"{self._step_index}."),
+                    "event": "warp_all_particles_invalid_update_skipped",
+                    "msg": (
+                        "Skipped the Warp measurement update because "
+                        "`all_particles_invalid` was true. The code left "
+                        "`self.weights` and `self._ess` unchanged for this step."
+                    ),
                     "step": self._step_index,
+                    "ess_before_skip": float(self._ess),
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
+                    "invalid_force_particle_ratio": diagnostics.get(
+                        "invalid_force_particle_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "likelihood_nonfinite_count": diagnostics.get(
+                        "likelihood_nonfinite_count", 0.0
+                    ),
+                }
+            )
+        else:
+            self.weights = _normalize_weights(self.weights, likelihoods)
+            self._ess = _effective_sample_size(self.weights)
+            if self._ess < self.N / 2:
+                offset = float(self._rng.uniform())
+                self.weights, self.particles, indexes = _systematic_resample(
+                    self.weights,
+                    self.particles,
+                    offset,
+                )
+                with annotate("warp_pf_resample_states"):
+                    self.env.resample_states(indexes)
+                self._ess = float(self.N)
+                self._resample_count += 1
+                did_resample = True
+        uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
+        if collapsed_to_uniform and diagnostics.get("invalid_force_particle_ratio", 0.0) > 0.0:
+            self.logger.warning(
+                {
+                    **self.logging_data,
+                    "event": "warp_weight_update_partially_invalid",
+                    "msg": (
+                        "Applied the Warp measurement update after masking invalid "
+                        "particles. The code assigned zero likelihood to particles "
+                        "with non-finite predicted forces and normalized weights over "
+                        "the remaining particles."
+                    ),
+                    "step": self._step_index,
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
+                    "invalid_force_particle_ratio": diagnostics.get(
+                        "invalid_force_particle_ratio", 0.0
+                    ),
+                    "dropped_particle_count": int(
+                        round(
+                            self.N
+                            * float(
+                                diagnostics.get("invalid_force_particle_ratio", 0.0)
+                            )
+                        )
+                    ),
+                    "effective_particle_count_after_mask": int(
+                        round(
+                            self.N
+                            * float(
+                                diagnostics.get("valid_force_particle_ratio", 0.0)
+                            )
+                        )
+                    ),
+                    "ess_after_update": float(self._ess),
+                    "collapsed_to_uniform": bool(collapsed_to_uniform),
+                    "uniform_weight_l1_distance": float(uniform_weight_l1),
+                    "likelihood_finite_ratio": diagnostics.get(
+                        "likelihood_finite_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "diff_nonfinite_count": diagnostics.get(
+                        "diff_nonfinite_count", 0.0
+                    ),
                 }
             )
         self._step_index += 1
@@ -333,9 +319,10 @@ class WarpParticleFilter:
             "collapsed_to_uniform": collapsed_to_uniform,
             "diagnostics": diagnostics,
             "skipped_invalid_update": False,
-            "skipped_invalid_updates": self._skipped_invalid_updates,
+            "skipped_invalid_updates": 0,
             "bootstrap_attempts": 1,
             "uninformative_update": False,
+            "likelihoods": self._last_likelihoods.copy(),
         }
 
     def bootstrap_first_update(
@@ -345,32 +332,10 @@ class WarpParticleFilter:
         *,
         max_attempts: int = 3,
     ) -> dict[str, float | bool]:
-        last_result: dict[str, float | bool] | None = None
-        for attempt in range(1, max_attempts + 1):
-            result = self.step(control_input, observation)
-            result["bootstrap_attempts"] = attempt
-            if not bool(result.get("skipped_invalid_update", False)):
-                if attempt > 1:
-                    self.logger.info(
-                        {
-                            **self.logging_data,
-                            "event": "warp_first_update_recovered",
-                            "msg": f"Recovered the first Warp update after {attempt} attempts.",
-                            "attempts": attempt,
-                            "step": self._step_index - 1,
-                        }
-                    )
-                return result
-            last_result = result
-        self.logger.error(
-            {
-                **self.logging_data,
-                "event": "warp_first_update_failed",
-                "msg": f"Failed to recover the first Warp update after {max_attempts} attempts.",
-                "attempts": max_attempts,
-            }
-        )
-        return last_result if last_result is not None else self.step(control_input, observation)
+        del max_attempts
+        result = self.step(control_input, observation)
+        result["bootstrap_attempts"] = 1
+        return result
 
     def effective_sample_size(self) -> float:
         return float(self._ess)

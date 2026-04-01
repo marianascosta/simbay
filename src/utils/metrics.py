@@ -18,6 +18,9 @@ from prometheus_client import Gauge
 from prometheus_client import make_wsgi_app
 
 from .logging_utils import get_process_memory_bytes
+from .settings import ENABLE_METRICS
+from .settings import CAPTURE_PHASE4_DEBUG_HISTORY
+from .settings import CAPTURE_PHASE4_GPU_HISTORY
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
 from .tracing import add_exemplar
 from .tracing import force_flush_tracing
@@ -61,6 +64,7 @@ class SubstageToken:
     substage: str
     started_at: float
 
+
 class _MetricsState:
     def __init__(self, enabled: bool, port: int, run_id: str = "unknown") -> None:
         self.enabled = enabled
@@ -96,7 +100,13 @@ class _MetricsState:
         self.runtime_environment_info = Gauge(
             "simbay_runtime_environment_info",
             "Resolved execution runtime environment for the current run.",
-            (*COMMON_LABELS, "execution_platform", "execution_device", "default_jax_platform", "default_jax_device"),
+            (
+                *COMMON_LABELS,
+                "execution_platform",
+                "execution_device",
+                "default_jax_platform",
+                "default_jax_device",
+            ),
             registry=self.registry,
         )
         self.device_fallback_applied = Gauge(
@@ -750,10 +760,16 @@ class _MetricsState:
             self._server = None
             return
         self._stop_event.clear()
-        self._server_thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._server_thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True
+        )
         self._server_thread.start()
-        self._sample_system_metrics(previous_cpu_totals=None, previous_process_totals=None)
-        self._system_thread = threading.Thread(target=self._run_system_sampler, daemon=True)
+        self._sample_system_metrics(
+            previous_cpu_totals=None, previous_process_totals=None
+        )
+        self._system_thread = threading.Thread(
+            target=self._run_system_sampler, daemon=True
+        )
         self._system_thread.start()
 
     def initialize_defaults(self) -> "_MetricsState":
@@ -788,13 +804,17 @@ class _MetricsState:
         for phase, substage in substages:
             self._known_substages.add((phase, substage))
             self.substage_active.labels(*self._substage(phase, substage)).set(0.0)
-            self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(0.0)
+            self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(
+                0.0
+            )
 
     def set_backend(self, backend: str, device: str) -> None:
         self.backend_info.labels(*self._common(), backend, device).set(1.0)
 
     def set_run_info(self, backend: str, particles: int, control_dt: float) -> None:
-        self.run_info.labels(*self._common(), backend, str(particles), f"{control_dt:.6f}").set(1.0)
+        self.run_info.labels(
+            *self._common(), backend, str(particles), f"{control_dt:.6f}"
+        ).set(1.0)
 
     def set_particle_count(self, particles: int) -> None:
         self.particle_count.labels(*self._common()).set(particles)
@@ -807,8 +827,12 @@ class _MetricsState:
         process_memory_per_particle_estimate_bytes: int,
     ) -> None:
         self.state_memory_total_bytes.labels(*self._common()).set(state_bytes_total)
-        self.state_memory_per_particle_bytes.labels(*self._common()).set(state_bytes_per_particle)
-        self.process_memory_per_particle_estimate_bytes.labels(*self._common()).set(process_memory_per_particle_estimate_bytes)
+        self.state_memory_per_particle_bytes.labels(*self._common()).set(
+            state_bytes_per_particle
+        )
+        self.process_memory_per_particle_estimate_bytes.labels(*self._common()).set(
+            process_memory_per_particle_estimate_bytes
+        )
 
     def set_mujoco_memory_profile(
         self,
@@ -819,11 +843,21 @@ class _MetricsState:
         native_bytes_per_robot: int,
         native_bytes_total: int,
     ) -> None:
-        self.mujoco_model_buffer_per_particle_bytes.labels(*self._common()).set(model_nbuffer_bytes_per_robot)
-        self.mujoco_data_buffer_per_particle_bytes.labels(*self._common()).set(data_nbuffer_bytes_per_robot)
-        self.mujoco_data_arena_per_particle_bytes.labels(*self._common()).set(data_narena_bytes_per_robot)
-        self.mujoco_native_memory_per_particle_bytes.labels(*self._common()).set(native_bytes_per_robot)
-        self.mujoco_native_memory_total_bytes.labels(*self._common()).set(native_bytes_total)
+        self.mujoco_model_buffer_per_particle_bytes.labels(*self._common()).set(
+            model_nbuffer_bytes_per_robot
+        )
+        self.mujoco_data_buffer_per_particle_bytes.labels(*self._common()).set(
+            data_nbuffer_bytes_per_robot
+        )
+        self.mujoco_data_arena_per_particle_bytes.labels(*self._common()).set(
+            data_narena_bytes_per_robot
+        )
+        self.mujoco_native_memory_per_particle_bytes.labels(*self._common()).set(
+            native_bytes_per_robot
+        )
+        self.mujoco_native_memory_total_bytes.labels(*self._common()).set(
+            native_bytes_total
+        )
 
     def set_runtime_environment(
         self,
@@ -841,13 +875,17 @@ class _MetricsState:
             default_jax_platform,
             default_jax_device,
         ).set(1.0)
-        self.device_fallback_applied.labels(*self._common()).set(1.0 if device_fallback_applied else 0.0)
+        self.device_fallback_applied.labels(*self._common()).set(
+            1.0 if device_fallback_applied else 0.0
+        )
 
     def start_stage(self, stage: str) -> StageToken:
         if stage not in self._known_stages:
             self.register_stages([stage])
         for known_stage in self._known_stages:
-            self.stage_active.labels(*self._stage(known_stage)).set(1.0 if known_stage == stage else 0.0)
+            self.stage_active.labels(*self._stage(known_stage)).set(
+                1.0 if known_stage == stage else 0.0
+            )
         self.update_process_rss(stage)
         return StageToken(stage=stage, started_at=time.perf_counter())
 
@@ -867,7 +905,9 @@ class _MetricsState:
         if (phase, substage) not in self._known_substages:
             self.register_substages([(phase, substage)])
         self.substage_active.labels(*self._substage(phase, substage)).set(1.0)
-        return SubstageToken(phase=phase, substage=substage, started_at=time.perf_counter())
+        return SubstageToken(
+            phase=phase, substage=substage, started_at=time.perf_counter()
+        )
 
     def finish_substage(self, token: SubstageToken) -> float:
         duration = time.perf_counter() - token.started_at
@@ -878,14 +918,27 @@ class _MetricsState:
         if (phase, substage) not in self._known_substages:
             self.register_substages([(phase, substage)])
         self.substage_active.labels(*self._substage(phase, substage)).set(0.0)
-        self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(duration)
+        self.substage_duration_seconds.labels(*self._substage(phase, substage)).set(
+            duration
+        )
 
-    def set_substage_workload(self, phase: str, substage: str, steps: int, particles: int, duration_seconds: float) -> None:
+    def set_substage_workload(
+        self,
+        phase: str,
+        substage: str,
+        steps: int,
+        particles: int,
+        duration_seconds: float,
+    ) -> None:
         particle_steps = float(steps * max(particles, 0))
         step_rate = float(steps / duration_seconds) if duration_seconds > 0 else 0.0
-        particle_step_rate = particle_steps / duration_seconds if duration_seconds > 0 else 0.0
+        particle_step_rate = (
+            particle_steps / duration_seconds if duration_seconds > 0 else 0.0
+        )
         ms_per_step = (duration_seconds * 1000.0 / steps) if steps > 0 else 0.0
-        ms_per_particle_step = duration_seconds * 1000.0 / particle_steps if particle_steps > 0 else 0.0
+        ms_per_particle_step = (
+            duration_seconds * 1000.0 / particle_steps if particle_steps > 0 else 0.0
+        )
         labels = self._substage(phase, substage)
         self.substage_steps.labels(*labels).set(steps)
         self.substage_step_rate_hz.labels(*labels).set(step_rate)
@@ -894,43 +947,121 @@ class _MetricsState:
         self.substage_ms_per_particle_step.labels(*labels).set(ms_per_particle_step)
 
     def update_process_rss(self, stage: str) -> None:
-        self.process_rss_bytes.labels(*self._stage(stage)).set(get_process_memory_bytes())
+        self.process_rss_bytes.labels(*self._stage(stage)).set(
+            get_process_memory_bytes()
+        )
 
-    def update_filter_state(self, ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
+    def update_filter_state(
+        self,
+        ess: float,
+        estimate: float,
+        wall_seconds: float,
+        cpu_seconds: float,
+        cpu_equivalent_cores: float,
+        particles: int,
+    ) -> None:
         self.effective_sample_size.labels(*self._common()).set(ess)
         self.mass_estimate_kg.labels(*self._common()).set(estimate)
         self.phase4_step_wall_seconds.labels(*self._common()).set(wall_seconds)
         self.phase4_step_cpu_seconds.labels(*self._common()).set(cpu_seconds)
-        self.phase4_cpu_equivalent_cores.labels(*self._common()).set(cpu_equivalent_cores)
-        self.phase4_step_rate_hz.labels(*self._common()).set(1.0 / wall_seconds if wall_seconds > 0 else 0.0)
+        self.phase4_cpu_equivalent_cores.labels(*self._common()).set(
+            cpu_equivalent_cores
+        )
+        self.phase4_step_rate_hz.labels(*self._common()).set(
+            1.0 / wall_seconds if wall_seconds > 0 else 0.0
+        )
         particle_steps = float(max(particles, 0))
-        self.phase4_particle_steps_per_second.labels(*self._common()).set(particle_steps / wall_seconds if wall_seconds > 0 else 0.0)
-        self.phase4_ms_per_particle_step.labels(*self._common()).set((wall_seconds * 1000.0 / particle_steps) if particle_steps > 0 else 0.0)
+        self.phase4_particle_steps_per_second.labels(*self._common()).set(
+            particle_steps / wall_seconds if wall_seconds > 0 else 0.0
+        )
+        self.phase4_ms_per_particle_step.labels(*self._common()).set(
+            (wall_seconds * 1000.0 / particle_steps) if particle_steps > 0 else 0.0
+        )
 
-    def update_accuracy_metrics(self, *, mass_abs_error_kg: float, mass_rel_error_pct: float, phase4_mae_kg: float, phase4_rmse_kg: float, mass_error_within_1pct: bool, mass_error_within_5pct: bool, mass_error_within_10pct: bool, convergence_time_to_5pct_seconds: float, convergence_time_to_10pct_seconds: float, time_to_first_estimate_seconds: float) -> None:
+    def update_accuracy_metrics(
+        self,
+        *,
+        mass_abs_error_kg: float,
+        mass_rel_error_pct: float,
+        phase4_mae_kg: float,
+        phase4_rmse_kg: float,
+        mass_error_within_1pct: bool,
+        mass_error_within_5pct: bool,
+        mass_error_within_10pct: bool,
+        convergence_time_to_5pct_seconds: float,
+        convergence_time_to_10pct_seconds: float,
+        time_to_first_estimate_seconds: float,
+    ) -> None:
         self.mass_abs_error_kg.labels(*self._common()).set(mass_abs_error_kg)
         self.mass_rel_error_pct.labels(*self._common()).set(mass_rel_error_pct)
         self.phase4_mae_kg.labels(*self._common()).set(phase4_mae_kg)
         self.phase4_rmse_kg.labels(*self._common()).set(phase4_rmse_kg)
-        self.mass_error_within_1pct.labels(*self._common()).set(1.0 if mass_error_within_1pct else 0.0)
-        self.mass_error_within_5pct.labels(*self._common()).set(1.0 if mass_error_within_5pct else 0.0)
-        self.mass_error_within_10pct.labels(*self._common()).set(1.0 if mass_error_within_10pct else 0.0)
-        self.convergence_time_to_5pct_seconds.labels(*self._common()).set(convergence_time_to_5pct_seconds)
-        self.convergence_time_to_10pct_seconds.labels(*self._common()).set(convergence_time_to_10pct_seconds)
-        self.time_to_first_estimate_seconds.labels(*self._common()).set(time_to_first_estimate_seconds)
+        self.mass_error_within_1pct.labels(*self._common()).set(
+            1.0 if mass_error_within_1pct else 0.0
+        )
+        self.mass_error_within_5pct.labels(*self._common()).set(
+            1.0 if mass_error_within_5pct else 0.0
+        )
+        self.mass_error_within_10pct.labels(*self._common()).set(
+            1.0 if mass_error_within_10pct else 0.0
+        )
+        self.convergence_time_to_5pct_seconds.labels(*self._common()).set(
+            convergence_time_to_5pct_seconds
+        )
+        self.convergence_time_to_10pct_seconds.labels(*self._common()).set(
+            convergence_time_to_10pct_seconds
+        )
+        self.time_to_first_estimate_seconds.labels(*self._common()).set(
+            time_to_first_estimate_seconds
+        )
 
-    def update_uncertainty_metrics(self, *, credible_interval_50_width_kg: float, credible_interval_90_width_kg: float, credible_interval_50_contains_truth: bool, credible_interval_90_contains_truth: bool, weight_entropy: float, weight_entropy_normalized: float, weight_perplexity: float) -> None:
-        self.credible_interval_50_width_kg.labels(*self._common()).set(credible_interval_50_width_kg)
-        self.credible_interval_90_width_kg.labels(*self._common()).set(credible_interval_90_width_kg)
-        self.credible_interval_50_contains_truth.labels(*self._common()).set(1.0 if credible_interval_50_contains_truth else 0.0)
-        self.credible_interval_90_contains_truth.labels(*self._common()).set(1.0 if credible_interval_90_contains_truth else 0.0)
+    def update_uncertainty_metrics(
+        self,
+        *,
+        credible_interval_50_width_kg: float,
+        credible_interval_90_width_kg: float,
+        credible_interval_50_contains_truth: bool,
+        credible_interval_90_contains_truth: bool,
+        weight_entropy: float,
+        weight_entropy_normalized: float,
+        weight_perplexity: float,
+    ) -> None:
+        self.credible_interval_50_width_kg.labels(*self._common()).set(
+            credible_interval_50_width_kg
+        )
+        self.credible_interval_90_width_kg.labels(*self._common()).set(
+            credible_interval_90_width_kg
+        )
+        self.credible_interval_50_contains_truth.labels(*self._common()).set(
+            1.0 if credible_interval_50_contains_truth else 0.0
+        )
+        self.credible_interval_90_contains_truth.labels(*self._common()).set(
+            1.0 if credible_interval_90_contains_truth else 0.0
+        )
         self.weight_entropy.labels(*self._common()).set(weight_entropy)
-        self.weight_entropy_normalized.labels(*self._common()).set(weight_entropy_normalized)
+        self.weight_entropy_normalized.labels(*self._common()).set(
+            weight_entropy_normalized
+        )
         self.weight_perplexity.labels(*self._common()).set(weight_perplexity)
 
-    def update_resample_state(self, *, steps: int, resample_count: int, resampled: bool, particle_min: float, particle_max: float, particle_mean: float, particle_std: float, particle_p10: float, particle_p50: float, particle_p90: float) -> None:
+    def update_resample_state(
+        self,
+        *,
+        steps: int,
+        resample_count: int,
+        resampled: bool,
+        particle_min: float,
+        particle_max: float,
+        particle_mean: float,
+        particle_std: float,
+        particle_p10: float,
+        particle_p50: float,
+        particle_p90: float,
+    ) -> None:
         self.resample_count.labels(*self._common()).set(resample_count)
-        self.resample_rate.labels(*self._common()).set((resample_count / steps) if steps > 0 else 0.0)
+        self.resample_rate.labels(*self._common()).set(
+            (resample_count / steps) if steps > 0 else 0.0
+        )
         self.last_step_resampled.labels(*self._common()).set(1.0 if resampled else 0.0)
         self.particle_mass_min_kg.labels(*self._common()).set(particle_min)
         self.particle_mass_max_kg.labels(*self._common()).set(particle_max)
@@ -940,10 +1071,26 @@ class _MetricsState:
         self.particle_mass_p50_kg.labels(*self._common()).set(particle_p50)
         self.particle_mass_p90_kg.labels(*self._common()).set(particle_p90)
 
-    def update_likelihood_health(self, *, sim_force_finite_ratio: float, diff_finite_ratio: float, likelihood_finite_ratio: float, sim_force_norm_mean: float, diff_norm_mean: float, likelihood_min: float, likelihood_max: float, likelihood_mean: float, likelihood_std: float) -> None:
+    def update_likelihood_health(
+        self,
+        *,
+        sim_force_finite_ratio: float,
+        diff_finite_ratio: float,
+        likelihood_finite_ratio: float,
+        sim_force_norm_mean: float,
+        diff_norm_mean: float,
+        likelihood_min: float,
+        likelihood_max: float,
+        likelihood_mean: float,
+        likelihood_std: float,
+    ) -> None:
         self.sim_force_finite_ratio.labels(*self._common()).set(sim_force_finite_ratio)
-        self.measurement_residual_finite_ratio.labels(*self._common()).set(diff_finite_ratio)
-        self.likelihood_finite_ratio.labels(*self._common()).set(likelihood_finite_ratio)
+        self.measurement_residual_finite_ratio.labels(*self._common()).set(
+            diff_finite_ratio
+        )
+        self.likelihood_finite_ratio.labels(*self._common()).set(
+            likelihood_finite_ratio
+        )
         self.sim_force_norm_mean.labels(*self._common()).set(sim_force_norm_mean)
         self.measurement_residual_norm_mean.labels(*self._common()).set(diff_norm_mean)
         self.likelihood_min.labels(*self._common()).set(likelihood_min)
@@ -951,44 +1098,125 @@ class _MetricsState:
         self.likelihood_mean.labels(*self._common()).set(likelihood_mean)
         self.likelihood_std.labels(*self._common()).set(likelihood_std)
 
-    def update_invalid_state_counts(self, *, invalid_sensor_events: int, invalid_state_events: int, skipped_invalid_updates: int, skipped_invalid_update: bool, bootstrap_attempts: int, first_invalid_sensor_step: int, first_invalid_state_step: int, sim_force_nonfinite_count: int, diff_nonfinite_count: int, likelihood_nonfinite_count: int, qpos_nonfinite_count: int, qvel_nonfinite_count: int, sensordata_nonfinite_count: int, ctrl_nonfinite_count: int) -> None:
-        self.invalid_sensor_events_total.labels(*self._common()).set(invalid_sensor_events)
-        self.invalid_state_events_total.labels(*self._common()).set(invalid_state_events)
-        self.skipped_invalid_updates_total.labels(*self._common()).set(skipped_invalid_updates)
-        self.skipped_invalid_update.labels(*self._common()).set(1.0 if skipped_invalid_update else 0.0)
-        self.first_update_bootstrap_attempts.labels(*self._common()).set(bootstrap_attempts)
-        self.first_invalid_sensor_step.labels(*self._common()).set(first_invalid_sensor_step)
-        self.first_invalid_state_step.labels(*self._common()).set(first_invalid_state_step)
-        self.sim_force_nonfinite_count.labels(*self._common()).set(sim_force_nonfinite_count)
-        self.measurement_residual_nonfinite_count.labels(*self._common()).set(diff_nonfinite_count)
-        self.likelihood_nonfinite_count.labels(*self._common()).set(likelihood_nonfinite_count)
+    def update_invalid_state_counts(
+        self,
+        *,
+        invalid_sensor_events: int,
+        invalid_state_events: int,
+        skipped_invalid_updates: int,
+        skipped_invalid_update: bool,
+        bootstrap_attempts: int,
+        first_invalid_sensor_step: int,
+        first_invalid_state_step: int,
+        sim_force_nonfinite_count: int,
+        diff_nonfinite_count: int,
+        likelihood_nonfinite_count: int,
+        qpos_nonfinite_count: int,
+        qvel_nonfinite_count: int,
+        sensordata_nonfinite_count: int,
+        ctrl_nonfinite_count: int,
+    ) -> None:
+        self.invalid_sensor_events_total.labels(*self._common()).set(
+            invalid_sensor_events
+        )
+        self.invalid_state_events_total.labels(*self._common()).set(
+            invalid_state_events
+        )
+        self.skipped_invalid_updates_total.labels(*self._common()).set(
+            skipped_invalid_updates
+        )
+        self.skipped_invalid_update.labels(*self._common()).set(
+            1.0 if skipped_invalid_update else 0.0
+        )
+        self.first_update_bootstrap_attempts.labels(*self._common()).set(
+            bootstrap_attempts
+        )
+        self.first_invalid_sensor_step.labels(*self._common()).set(
+            first_invalid_sensor_step
+        )
+        self.first_invalid_state_step.labels(*self._common()).set(
+            first_invalid_state_step
+        )
+        self.sim_force_nonfinite_count.labels(*self._common()).set(
+            sim_force_nonfinite_count
+        )
+        self.measurement_residual_nonfinite_count.labels(*self._common()).set(
+            diff_nonfinite_count
+        )
+        self.likelihood_nonfinite_count.labels(*self._common()).set(
+            likelihood_nonfinite_count
+        )
         self.qpos_nonfinite_count.labels(*self._common()).set(qpos_nonfinite_count)
         self.qvel_nonfinite_count.labels(*self._common()).set(qvel_nonfinite_count)
-        self.sensordata_nonfinite_count.labels(*self._common()).set(sensordata_nonfinite_count)
+        self.sensordata_nonfinite_count.labels(*self._common()).set(
+            sensordata_nonfinite_count
+        )
         self.ctrl_nonfinite_count.labels(*self._common()).set(ctrl_nonfinite_count)
 
-    def update_contact_health(self, *, contact_count_mean: float, contact_count_max: float, active_contact_particle_ratio: float, contact_metric_available: bool, contact_force_mismatch: bool, valid_force_particle_ratio: float, sim_force_signal_particle_ratio: float) -> None:
+    def update_contact_health(
+        self,
+        *,
+        contact_count_mean: float,
+        contact_count_max: float,
+        active_contact_particle_ratio: float,
+        contact_metric_available: bool,
+        contact_force_mismatch: bool,
+        valid_force_particle_ratio: float,
+        sim_force_signal_particle_ratio: float,
+    ) -> None:
         self.contact_count_mean.labels(*self._common()).set(contact_count_mean)
         self.contact_count_max.labels(*self._common()).set(contact_count_max)
-        self.active_contact_particle_ratio.labels(*self._common()).set(active_contact_particle_ratio)
-        self.contact_metric_available.labels(*self._common()).set(1.0 if contact_metric_available else 0.0)
-        self.contact_force_mismatch.labels(*self._common()).set(1.0 if contact_force_mismatch else 0.0)
-        self.valid_force_particle_ratio.labels(*self._common()).set(valid_force_particle_ratio)
-        self.force_signal_particle_ratio.labels(*self._common()).set(sim_force_signal_particle_ratio)
+        self.active_contact_particle_ratio.labels(*self._common()).set(
+            active_contact_particle_ratio
+        )
+        self.contact_metric_available.labels(*self._common()).set(
+            1.0 if contact_metric_available else 0.0
+        )
+        self.contact_force_mismatch.labels(*self._common()).set(
+            1.0 if contact_force_mismatch else 0.0
+        )
+        self.valid_force_particle_ratio.labels(*self._common()).set(
+            valid_force_particle_ratio
+        )
+        self.force_signal_particle_ratio.labels(*self._common()).set(
+            sim_force_signal_particle_ratio
+        )
 
-    def update_weight_health(self, *, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
-        self.uniform_weight_l1_distance.labels(*self._common()).set(uniform_weight_l1_distance)
-        self.uniform_weight_max_deviation.labels(*self._common()).set(uniform_weight_max_deviation)
-        self.likelihood_collapsed_to_uniform.labels(*self._common()).set(1.0 if collapsed_to_uniform else 0.0)
+    def update_weight_health(
+        self,
+        *,
+        uniform_weight_l1_distance: float,
+        uniform_weight_max_deviation: float,
+        collapsed_to_uniform: bool,
+    ) -> None:
+        self.uniform_weight_l1_distance.labels(*self._common()).set(
+            uniform_weight_l1_distance
+        )
+        self.uniform_weight_max_deviation.labels(*self._common()).set(
+            uniform_weight_max_deviation
+        )
+        self.likelihood_collapsed_to_uniform.labels(*self._common()).set(
+            1.0 if collapsed_to_uniform else 0.0
+        )
 
-    def update_warp_memory(self, *, stage: str, bytes_in_use: int, peak_bytes_in_use: int, bytes_limit: int, state_bytes_estimate: int) -> None:
+    def update_warp_memory(
+        self,
+        *,
+        stage: str,
+        bytes_in_use: int,
+        peak_bytes_in_use: int,
+        bytes_limit: int,
+        state_bytes_estimate: int,
+    ) -> None:
         labels = self._stage(stage)
         self.warp_bytes_in_use.labels(*labels).set(bytes_in_use)
         self.warp_peak_bytes_in_use.labels(*labels).set(peak_bytes_in_use)
         self.warp_bytes_limit.labels(*labels).set(bytes_limit)
         self.warp_state_bytes_estimate.labels(*labels).set(state_bytes_estimate)
 
-    def set_prediction_ready(self, total_wall_seconds: float, final_error_pct: float) -> None:
+    def set_prediction_ready(
+        self, total_wall_seconds: float, final_error_pct: float
+    ) -> None:
         self.prediction_ready_seconds.labels(*self._common()).set(total_wall_seconds)
         self.final_error_pct.labels(*self._common()).set(final_error_pct)
 
@@ -997,11 +1225,21 @@ class _MetricsState:
         previous_cpu_totals = self._read_host_cpu_totals()
         previous_process_totals = self._read_process_cpu_totals()
         while not self._stop_event.wait(interval):
-            previous_cpu_totals, previous_process_totals = self._sample_system_metrics(previous_cpu_totals, previous_process_totals)
+            previous_cpu_totals, previous_process_totals = self._sample_system_metrics(
+                previous_cpu_totals, previous_process_totals
+            )
 
-    def _sample_system_metrics(self, previous_cpu_totals: tuple[float, float] | None, previous_process_totals: tuple[float, float] | None) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
-        self.process_memory_rss_bytes.labels(*self._common()).set(get_process_memory_bytes())
-        self.host_memory_used_bytes.labels(*self._common()).set(self._read_host_memory_used_bytes())
+    def _sample_system_metrics(
+        self,
+        previous_cpu_totals: tuple[float, float] | None,
+        previous_process_totals: tuple[float, float] | None,
+    ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+        self.process_memory_rss_bytes.labels(*self._common()).set(
+            get_process_memory_bytes()
+        )
+        self.host_memory_used_bytes.labels(*self._common()).set(
+            self._read_host_memory_used_bytes()
+        )
         current_cpu_totals = self._read_host_cpu_totals()
         if previous_cpu_totals is not None and current_cpu_totals is not None:
             previous_total, previous_idle = previous_cpu_totals
@@ -1010,7 +1248,9 @@ class _MetricsState:
             idle_delta = current_idle - previous_idle
             cpu_percent = 0.0
             if total_delta > 0:
-                cpu_percent = max(0.0, min(100.0, 100.0 * (1.0 - (idle_delta / total_delta))))
+                cpu_percent = max(
+                    0.0, min(100.0, 100.0 * (1.0 - (idle_delta / total_delta)))
+                )
             self.host_cpu_utilization_pct.labels(*self._common()).set(cpu_percent)
         current_process_totals = self._read_process_cpu_totals()
         if previous_process_totals is not None and current_process_totals is not None:
@@ -1021,17 +1261,31 @@ class _MetricsState:
             process_cpu_percent = 0.0
             if wall_delta > 0:
                 process_cpu_percent = max(0.0, 100.0 * (cpu_delta / wall_delta))
-            self.process_cpu_utilization_pct.labels(*self._common()).set(process_cpu_percent)
-            self.process_cpu_machine_pct.labels(*self._common()).set(process_cpu_percent / float(self._host_cpu_count))
+            self.process_cpu_utilization_pct.labels(*self._common()).set(
+                process_cpu_percent
+            )
+            self.process_cpu_machine_pct.labels(*self._common()).set(
+                process_cpu_percent / float(self._host_cpu_count)
+            )
         gpu_metrics = self._read_gpu_metrics()
         if gpu_metrics is not None:
-            self.gpu_utilization_pct.labels(*self._common()).set(gpu_metrics["utilization_pct"])
-            self.gpu_fb_used_bytes.labels(*self._common()).set(gpu_metrics["fb_used_bytes"])
-            self.gpu_fb_utilization_pct.labels(*self._common()).set(gpu_metrics["fb_utilization_pct"])
+            self.gpu_utilization_pct.labels(*self._common()).set(
+                gpu_metrics["utilization_pct"]
+            )
+            self.gpu_fb_used_bytes.labels(*self._common()).set(
+                gpu_metrics["fb_used_bytes"]
+            )
+            self.gpu_fb_utilization_pct.labels(*self._common()).set(
+                gpu_metrics["fb_utilization_pct"]
+            )
             self.gpu_power_watts.labels(*self._common()).set(gpu_metrics["power_watts"])
-            self.gpu_temp_celsius.labels(*self._common()).set(gpu_metrics["temp_celsius"])
+            self.gpu_temp_celsius.labels(*self._common()).set(
+                gpu_metrics["temp_celsius"]
+            )
             self.gpu_sm_clock_hz.labels(*self._common()).set(gpu_metrics["sm_clock_hz"])
-            self.gpu_mem_clock_hz.labels(*self._common()).set(gpu_metrics["mem_clock_hz"])
+            self.gpu_mem_clock_hz.labels(*self._common()).set(
+                gpu_metrics["mem_clock_hz"]
+            )
         return current_cpu_totals, current_process_totals
 
     @staticmethod
@@ -1075,7 +1329,9 @@ class _MetricsState:
             "--format=csv,noheader,nounits",
         ]
         try:
-            completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=2.0)
+            completed = subprocess.run(
+                command, check=True, capture_output=True, text=True, timeout=2.0
+            )
         except (OSError, subprocess.SubprocessError):
             return None
         lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
@@ -1097,7 +1353,9 @@ class _MetricsState:
         return {
             "utilization_pct": utilization_pct,
             "fb_used_bytes": fb_used_bytes,
-            "fb_utilization_pct": (100.0 * fb_used_bytes / fb_total_bytes) if fb_total_bytes > 0 else 0.0,
+            "fb_utilization_pct": (
+                (100.0 * fb_used_bytes / fb_total_bytes) if fb_total_bytes > 0 else 0.0
+            ),
             "temp_celsius": temp_celsius,
             "power_watts": power_watts,
             "sm_clock_hz": sm_clock_hz,
@@ -1108,53 +1366,92 @@ class _MetricsState:
 _STATE: _MetricsState | None = None
 
 
+def metrics_enabled() -> bool:
+    return bool(_STATE is not None and _STATE.enabled)
+
+
 def _require_state() -> _MetricsState:
     if _STATE is None:
-        raise RuntimeError("Metrics runtime is not initialized. Call init_metrics() first.")
+        raise RuntimeError(
+            "Metrics runtime is not initialized. Call init_metrics() first."
+        )
     return _STATE
 
 
 def start_stage(stage: str) -> StageToken:
+    if not metrics_enabled():
+        return StageToken(stage=stage, started_at=time.perf_counter())
     return _require_state().start_stage(stage)
 
 
 def finish_stage(token: StageToken) -> float:
+    if not metrics_enabled():
+        return time.perf_counter() - token.started_at
     return _require_state().finish_stage(token)
 
 
 def set_stage_duration(stage: str, duration: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_stage_duration(stage, duration)
 
 
 def start_substage(phase: str, substage: str) -> SubstageToken:
+    if not metrics_enabled():
+        return SubstageToken(
+            phase=phase, substage=substage, started_at=time.perf_counter()
+        )
     return _require_state().start_substage(phase, substage)
 
 
 def finish_substage(token: SubstageToken) -> float:
+    if not metrics_enabled():
+        return time.perf_counter() - token.started_at
     return _require_state().finish_substage(token)
 
 
 def set_substage_duration(phase: str, substage: str, duration: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_substage_duration(phase, substage, duration)
 
 
-def set_substage_workload(phase: str, substage: str, steps: int, particles: int, duration_seconds: float) -> None:
-    _require_state().set_substage_workload(phase, substage, steps, particles, duration_seconds)
+def set_substage_workload(
+    phase: str, substage: str, steps: int, particles: int, duration_seconds: float
+) -> None:
+    if not metrics_enabled():
+        return
+    _require_state().set_substage_workload(
+        phase, substage, steps, particles, duration_seconds
+    )
 
 
 def set_particle_count(particles: int) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_particle_count(particles)
 
 
 def set_backend(backend: str, device: str) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_backend(backend, device)
 
 
 def set_run_info(backend: str, particles: int, control_dt: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_run_info(backend, particles, control_dt)
 
 
-def set_memory_profile(*, state_bytes_total: int, state_bytes_per_particle: int, process_memory_per_particle_estimate_bytes: int) -> None:
+def set_memory_profile(
+    *,
+    state_bytes_total: int,
+    state_bytes_per_particle: int,
+    process_memory_per_particle_estimate_bytes: int,
+) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_memory_profile(
         state_bytes_total=state_bytes_total,
         state_bytes_per_particle=state_bytes_per_particle,
@@ -1170,6 +1467,8 @@ def set_runtime_environment(
     default_jax_device: str,
     device_fallback_applied: bool,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_runtime_environment(
         execution_platform=execution_platform,
         execution_device=execution_device,
@@ -1187,6 +1486,8 @@ def set_mujoco_memory_profile(
     native_bytes_per_robot: int,
     native_bytes_total: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_mujoco_memory_profile(
         model_nbuffer_bytes_per_robot=model_nbuffer_bytes_per_robot,
         data_nbuffer_bytes_per_robot=data_nbuffer_bytes_per_robot,
@@ -1196,7 +1497,16 @@ def set_mujoco_memory_profile(
     )
 
 
-def update_warp_memory(*, stage: str, bytes_in_use: int, peak_bytes_in_use: int, bytes_limit: int, state_bytes_estimate: int) -> None:
+def update_warp_memory(
+    *,
+    stage: str,
+    bytes_in_use: int,
+    peak_bytes_in_use: int,
+    bytes_limit: int,
+    state_bytes_estimate: int,
+) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_warp_memory(
         stage=stage,
         bytes_in_use=bytes_in_use,
@@ -1206,11 +1516,29 @@ def update_warp_memory(*, stage: str, bytes_in_use: int, peak_bytes_in_use: int,
     )
 
 
-def update_filter_state(ess: float, estimate: float, wall_seconds: float, cpu_seconds: float, cpu_equivalent_cores: float, particles: int) -> None:
-    _require_state().update_filter_state(ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles)
+def update_filter_state(
+    ess: float,
+    estimate: float,
+    wall_seconds: float,
+    cpu_seconds: float,
+    cpu_equivalent_cores: float,
+    particles: int,
+) -> None:
+    if not metrics_enabled():
+        return
+    _require_state().update_filter_state(
+        ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles
+    )
 
 
-def update_weight_health(*, uniform_weight_l1_distance: float, uniform_weight_max_deviation: float, collapsed_to_uniform: bool) -> None:
+def update_weight_health(
+    *,
+    uniform_weight_l1_distance: float,
+    uniform_weight_max_deviation: float,
+    collapsed_to_uniform: bool,
+) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_weight_health(
         uniform_weight_l1_distance=uniform_weight_l1_distance,
         uniform_weight_max_deviation=uniform_weight_max_deviation,
@@ -1231,6 +1559,8 @@ def update_accuracy_metrics(
     convergence_time_to_10pct_seconds: float,
     time_to_first_estimate_seconds: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_accuracy_metrics(
         mass_abs_error_kg=mass_abs_error_kg,
         mass_rel_error_pct=mass_rel_error_pct,
@@ -1255,6 +1585,8 @@ def update_uncertainty_metrics(
     weight_entropy_normalized: float,
     weight_perplexity: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_uncertainty_metrics(
         credible_interval_50_width_kg=credible_interval_50_width_kg,
         credible_interval_90_width_kg=credible_interval_90_width_kg,
@@ -1279,6 +1611,8 @@ def update_resample_state(
     particle_p50: float,
     particle_p90: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_resample_state(
         steps=steps,
         resample_count=resample_count,
@@ -1305,6 +1639,8 @@ def update_likelihood_health(
     likelihood_mean: float,
     likelihood_std: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_likelihood_health(
         sim_force_finite_ratio=sim_force_finite_ratio,
         diff_finite_ratio=diff_finite_ratio,
@@ -1335,6 +1671,8 @@ def update_invalid_state_counts(
     sensordata_nonfinite_count: int,
     ctrl_nonfinite_count: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_invalid_state_counts(
         invalid_sensor_events=invalid_sensor_events,
         invalid_state_events=invalid_state_events,
@@ -1363,6 +1701,8 @@ def update_contact_health(
     valid_force_particle_ratio: float,
     sim_force_signal_particle_ratio: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_contact_health(
         contact_count_mean=contact_count_mean,
         contact_count_max=contact_count_max,
@@ -1375,12 +1715,23 @@ def update_contact_health(
 
 
 def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_prediction_ready(total_wall_seconds, final_error_pct)
 
 
 @dataclass(frozen=True)
 class LiftPhaseResult:
     history_estimates: list[float]
+    ess_history: list[float]
+    resample_events: list[bool]
+    likelihood_diagnostics_history: list[dict[str, float]]
+    likelihood_history: list[np.ndarray]
+    likelihood_particle_history: list[np.ndarray]
+    gpu_utilization_history: list[float]
+    gpu_vram_utilization_history: list[float]
+    initial_particles: np.ndarray
+    particle_history: list[np.ndarray]
     pf_wall_durations: list[float]
     pf_cpu_durations: list[float]
     invalid_sensor_events: int
@@ -1391,7 +1742,9 @@ class LiftPhaseResult:
     max_repaired_world_count: int
 
 
-def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+def weighted_quantile(
+    values: np.ndarray, weights: np.ndarray, quantile: float
+) -> float:
     if values.size == 0:
         return 0.0
     if values.size != weights.size:
@@ -1412,6 +1765,15 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
         return None
     return {
         "history_estimates": [],
+        "ess_history": [],
+        "resample_events": [],
+        "likelihood_diagnostics_history": [],
+        "likelihood_history": [],
+        "likelihood_particle_history": [],
+        "gpu_utilization_history": [],
+        "gpu_vram_utilization_history": [],
+        "initial_particles": np.array([], dtype=np.float64),
+        "particle_history": [],
         "pf_wall_durations": [],
         "pf_cpu_durations": [],
         "robot_execute_total": 0.0,
@@ -1441,7 +1803,9 @@ def update_setup_metrics(
     set_memory_profile(
         state_bytes_total=int(memory_profile["state_bytes_total"]),
         state_bytes_per_particle=int(memory_profile["state_bytes_per_particle"]),
-        process_memory_per_particle_estimate_bytes=int(memory_profile["process_memory_per_particle_estimate_bytes"]),
+        process_memory_per_particle_estimate_bytes=int(
+            memory_profile["process_memory_per_particle_estimate_bytes"]
+        ),
     )
     if backend_name == "mujoco-warp":
         set_runtime_environment(
@@ -1453,9 +1817,15 @@ def update_setup_metrics(
         )
         return
     set_mujoco_memory_profile(
-        model_nbuffer_bytes_per_robot=int(env_memory_profile["model_nbuffer_bytes_per_robot"]),
-        data_nbuffer_bytes_per_robot=int(env_memory_profile["data_nbuffer_bytes_per_robot"]),
-        data_narena_bytes_per_robot=int(env_memory_profile["data_narena_bytes_per_robot"]),
+        model_nbuffer_bytes_per_robot=int(
+            env_memory_profile["model_nbuffer_bytes_per_robot"]
+        ),
+        data_nbuffer_bytes_per_robot=int(
+            env_memory_profile["data_nbuffer_bytes_per_robot"]
+        ),
+        data_narena_bytes_per_robot=int(
+            env_memory_profile["data_narena_bytes_per_robot"]
+        ),
         native_bytes_per_robot=int(env_memory_profile["native_bytes_per_robot"]),
         native_bytes_total=int(env_memory_profile["native_bytes_total"]),
     )
@@ -1472,6 +1842,39 @@ def update_warp_memory_metrics(env: Any, *, stage: str) -> None:
     )
 
 
+def read_gpu_utilization_pct() -> float | None:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None
+    return float(gpu_metrics["utilization_pct"])
+
+
+def read_gpu_vram_utilization_pct() -> float | None:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None
+    return float(gpu_metrics["fb_utilization_pct"])
+
+
+def read_gpu_history_sample() -> tuple[float | None, float | None]:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None, None
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None, None
+    return (
+        float(gpu_metrics["utilization_pct"]),
+        float(gpu_metrics["fb_utilization_pct"]),
+    )
+
+
 def observed_stage(stage: str, *, env_arg: str | None = None):
     def decorator(func):
         signature = inspect.signature(func)
@@ -1485,7 +1888,27 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
             env = bound.arguments.get(env_arg) if env_arg is not None else None
 
             if logger is None or log_data is None:
-                raise ValueError(f"observed_stage requires logger and log_data for stage {stage}")
+                raise ValueError(
+                    f"observed_stage requires logger and log_data for stage {stage}"
+                )
+
+            if not metrics_enabled():
+                stage_label = stage.replace("_", " ")
+                logger.info(
+                    {
+                        **log_data,
+                        "msg": f"Started {stage_label}.",
+                    }
+                )
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    logger.info(
+                        {
+                            **log_data,
+                            "msg": f"Finished {stage_label}.",
+                        }
+                    )
 
             stage_token = start_stage(stage)
             stage_label = stage.replace("_", " ")
@@ -1556,9 +1979,51 @@ def update_phase_4_state(
     step_cpu_duration: float,
 ) -> dict[str, float]:
     current_estimate = float(particle_filter.estimate())
+    current_ess = float(step_result.get("ess", particle_filter.effective_sample_size()))
     state["history_estimates"].append(current_estimate)
-    if hasattr(particle_filter, "particles"):
-        state["latest_particles_snapshot"] = np.asarray(particle_filter.particles).copy()
+    state["ess_history"].append(current_ess)
+    state["resample_events"].append(bool(step_result.get("resampled", False)))
+    if CAPTURE_PHASE4_DEBUG_HISTORY:
+        state["likelihood_diagnostics_history"].append(
+            dict(step_result.get("diagnostics", {}))
+        )
+        state["likelihood_history"].append(
+            np.asarray(
+                step_result.get("likelihoods", np.array([], dtype=np.float64))
+            ).copy()
+        )
+        state["likelihood_particle_history"].append(
+            np.asarray(
+                step_result.get("likelihood_particles", np.array([], dtype=np.float64))
+            ).copy()
+        )
+        if (
+            hasattr(particle_filter, "particles")
+            and np.asarray(state["initial_particles"]).size == 0
+        ):
+            state["initial_particles"] = np.asarray(particle_filter.particles).copy()
+        if hasattr(particle_filter, "particles"):
+            state["latest_particles_snapshot"] = np.asarray(
+                particle_filter.particles
+            ).copy()
+            state["particle_history"].append(np.asarray(particle_filter.particles).copy())
+    elif hasattr(particle_filter, "particles"):
+        state["latest_particles_snapshot"] = np.asarray(
+            particle_filter.particles
+        ).copy()
+
+    if CAPTURE_PHASE4_GPU_HISTORY:
+        current_gpu_utilization, current_gpu_vram_utilization = read_gpu_history_sample()
+        state["gpu_utilization_history"].append(
+            float(current_gpu_utilization)
+            if current_gpu_utilization is not None
+            else float("nan")
+        )
+        state["gpu_vram_utilization_history"].append(
+            float(current_gpu_vram_utilization)
+            if current_gpu_vram_utilization is not None
+            else float("nan")
+        )
     if state["time_to_first_estimate_seconds"] < 0.0:
         state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
@@ -1575,9 +2040,12 @@ def update_phase_4_state(
     state["pf_update_total"] += step_wall_duration
     state["pf_wall_durations"].append(step_wall_duration)
     state["pf_cpu_durations"].append(step_cpu_duration)
-    state["resample_count"] = int(step_result.get("resample_count", state["resample_count"]))
+    state["resample_count"] = int(
+        step_result.get("resample_count", state["resample_count"])
+    )
     return {
         "current_estimate": current_estimate,
+        "current_ess": current_ess,
         "abs_error_kg": abs_error_kg,
         "rel_error_pct": rel_error_pct,
         "phase_4_mae_kg": phase_4_mae_kg,
@@ -1609,12 +2077,15 @@ def update_phase_4_metrics(
         step_cpu_duration=step_cpu_duration,
     )
     current_estimate = computed["current_estimate"]
+    current_ess = computed["current_ess"]
     abs_error_kg = computed["abs_error_kg"]
     rel_error_pct = computed["rel_error_pct"]
-    cpu_equivalent_cores_used = step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
+    cpu_equivalent_cores_used = (
+        step_cpu_duration / step_wall_duration if step_wall_duration > 0 else 0.0
+    )
     add_exemplar(run_id, step)
     update_filter_state(
-        ess=particle_filter.effective_sample_size(),
+        ess=current_ess,
         estimate=current_estimate,
         wall_seconds=step_wall_duration,
         cpu_seconds=step_cpu_duration,
@@ -1622,8 +2093,12 @@ def update_phase_4_metrics(
         particles=particle_filter.N,
     )
     update_weight_health(
-        uniform_weight_l1_distance=float(step_result.get("uniform_weight_l1_distance", 0.0)),
-        uniform_weight_max_deviation=float(step_result.get("uniform_weight_max_deviation", 0.0)),
+        uniform_weight_l1_distance=float(
+            step_result.get("uniform_weight_l1_distance", 0.0)
+        ),
+        uniform_weight_max_deviation=float(
+            step_result.get("uniform_weight_max_deviation", 0.0)
+        ),
         collapsed_to_uniform=bool(step_result.get("collapsed_to_uniform", False)),
     )
     update_accuracy_metrics(
@@ -1640,8 +2115,12 @@ def update_phase_4_metrics(
     )
     latest_particles_snapshot = state["latest_particles_snapshot"]
     if latest_particles_snapshot is not None:
-        weights_snapshot = np.asarray(particle_filter.weights, dtype=np.float64).reshape(-1)
-        particle_values = np.asarray(latest_particles_snapshot, dtype=np.float64).reshape(-1)
+        weights_snapshot = np.asarray(
+            particle_filter.weights, dtype=np.float64
+        ).reshape(-1)
+        particle_values = np.asarray(
+            latest_particles_snapshot, dtype=np.float64
+        ).reshape(-1)
         particle_weight_sum = float(np.sum(weights_snapshot))
         if particle_weight_sum > 0.0:
             weights_snapshot = weights_snapshot / particle_weight_sum
@@ -1652,7 +2131,9 @@ def update_phase_4_metrics(
         safe_weights = np.clip(weights_snapshot, np.finfo(np.float64).tiny, 1.0)
         weight_entropy = float(-np.sum(safe_weights * np.log(safe_weights)))
         max_entropy = math.log(len(safe_weights)) if len(safe_weights) > 0 else 0.0
-        weight_entropy_normalized = float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
+        weight_entropy_normalized = (
+            float(weight_entropy / max_entropy) if max_entropy > 0.0 else 0.0
+        )
         weight_perplexity = float(np.exp(weight_entropy))
         update_resample_state(
             steps=step + 1,
@@ -1677,20 +2158,46 @@ def update_phase_4_metrics(
         )
     if backend == "mujoco-warp":
         diagnostics = step_result.get("diagnostics", {})
-        state["invalid_sensor_events"] = max(state["invalid_sensor_events"], int(diagnostics.get("invalid_sensor_events", 0.0)))
-        state["invalid_state_events"] = max(state["invalid_state_events"], int(diagnostics.get("invalid_state_events", 0.0)))
-        state["skipped_invalid_updates"] = max(state["skipped_invalid_updates"], int(step_result.get("skipped_invalid_updates", 0)))
-        current_first_invalid_sensor_step = int(diagnostics.get("first_invalid_sensor_step", -1.0))
-        current_first_invalid_state_step = int(diagnostics.get("first_invalid_state_step", -1.0))
-        if state["first_invalid_sensor_step"] < 0 and current_first_invalid_sensor_step >= 0:
+        state["invalid_sensor_events"] = max(
+            state["invalid_sensor_events"],
+            int(diagnostics.get("invalid_sensor_events", 0.0)),
+        )
+        state["invalid_state_events"] = max(
+            state["invalid_state_events"],
+            int(diagnostics.get("invalid_state_events", 0.0)),
+        )
+        state["skipped_invalid_updates"] = max(
+            state["skipped_invalid_updates"],
+            int(step_result.get("skipped_invalid_updates", 0)),
+        )
+        current_first_invalid_sensor_step = int(
+            diagnostics.get("first_invalid_sensor_step", -1.0)
+        )
+        current_first_invalid_state_step = int(
+            diagnostics.get("first_invalid_state_step", -1.0)
+        )
+        if (
+            state["first_invalid_sensor_step"] < 0
+            and current_first_invalid_sensor_step >= 0
+        ):
             state["first_invalid_sensor_step"] = current_first_invalid_sensor_step
-        if state["first_invalid_state_step"] < 0 and current_first_invalid_state_step >= 0:
+        if (
+            state["first_invalid_state_step"] < 0
+            and current_first_invalid_state_step >= 0
+        ):
             state["first_invalid_state_step"] = current_first_invalid_state_step
-        state["max_repaired_world_count"] = max(state["max_repaired_world_count"], int(diagnostics.get("repaired_world_count", 0.0)))
+        state["max_repaired_world_count"] = max(
+            state["max_repaired_world_count"],
+            int(diagnostics.get("repaired_world_count", 0.0)),
+        )
         update_likelihood_health(
-            sim_force_finite_ratio=float(diagnostics.get("sim_force_finite_ratio", 0.0)),
+            sim_force_finite_ratio=float(
+                diagnostics.get("sim_force_finite_ratio", 0.0)
+            ),
             diff_finite_ratio=float(diagnostics.get("diff_finite_ratio", 0.0)),
-            likelihood_finite_ratio=float(diagnostics.get("likelihood_finite_ratio", 0.0)),
+            likelihood_finite_ratio=float(
+                diagnostics.get("likelihood_finite_ratio", 0.0)
+            ),
             sim_force_norm_mean=float(diagnostics.get("sim_force_norm_mean", 0.0)),
             diff_norm_mean=float(diagnostics.get("diff_norm_mean", 0.0)),
             likelihood_min=float(diagnostics.get("likelihood_min", 0.0)),
@@ -1702,30 +2209,50 @@ def update_phase_4_metrics(
             invalid_sensor_events=int(diagnostics.get("invalid_sensor_events", 0.0)),
             invalid_state_events=int(diagnostics.get("invalid_state_events", 0.0)),
             skipped_invalid_updates=int(step_result.get("skipped_invalid_updates", 0)),
-            skipped_invalid_update=bool(step_result.get("skipped_invalid_update", False)),
+            skipped_invalid_update=bool(
+                step_result.get("skipped_invalid_update", False)
+            ),
             bootstrap_attempts=int(step_result.get("bootstrap_attempts", 1)),
-            first_invalid_sensor_step=int(diagnostics.get("first_invalid_sensor_step", -1.0)),
-            first_invalid_state_step=int(diagnostics.get("first_invalid_state_step", -1.0)),
-            sim_force_nonfinite_count=int(diagnostics.get("sim_force_nonfinite_count", 0.0)),
+            first_invalid_sensor_step=int(
+                diagnostics.get("first_invalid_sensor_step", -1.0)
+            ),
+            first_invalid_state_step=int(
+                diagnostics.get("first_invalid_state_step", -1.0)
+            ),
+            sim_force_nonfinite_count=int(
+                diagnostics.get("sim_force_nonfinite_count", 0.0)
+            ),
             diff_nonfinite_count=int(diagnostics.get("diff_nonfinite_count", 0.0)),
-            likelihood_nonfinite_count=int(diagnostics.get("likelihood_nonfinite_count", 0.0)),
+            likelihood_nonfinite_count=int(
+                diagnostics.get("likelihood_nonfinite_count", 0.0)
+            ),
             qpos_nonfinite_count=int(diagnostics.get("qpos_nonfinite_count", 0.0)),
             qvel_nonfinite_count=int(diagnostics.get("qvel_nonfinite_count", 0.0)),
-            sensordata_nonfinite_count=int(diagnostics.get("sensordata_nonfinite_count", 0.0)),
+            sensordata_nonfinite_count=int(
+                diagnostics.get("sensordata_nonfinite_count", 0.0)
+            ),
             ctrl_nonfinite_count=int(diagnostics.get("ctrl_nonfinite_count", 0.0)),
         )
         update_contact_health(
             contact_count_mean=float(diagnostics.get("contact_count_mean", 0.0)),
             contact_count_max=float(diagnostics.get("contact_count_max", 0.0)),
-            active_contact_particle_ratio=float(diagnostics.get("active_contact_particle_ratio", 0.0)),
-            contact_metric_available=bool(diagnostics.get("contact_metric_available", 0.0)),
+            active_contact_particle_ratio=float(
+                diagnostics.get("active_contact_particle_ratio", 0.0)
+            ),
+            contact_metric_available=bool(
+                diagnostics.get("contact_metric_available", 0.0)
+            ),
             contact_force_mismatch=bool(diagnostics.get("contact_force_mismatch", 0.0)),
-            valid_force_particle_ratio=float(diagnostics.get("valid_force_particle_ratio", 0.0)),
-            sim_force_signal_particle_ratio=float(diagnostics.get("sim_force_signal_particle_ratio", 0.0)),
+            valid_force_particle_ratio=float(
+                diagnostics.get("valid_force_particle_ratio", 0.0)
+            ),
+            sim_force_signal_particle_ratio=float(
+                diagnostics.get("sim_force_signal_particle_ratio", 0.0)
+            ),
         )
     set_span_attributes(
         {
-            "simbay.ess": float(particle_filter.effective_sample_size()),
+            "simbay.ess": current_ess,
             "simbay.resampled": bool(step_result.get("resampled", False)),
             "simbay.mass_estimate_kg": current_estimate,
             "simbay.step_wall_ms": step_wall_duration * 1000.0,
@@ -1750,7 +2277,9 @@ def phase_4_step_observability(
     step_cpu_duration: float,
 ) -> None:
     previous_mass_estimate = (
-        float(stage_state["history_estimates"][-1]) if stage_state["history_estimates"] else float(particle_filter.estimate())
+        float(stage_state["history_estimates"][-1])
+        if stage_state["history_estimates"]
+        else float(particle_filter.estimate())
     )
     set_span_attributes(
         {
@@ -1773,10 +2302,14 @@ def phase_4_step_observability(
                 if backend == "mujoco-warp"
                 else "single_control_step_one_particle_update_at_a_time"
             ),
-            "simbay.particles_updated_at_the_same_time": (particle_filter.N if backend == "mujoco-warp" else 1),
+            "simbay.particles_updated_at_the_same_time": (
+                particle_filter.N if backend == "mujoco-warp" else 1
+            ),
         }
     )
-    set_span_attributes({"simbay.new_mass_estimate_kg": float(particle_filter.estimate())})
+    set_span_attributes(
+        {"simbay.new_mass_estimate_kg": float(particle_filter.estimate())}
+    )
     recovered_attempts = int(step_result.get("recovered_first_update_attempts", 0))
     if recovered_attempts > 1:
         logger.info(
@@ -1836,11 +2369,24 @@ def finalize_phase_4_metrics(
             "msg": "Finished particle filter update for phase 4 (lift).",
         }
     )
-    set_substage_workload(phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"])
-    set_substage_workload(phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"])
+    set_substage_workload(
+        phase, "robot_execute", len(trajectory), 1, state["robot_execute_total"]
+    )
+    set_substage_workload(
+        phase, "pf_update", len(trajectory), particle_filter.N, state["pf_update_total"]
+    )
     force_flush_tracing()
     return LiftPhaseResult(
         history_estimates=state["history_estimates"],
+        ess_history=state["ess_history"],
+        resample_events=state["resample_events"],
+        likelihood_diagnostics_history=state["likelihood_diagnostics_history"],
+        likelihood_history=state["likelihood_history"],
+        likelihood_particle_history=state["likelihood_particle_history"],
+        gpu_utilization_history=state["gpu_utilization_history"],
+        gpu_vram_utilization_history=state["gpu_vram_utilization_history"],
+        initial_particles=np.asarray(state["initial_particles"]).copy(),
+        particle_history=state["particle_history"],
         pf_wall_durations=state["pf_wall_durations"],
         pf_cpu_durations=state["pf_cpu_durations"],
         invalid_sensor_events=state["invalid_sensor_events"],
@@ -1854,7 +2400,11 @@ def finalize_phase_4_metrics(
 
 def init_metrics(run_id: str = "unknown") -> None:
     global _STATE
-    _STATE = _MetricsState(enabled=True, port=8000, run_id=run_id).initialize_defaults().start_runtime()
+    _STATE = (
+        _MetricsState(enabled=ENABLE_METRICS, port=8000, run_id=run_id)
+        .initialize_defaults()
+        .start_runtime()
+    )
 
 
 def shutdown_metrics() -> None:

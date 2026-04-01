@@ -1,0 +1,26 @@
+services:
+  simbay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cuda
+    environment:
+      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
+      SIMBAY_DOCKER_TARGET: "cuda"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    gpus: all
+
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-distroless
+    container_name: simbay-dcgm-exporter
+    gpus: all
+    cap_add:
+      - SYS_ADMIN
+    ports:
+      - "9400:9400"

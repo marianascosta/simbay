@@ -25,14 +25,6 @@ _WARP_MEMORY_FIELDS = (
     "sensordata",
     "ncon",
 )
-_RECOVERY_STATE_FIELDS = (
-    "qpos",
-    "qvel",
-    "act",
-    "ctrl",
-    "qacc_warmstart",
-    "sensordata",
-)
 
 
 def _assign_warp_array(array, values: np.ndarray, dtype=wp.float32) -> None:
@@ -88,7 +80,6 @@ class WarpBatch:
         self._model.body_mass = wp.from_numpy(base_mass_np, dtype=wp.float32)
         mjw.set_const(self._model, self._data)
         self._peak_bytes_in_use = 0
-        self._recovery_snapshot: dict[str, np.ndarray] | None = None
 
         logger.info(
             {
@@ -172,16 +163,6 @@ class WarpBatch:
             counts[f"{field_name}_nonfinite_count"] = int(np_array.size - np.count_nonzero(np.isfinite(np_array)))
         return counts
 
-    def invalid_world_mask(self) -> np.ndarray:
-        invalid_mask = np.zeros((self._size,), dtype=bool)
-        for field_name in ("qpos", "qvel", "sensordata", "ctrl"):
-            array = getattr(self._data, field_name, None)
-            if array is None:
-                continue
-            np_array = np.asarray(array.numpy())
-            invalid_mask |= ~np.all(np.isfinite(np_array), axis=1)
-        return invalid_mask
-
     def resample(self, indexes: np.ndarray) -> None:
         indexes_np = np.asarray(indexes, dtype=np.int32)
 
@@ -195,54 +176,6 @@ class WarpBatch:
         self._body_mass_np = self._body_mass_np[indexes_np]
         _assign_warp_array(self._model.body_mass, self._body_mass_np)
         mjw.set_const(self._model, self._data)
-
-    def capture_recovery_snapshot(self) -> None:
-        snapshot: dict[str, np.ndarray] = {
-            "body_mass": self._body_mass_np.copy(),
-        }
-        for field_name in _RECOVERY_STATE_FIELDS:
-            array = getattr(self._data, field_name, None)
-            if array is None:
-                continue
-            snapshot[field_name] = np.asarray(array.numpy()).copy()
-        self._recovery_snapshot = snapshot
-
-    def restore_recovery_snapshot(self) -> bool:
-        if self._recovery_snapshot is None:
-            return False
-        snapshot = self._recovery_snapshot
-        self._body_mass_np = snapshot["body_mass"].copy()
-        _assign_warp_array(self._model.body_mass, self._body_mass_np)
-        for field_name in _RECOVERY_STATE_FIELDS:
-            array = getattr(self._data, field_name, None)
-            values = snapshot.get(field_name)
-            if array is None or values is None:
-                continue
-            _assign_warp_array(array, values)
-        mjw.set_const(self._model, self._data)
-        return True
-
-    def repair_invalid_worlds_from_snapshot(self) -> np.ndarray:
-        if self._recovery_snapshot is None:
-            return np.zeros((self._size,), dtype=bool)
-
-        invalid_mask = self.invalid_world_mask()
-        if not np.any(invalid_mask):
-            return invalid_mask
-
-        snapshot = self._recovery_snapshot
-        self._body_mass_np[invalid_mask] = snapshot["body_mass"][invalid_mask]
-        _assign_warp_array(self._model.body_mass, self._body_mass_np)
-        for field_name in _RECOVERY_STATE_FIELDS:
-            array = getattr(self._data, field_name, None)
-            values = snapshot.get(field_name)
-            if array is None or values is None:
-                continue
-            current = np.asarray(array.numpy()).copy()
-            current[invalid_mask] = values[invalid_mask]
-            _assign_warp_array(array, current)
-        mjw.set_const(self._model, self._data)
-        return invalid_mask
 
     def memory_profile(self) -> dict[str, int | str | bool]:
         device = wp.get_preferred_device()
@@ -276,8 +209,6 @@ class WarpBatch:
         total = int(self._body_mass_np.nbytes)
         total += self._estimate_object_bytes(self._model)
         total += self._estimate_object_bytes(self._data)
-        if self._recovery_snapshot is not None:
-            total += sum(int(values.nbytes) for values in self._recovery_snapshot.values())
         return total
 
     @staticmethod

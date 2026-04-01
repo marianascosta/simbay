@@ -1,3 +1,5 @@
+import logging
+
 import mujoco
 import numpy as np
 
@@ -13,7 +15,14 @@ from .base import ParticleEnvironment
 
 @trace_public_methods("simbay.mujoco_env")
 class FrankaMuJoCoEnv(ParticleEnvironment):
-    def __init__(self, limits: tuple[float, float], num_particles: int):
+    def __init__(
+        self,
+        limits: tuple[float, float],
+        num_particles: int,
+        logging_data: dict[str, object] | None = None,
+    ):
+        self.logger = logging.getLogger("simbay.mujoco_env")
+        self.logging_data = dict(logging_data or {})
         self.min, self.max = limits
         self.robots: list[MujocoRobot] = []
 
@@ -28,8 +37,18 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
     def initialize_particles(self) -> np.ndarray:
         # Generate the initial uniform guesses for the block's mass
         masses = np.random.uniform(self.min, self.max, size=self.num_particles)
+        progress_interval = max(1, self.num_particles // 10)
 
-        for mass in masses:
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "mujoco_particle_world_init_started",
+                "msg": f"Started initializing {self.num_particles} MuJoCo particle worlds.",
+                "particles": self.num_particles,
+            }
+        )
+
+        for index, mass in enumerate(masses, start=1):
             # CRITICAL: Use .copy() so each robot gets a unique dictionary!
             object_properties = DEFAULT_OBJECT_PROPS.copy()
             object_properties["mass"] = mass
@@ -37,10 +56,32 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
             robot = initialize_mujoco_env(object_properties)
             self.robots.append(robot)
 
+            if index == self.num_particles or index % progress_interval == 0:
+                self.logger.info(
+                    {
+                        **self.logging_data,
+                        "event": "mujoco_particle_world_init_progress",
+                        "msg": (
+                            f"Initialized {index}/{self.num_particles} MuJoCo particle worlds."
+                        ),
+                        "particles_initialized": index,
+                        "particles": self.num_particles,
+                    }
+                )
+
         # Cache the C++ memory ID for the block (they are all identical models,
         # so the ID is the same for all 100 robots)
         self.block_body_id = mujoco.mj_name2id(  # type: ignore
             self.robots[0].model, mujoco.mjtObj.mjOBJ_BODY, "object"  # type: ignore
+        )
+
+        self.logger.info(
+            {
+                **self.logging_data,
+                "event": "mujoco_particle_world_init_finished",
+                "msg": f"Finished initializing {self.num_particles} MuJoCo particle worlds.",
+                "particles": self.num_particles,
+            }
         )
 
         return masses
@@ -76,7 +117,34 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         }
 
     def resample_states(self, indexes: np.ndarray) -> None:
-        self.robots = [self.robots[i] for i in indexes]
+        indexes_np = np.asarray(indexes, dtype=np.int32)
+        if indexes_np.size != len(self.robots):
+            raise ValueError(
+                f"Expected {len(self.robots)} indexes, got {indexes_np.size}."
+            )
+
+        # Preserve one unique MuJoCo world per particle by copying the selected
+        # state into the existing robot pool instead of aliasing robot objects.
+        selected_qpos = [
+            self.robots[int(src_idx)].data.qpos.copy() for src_idx in indexes_np
+        ]
+        selected_qvel = [
+            self.robots[int(src_idx)].data.qvel.copy() for src_idx in indexes_np
+        ]
+        selected_ctrl = [
+            self.robots[int(src_idx)].data.ctrl.copy() for src_idx in indexes_np
+        ]
+        selected_mass = [
+            float(self.robots[int(src_idx)].model.body_mass[self.block_body_id])
+            for src_idx in indexes_np
+        ]
+
+        for dst_idx, robot in enumerate(self.robots):
+            robot.data.qpos[:] = selected_qpos[dst_idx]
+            robot.data.qvel[:] = selected_qvel[dst_idx]
+            robot.data.ctrl[:] = selected_ctrl[dst_idx]
+            robot.model.body_mass[self.block_body_id] = selected_mass[dst_idx]
+            mujoco.mj_forward(robot.model, robot.data)  # type: ignore
 
     def propagate(self, particles: np.ndarray, control_input: np.ndarray) -> np.ndarray:
         # 1. Apply process noise to the mathematical state (the Artificial Random Walk)
@@ -93,7 +161,9 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
 
         return particles
 
-    def compute_likelihoods(self, particles: np.ndarray, observation: np.ndarray) -> np.ndarray:
+    def compute_likelihoods(
+        self, particles: np.ndarray, observation: np.ndarray
+    ) -> np.ndarray:
         # 1. OPTIMIZATION: List comprehension is much faster than a standard for-loop append
         sim_z = np.array([robot.get_sensor_reads() for robot in self.robots])
 
@@ -109,3 +179,11 @@ class FrankaMuJoCoEnv(ParticleEnvironment):
         likelihoods = np.exp(-0.5 * dist_sq / R)
 
         return likelihoods
+
+    def mean_particle_sensor_reads(self) -> np.ndarray:
+        if not self.robots:
+            return np.zeros((3,), dtype=np.float64)
+        sim_z = np.array(
+            [robot.get_sensor_reads() for robot in self.robots], dtype=np.float64
+        )
+        return np.mean(sim_z, axis=0)

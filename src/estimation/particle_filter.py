@@ -7,7 +7,10 @@ from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.tracing import trace_public_methods
 
 
-@trace_public_methods("simbay.particle_filter")
+@trace_public_methods(
+    "simbay.particle_filter",
+    exclude={"estimate", "effective_sample_size", "memory_profile"},
+)
 class ParticleFilter:
     """
     A universal Particle Filter (Sequential Monte Carlo) implementation.
@@ -37,6 +40,7 @@ class ParticleFilter:
         # Before receiving any sensor data, we assume a uniform prior where
         # every random guess has an exact equal probability of being the true state.
         self.weights = np.ones(self.N) / self.N
+        self._last_likelihoods = np.ones(self.N, dtype=np.float64)
         self.state_bytes_total = int(self.particles.nbytes + self.weights.nbytes)
         self.state_bytes_per_particle = self.state_bytes_total / self.N if self.N else 0.0
         self.process_memory_per_particle_estimate = (
@@ -73,6 +77,7 @@ class ParticleFilter:
             observation: The actual sensor reading from the real world or target system.
         """
         likelihoods = self.env.compute_likelihoods(self.particles, observation)
+        self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
 
         # Apply Bayes' Rule: Update our belief by multiplying the current
         # weights by the likelihood of the new observation.

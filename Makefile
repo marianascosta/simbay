@@ -1,58 +1,43 @@
-.PHONY: install shell run run-warp run-macos run-local-observability check format lint docker-build docker-run docker-simbay-up docker-simbay-down make-smoke-test make-smoke-test-warp docker-simbay-profile
+.PHONY: help install install-dev bootstrap lint format local-mujoco local-mujoco-warp docker-mujoco docker-mujoco-warp
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+MUJOCO_CMD := poetry run python main.py
+
+help:
+	@printf "Targets:\n"
+	@printf "  install                Install production dependencies with Poetry.\n"
+	@printf "  install-dev            Install all dependencies including dev extras (default Poetry behavior).\n"
+	@printf "  bootstrap              Ensure Poetry is available for the repo tooling.\n"
+	@printf "  lint                   Run Black in check mode for formatting validation.\n"
+	@printf "  format                 Run Black to format the codebase.\n"
+	@printf "  local-mujoco           Run the MuJoCo backend headlessly in the repository environment.\n"
+	@printf "  local-mujoco-warp      Run the MuJoCo-Warp backend headlessly in the repository environment.\n"
+	@printf "  docker-mujoco          Start the MuJoCo Docker service detached.\n"
+	@printf "  docker-mujoco-warp     Start the MuJoCo-Warp Docker service detached with the GPU profile.\n"
 
 install:
 	poetry install --no-root
 
-shell:
-	poetry shell
-
-run:
-	poetry run python main.py
-
-run-warp:
-	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 poetry run python main.py
-
-run-local-observability:
-	poetry run python main.py
-
-run-macos:
-	"$(PROJECT_ROOT)/.venv/bin/python" "$(PROJECT_ROOT)/.venv/bin/mjpython" main.py
-
-check:
-	poetry run python -m compileall main.py src
-
-make-smoke-test:
-	SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py
-
-make-smoke-test-warp:
-	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=1 python main.py
-
-docker-build:
-	docker compose build
-
-docker-run:
-	docker compose up --build
-	open "$(PROJECT_ROOT)/temp/particle_filter_evolution.png"
-
-docker-simbay-up:
-	docker compose up --build -d simbay
-
-docker-simbay-profile:
-	SIMBAY_ENABLE_NSIGHT=1 docker compose up --build simbay
-
-docker-simbay-down:
-	docker compose stop simbay
+install-dev:
+	poetry install
 
 bootstrap:
 	pip install poetry
 
-setup-precommit:
-	poetry run pre-commit install
+lint:
+	poetry run black --check -l 120 .
 
 format:
-	poetry run black -l 120 ./
+	poetry run black -l 120 .
 
-lint:
-	poetry run black --check -l 120 ./
+local-mujoco:
+	SIMBAY_BACKEND=mujoco SIMBAY_HEADLESS=1 $(MUJOCO_CMD)
+
+local-mujoco-warp:
+	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 $(MUJOCO_CMD)
+
+docker-mujoco:
+	SIMBAY_BACKEND=mujoco SIMBAY_HEADLESS=1 SIMBAY_PARTICLES=100 docker compose up --build -d simbay
+
+docker-mujoco-warp:
+	SIMBAY_BACKEND=mujoco-warp SIMBAY_HEADLESS=1 SIMBAY_ENABLE_GPU=1 SIMBAY_PARTICLES=400 docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile gpu up --build -d simbay

@@ -3,38 +3,37 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: cuda
+      target: base
     container_name: simbay
     depends_on:
       - tempo
+      - prometheus
+      - grafana
+      - node-exporter
+      - loki
+      - promtail
     environment:
-      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-500}"
+      SIMBAY_PARTICLES: "${SIMBAY_PARTICLES:-400}"
       SIMBAY_HEADLESS: "1"
-      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco-warp}"
-      SIMBAY_DOCKER_TARGET: "cuda"
+      SIMBAY_BACKEND: "${SIMBAY_BACKEND:-mujoco}"
+      SIMBAY_WARP_MEASUREMENT_VARIANCE: "${SIMBAY_WARP_MEASUREMENT_VARIANCE:-1}"
+      SIMBAY_GENERATE_PLOTS: "${SIMBAY_GENERATE_PLOTS:-1}"
+      SIMBAY_DOCKER_TARGET: "base"
       SIMBAY_ENABLE_NSIGHT: "${SIMBAY_ENABLE_NSIGHT:-1}"
 
     mem_limit: 10g
     volumes:
       - ./logs:/app/logs
+      - ./plots:/app/plots
       - ./temp:/app/temp
     ports:
       - "8000:8000"
     stdin_open: true
     tty: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   prometheus:
     image: prom/prometheus:latest
     container_name: simbay-prometheus
     depends_on:
-      - simbay
       - node-exporter
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -91,17 +90,6 @@ services:
       - promtail-data:/tmp/promtail
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-
-  dcgm-exporter:
-    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-distroless
-    container_name: simbay-dcgm-exporter
-    profiles:
-      - gpu
-    gpus: all
-    cap_add:
-      - SYS_ADMIN
-    ports:
-      - "9400:9400"
 
   tempo:
     image: grafana/tempo:2.10.0
