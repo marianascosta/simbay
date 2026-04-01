@@ -10,8 +10,6 @@ import numpy as np
 
 from src.estimation.mujoco_particle_filter import FrankaMuJoCoEnv
 from src.estimation.particle_filter import ParticleFilter
-from src.estimation.warp_filter import _uniform_weight_metrics
-from src.estimation.warp_filter import _update_and_optionally_resample
 from src.estimation.warp_filter import WarpParticleFilter
 from src.estimation.warp_particle_filter import FrankaWarpEnv
 from src.planning import FrankaSmartSolver
@@ -19,13 +17,7 @@ from src.planning import plan_linear_trajectory
 from src.utils import metrics
 from src.utils.logging_utils import logger as simbay_logger
 from src.utils.mujoco_utils import initialize_mujoco_env
-from src.utils.plots import generate_particle_cloud_gif
 from src.utils.plots import generate_particle_filter_plots
-from src.utils.plots import generate_likelihood_landscape_gif
-from src.utils.plots import generate_posterior_kde_gif
-from src.utils.plots import generate_posterior_evolution_gif
-from src.utils.plots import generate_real_robot_execution_gif
-from src.utils.plots import generate_wall_duration_vs_ess_gif
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import FRANKA_HOME_QPOS
@@ -330,63 +322,6 @@ def pf_replay(
     return duration
 
 
-def phase_4_warp_step_logic(
-    particle_filter: Any,
-    qpos: np.ndarray,
-    noisy_ft_reading: np.ndarray,
-    *,
-    update_and_optionally_resample: Any,
-    uniform_weight_metrics: Any,
-    attempt: int = 1,
-) -> dict[str, Any]:
-    particle_filter.particles = particle_filter.env.propagate(
-        particle_filter.particles, qpos
-    )
-    likelihoods = particle_filter.env.compute_likelihoods(
-        particle_filter.particles, noisy_ft_reading
-    )
-    diagnostics = particle_filter.env.last_measurement_diagnostics()
-    if not particle_filter._measurement_is_valid(diagnostics):
-        return particle_filter._skip_invalid_update(diagnostics, attempt=attempt)
-    if not particle_filter._measurement_is_informative(diagnostics):
-        return particle_filter._skip_uninformative_update(diagnostics)
-
-    offset = float(particle_filter._rng.uniform())
-    (
-        particle_filter.weights,
-        particle_filter.particles,
-        particle_filter._ess,
-        indexes,
-        did_resample,
-    ) = update_and_optionally_resample(
-        particle_filter.weights,
-        particle_filter.particles,
-        likelihoods,
-        offset,
-    )
-    if did_resample:
-        particle_filter.env.resample_states(indexes)
-        particle_filter._resample_count += 1
-    particle_filter._save_last_good_snapshot()
-    uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = (
-        uniform_weight_metrics(particle_filter.weights)
-    )
-    particle_filter._step_index += 1
-    return {
-        "ess": float(particle_filter._ess),
-        "resampled": did_resample,
-        "resample_count": particle_filter._resample_count,
-        "uniform_weight_l1_distance": uniform_weight_l1,
-        "uniform_weight_max_deviation": uniform_weight_max_dev,
-        "collapsed_to_uniform": collapsed_to_uniform,
-        "diagnostics": diagnostics,
-        "skipped_invalid_update": False,
-        "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
-        "bootstrap_attempts": attempt,
-        "uninformative_update": False,
-    }
-
-
 def phase_4_step_logic(
     *,
     backend: str,
@@ -395,8 +330,6 @@ def phase_4_step_logic(
     real_robot: Any,
     viewer: Any,
     qpos: np.ndarray,
-    uniform_weight_metrics: Any,
-    update_and_optionally_resample: Any,
 ) -> dict[str, Any]:
     robot_execute_start = time.perf_counter()
     real_robot.move_joints(qpos)
@@ -410,46 +343,17 @@ def phase_4_step_logic(
     with annotate("phase4_particle_filter_step"):
         if backend == "mujoco-warp":
             if not stage_state["bootstrap_applied"]:
-                last_result = None
-                for attempt in range(1, 4):
-                    step_result = phase_4_warp_step_logic(
-                        particle_filter,
-                        qpos,
-                        noisy_ft_reading,
-                        update_and_optionally_resample=update_and_optionally_resample,
-                        uniform_weight_metrics=uniform_weight_metrics,
-                        attempt=attempt,
-                    )
-                    last_result = step_result
-                    if not bool(step_result.get("skipped_invalid_update", False)):
-                        if attempt > 1:
-                            step_result["recovered_first_update_attempts"] = attempt
-                        break
-                step_result = (
-                    last_result
-                    if last_result is not None
-                    else {
-                        "ess": float(particle_filter.effective_sample_size()),
-                        "resampled": False,
-                        "resample_count": particle_filter._resample_count,
-                        "uniform_weight_l1_distance": 0.0,
-                        "uniform_weight_max_deviation": 0.0,
-                        "collapsed_to_uniform": False,
-                        "skipped_invalid_update": True,
-                        "skipped_invalid_updates": particle_filter._skipped_invalid_updates,
-                        "bootstrap_attempts": 1,
-                        "uninformative_update": False,
-                    }
-                )
-                stage_state["bootstrap_applied"] = True
-            else:
-                step_result = phase_4_warp_step_logic(
-                    particle_filter,
+                step_result = particle_filter.bootstrap_first_update(
                     qpos,
                     noisy_ft_reading,
-                    update_and_optionally_resample=update_and_optionally_resample,
-                    uniform_weight_metrics=uniform_weight_metrics,
+                    max_attempts=3,
                 )
+                recovered_attempts = int(step_result.get("bootstrap_attempts", 1))
+                if recovered_attempts > 1:
+                    step_result["recovered_first_update_attempts"] = recovered_attempts
+                stage_state["bootstrap_applied"] = True
+            else:
+                step_result = particle_filter.step(qpos, noisy_ft_reading)
         else:
             particle_filter.predict(qpos)
             particle_filter.update(noisy_ft_reading)
@@ -508,8 +412,6 @@ def run_phase_4_lift(
     true_mass: float,
     logger: Any,
     log_data: dict[str, Any],
-    uniform_weight_metrics: Any,
-    update_and_optionally_resample: Any,
 ) -> metrics.LiftPhaseResult:
     phase = "phase_4_lift"
     stage_state = metrics.init_stage_state(phase)
@@ -553,8 +455,6 @@ def run_phase_4_lift(
                     real_robot=real_robot,
                     viewer=viewer,
                     qpos=qpos,
-                    uniform_weight_metrics=uniform_weight_metrics,
-                    update_and_optionally_resample=update_and_optionally_resample,
                 )
                 step_wall_duration = time.perf_counter() - step_wall_start
                 step_cpu_duration = time.process_time() - step_cpu_start
@@ -752,8 +652,6 @@ def main(run_id: str = RUN_ID) -> None:
         true_mass=true_mass,
         logger=logger,
         log_data=log_data,
-        uniform_weight_metrics=_uniform_weight_metrics,
-        update_and_optionally_resample=_update_and_optionally_resample,
     )
 
     history_estimates = lift_result.history_estimates
@@ -826,123 +724,6 @@ def main(run_id: str = RUN_ID) -> None:
                 "path": str(output_path),
             }
         )
-    particle_cloud_gif_path = generate_particle_cloud_gif(
-        particle_history=lift_result.particle_history,
-        history_estimates=history_estimates,
-        likelihood_diagnostics_history=lift_result.likelihood_diagnostics_history,
-        true_mass=true_mass,
-        env=env,
-        run_id=run_id,
-        backend=backend,
-        num_particles=num_particles,
-        max_step=300,
-    )
-    logger.info(
-        {
-            **log_data,
-            "msg": f"Saved the particle cloud GIF to {particle_cloud_gif_path}.",
-            "path": str(particle_cloud_gif_path),
-        }
-    )
-    posterior_gif_path = generate_posterior_evolution_gif(
-        particle_history=lift_result.particle_history,
-        history_estimates=history_estimates,
-        resample_events=lift_result.resample_events,
-        true_mass=true_mass,
-        env=env,
-        run_id=run_id,
-        backend=backend,
-        num_particles=num_particles,
-        max_step=300,
-    )
-    logger.info(
-        {
-            **log_data,
-            "msg": f"Saved the particle posterior GIF to {posterior_gif_path}.",
-            "path": str(posterior_gif_path),
-        }
-    )
-    posterior_kde_gif_path = generate_posterior_kde_gif(
-        particle_history=lift_result.particle_history,
-        ess_history=lift_result.ess_history,
-        true_mass=true_mass,
-        env=env,
-        run_id=run_id,
-        backend=backend,
-        num_particles=num_particles,
-        max_step=300,
-    )
-    logger.info(
-        {
-            **log_data,
-            "msg": f"Saved the particle posterior KDE GIF to {posterior_kde_gif_path}.",
-            "path": str(posterior_kde_gif_path),
-        }
-    )
-    likelihood_landscape_gif_path = generate_likelihood_landscape_gif(
-        likelihood_history=lift_result.likelihood_history,
-        likelihood_particle_history=lift_result.likelihood_particle_history,
-        particle_history=lift_result.particle_history,
-        ess_history=lift_result.ess_history,
-        true_mass=true_mass,
-        env=env,
-        run_id=run_id,
-        backend=backend,
-        num_particles=num_particles,
-        max_step=300,
-    )
-    logger.info(
-        {
-            **log_data,
-            "msg": f"Saved the likelihood landscape GIF to {likelihood_landscape_gif_path}.",
-            "path": str(likelihood_landscape_gif_path),
-        }
-    )
-    wall_duration_vs_ess_gif_path = generate_wall_duration_vs_ess_gif(
-        ess_history=lift_result.ess_history,
-        pf_wall_durations=lift_result.pf_wall_durations,
-        resample_events=lift_result.resample_events,
-        num_particles=num_particles,
-        run_id=run_id,
-        backend=backend,
-        max_step=300,
-    )
-    logger.info(
-        {
-            **log_data,
-            "msg": f"Saved the wall-duration-vs-ESS GIF to {wall_duration_vs_ess_gif_path}.",
-            "path": str(wall_duration_vs_ess_gif_path),
-        }
-    )
-    try:
-        real_robot_gif_path = generate_real_robot_execution_gif(
-            model=real_robot.model,
-            trajectories=[
-                ("Approach", traj1),
-                ("Descend", traj2),
-                ("Grip", traj3),
-                ("Lift", traj4),
-            ],
-            dt=dt,
-            run_id=run_id,
-            backend=backend,
-        )
-        logger.info(
-            {
-                **log_data,
-                "msg": f"Saved the real robot execution GIF to {real_robot_gif_path}.",
-                "path": str(real_robot_gif_path),
-            }
-        )
-    except Exception as exc:
-        logger.warning(
-            {
-                **log_data,
-                "msg": "Skipped generating the real robot execution GIF because offscreen rendering failed.",
-                "error": str(exc),
-            }
-        )
-
     gc.collect()
     logger.info(
         {

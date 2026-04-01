@@ -101,6 +101,8 @@ class WarpParticleFilter:
         self._step_index = 0
         self._resample_count = 0
         self._skipped_invalid_updates = 0
+        self._low_info_updates = 0
+        self._restore_calls = 0
         self._last_good_particles = self.particles.copy()
         self._last_good_weights = self.weights.copy()
         self._last_good_ess = self._ess
@@ -254,6 +256,7 @@ class WarpParticleFilter:
         attempt: int = 1,
     ) -> dict[str, float | bool]:
         restored = self.env.restore_recovery_snapshot()
+        self._restore_calls += 1
         if restored:
             self.particles = self._last_good_particles.copy()
             self.weights = self._last_good_weights.copy()
@@ -295,6 +298,8 @@ class WarpParticleFilter:
             "skipped_invalid_updates": self._skipped_invalid_updates,
             "bootstrap_attempts": attempt,
             "uninformative_update": False,
+            "low_info_updates": self._low_info_updates,
+            "restore_calls": self._restore_calls,
         }
         self._step_index += 1
         return result
@@ -303,18 +308,16 @@ class WarpParticleFilter:
         self,
         diagnostics: dict[str, float],
     ) -> dict[str, float | bool]:
-        restored = self.env.restore_recovery_snapshot()
-        if restored:
-            self.particles = self._last_good_particles.copy()
-            self.weights = self._last_good_weights.copy()
-            self._ess = float(self._last_good_ess)
-        self.logger.warning(
+        self._low_info_updates += 1
+        self.logger.info(
             {
                 **self.logging_data,
-                "event": "warp_uninformative_update_skipped",
-                "msg": f"Skipped an uninformative Warp update at step {self._step_index}.",
+                "event": "warp_uninformative_update_detected",
+                "msg": (
+                    f"Low-information update at step {self._step_index}; "
+                    "continuing without rollback."
+                ),
                 "step": self._step_index,
-                "restored": restored,
             }
         )
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
@@ -330,6 +333,8 @@ class WarpParticleFilter:
             "skipped_invalid_updates": self._skipped_invalid_updates,
             "bootstrap_attempts": 1,
             "uninformative_update": True,
+            "low_info_updates": self._low_info_updates,
+            "restore_calls": self._restore_calls,
         }
         self._step_index += 1
         return result
@@ -338,8 +343,14 @@ class WarpParticleFilter:
         likelihoods = self.env.compute_likelihoods(self.particles, observation)
         self._last_likelihoods = np.asarray(likelihoods, dtype=np.float64).copy()
         diagnostics = self.env.last_measurement_diagnostics()
-        if self._measurement_is_valid(diagnostics) and self._measurement_is_informative(diagnostics):
-            self.weights = _normalize_weights(self.weights, likelihoods)
+        if not self._measurement_is_valid(diagnostics):
+            self._step_index += 1
+            return
+        low_info = not self._measurement_is_informative(diagnostics)
+        if low_info:
+            self._low_info_updates += 1
+        self.weights = _normalize_weights(self.weights, likelihoods)
+        if not low_info:
             self._save_last_good_snapshot()
         self._ess = _effective_sample_size(self.weights)
         self._step_index += 1
@@ -367,22 +378,37 @@ class WarpParticleFilter:
         diagnostics = self.env.last_measurement_diagnostics()
         if not self._measurement_is_valid(diagnostics):
             return self._skip_invalid_update(diagnostics)
-        if not self._measurement_is_informative(diagnostics):
-            return self._skip_uninformative_update(diagnostics)
-
-        offset = float(self._rng.uniform())
-        (
-            self.weights,
-            self.particles,
-            self._ess,
-            indexes,
-            did_resample,
-        ) = _update_and_optionally_resample(self.weights, self.particles, likelihoods, offset)
-        if did_resample:
-            with annotate("warp_pf_resample_states"):
-                self.env.resample_states(indexes)
-            self._resample_count += 1
-        self._save_last_good_snapshot()
+        low_info = not self._measurement_is_informative(diagnostics)
+        if low_info:
+            self._low_info_updates += 1
+            self.logger.info(
+                {
+                    **self.logging_data,
+                    "event": "warp_uninformative_update_detected",
+                    "msg": (
+                        f"Low-information update at step {self._step_index}; "
+                        "updating weights without resampling or rollback."
+                    ),
+                    "step": self._step_index,
+                }
+            )
+            self.weights = _normalize_weights(self.weights, likelihoods)
+            self._ess = _effective_sample_size(self.weights)
+            did_resample = False
+        else:
+            offset = float(self._rng.uniform())
+            (
+                self.weights,
+                self.particles,
+                self._ess,
+                indexes,
+                did_resample,
+            ) = _update_and_optionally_resample(self.weights, self.particles, likelihoods, offset)
+            if did_resample:
+                with annotate("warp_pf_resample_states"):
+                    self.env.resample_states(indexes)
+                self._resample_count += 1
+            self._save_last_good_snapshot()
         uniform_weight_l1, uniform_weight_max_dev, collapsed_to_uniform = _uniform_weight_metrics(self.weights)
         if collapsed_to_uniform and (
             diagnostics.get("invalid_sensor_events", 0.0) > 0.0
@@ -409,7 +435,9 @@ class WarpParticleFilter:
             "skipped_invalid_update": False,
             "skipped_invalid_updates": self._skipped_invalid_updates,
             "bootstrap_attempts": 1,
-            "uninformative_update": False,
+            "uninformative_update": low_info,
+            "low_info_updates": self._low_info_updates,
+            "restore_calls": self._restore_calls,
             "likelihoods": self._last_likelihoods.copy(),
         }
 
