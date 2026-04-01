@@ -169,19 +169,37 @@ class FrankaWarpEnv(ParticleEnvironment):
         with annotate("warp_sensor_slice"):
             sim_forces = self._batch.sensor_slice(self.force_adr, 3)
         observation_np = np.asarray(observation, dtype=np.float32)
-        diff = observation_np - sim_forces
-        dist_sq = np.sum(diff**2, axis=1)
-        log_likelihoods = -0.5 * dist_sq / self._measurement_variance
-        finite_log_likelihoods = np.isfinite(log_likelihoods)
-        if np.any(finite_log_likelihoods):
-            log_likelihoods = log_likelihoods - np.max(
-                log_likelihoods[finite_log_likelihoods]
-            )
-        likelihoods = np.exp(log_likelihoods)
         sim_force_finite = np.isfinite(sim_forces)
+        valid_force_particle = np.all(sim_force_finite, axis=1)
+
+        diff = np.full_like(sim_forces, np.nan, dtype=np.float32)
+        if np.any(valid_force_particle):
+            diff[valid_force_particle] = (
+                observation_np - sim_forces[valid_force_particle]
+            )
+
+        dist_sq = np.full((self._num_particles,), np.nan, dtype=np.float32)
+        if np.any(valid_force_particle):
+            dist_sq[valid_force_particle] = np.sum(
+                diff[valid_force_particle] ** 2, axis=1
+            )
+
+        log_likelihoods = np.full(
+            (self._num_particles,), -np.inf, dtype=np.float32
+        )
+        if np.any(valid_force_particle):
+            log_likelihoods[valid_force_particle] = (
+                -0.5 * dist_sq[valid_force_particle] / self._measurement_variance
+            )
+            finite_log_likelihoods = np.isfinite(log_likelihoods)
+            log_likelihoods[finite_log_likelihoods] = (
+                log_likelihoods[finite_log_likelihoods]
+                - np.max(log_likelihoods[finite_log_likelihoods])
+            )
+
+        likelihoods = np.exp(log_likelihoods).astype(np.float32, copy=False)
         diff_finite = np.isfinite(diff)
         likelihood_finite = np.isfinite(likelihoods)
-        valid_force_particle = np.isfinite(sim_forces).all(axis=1)
         sim_force_nonfinite_count = int(
             sim_forces.size - np.count_nonzero(sim_force_finite)
         )
@@ -230,10 +248,17 @@ class FrankaWarpEnv(ParticleEnvironment):
             else np.zeros((0,), dtype=np.int32)
         )
 
-        force_norms = np.linalg.norm(sim_forces, axis=1)
-        diff_norms = np.linalg.norm(diff, axis=1)
+        safe_sim_forces = np.where(sim_force_finite, sim_forces, 0.0)
+        force_norms = np.linalg.norm(safe_sim_forces, axis=1)
+        diff_norms = np.full((self._num_particles,), np.nan, dtype=np.float32)
+        if np.any(valid_force_particle):
+            diff_norms[valid_force_particle] = np.linalg.norm(
+                diff[valid_force_particle], axis=1
+            )
         sim_force_signal_particle_ratio = (
-            float(np.mean(force_norms > 1e-3)) if force_norms.size else 0.0
+            float(np.mean(force_norms[valid_force_particle] > 1e-3))
+            if np.any(valid_force_particle)
+            else 0.0
         )
         contact_metric_available = float(contact_counts.size > 0)
         contact_force_mismatch = float(
@@ -266,15 +291,39 @@ class FrankaWarpEnv(ParticleEnvironment):
             "obs_fy": float(observation_np[1]),
             "obs_fz": float(observation_np[2]),
             "obs_norm": float(np.linalg.norm(observation_np)),
-            "sim_force_norm_min": float(np.min(force_norms)),
-            "sim_force_norm_max": float(np.max(force_norms)),
-            "sim_force_norm_mean": float(np.mean(force_norms)),
-            "sim_force_axis_std_x": float(np.std(sim_forces[:, 0])),
-            "sim_force_axis_std_y": float(np.std(sim_forces[:, 1])),
-            "sim_force_axis_std_z": float(np.std(sim_forces[:, 2])),
-            "diff_norm_min": float(np.min(diff_norms)),
-            "diff_norm_max": float(np.max(diff_norms)),
-            "diff_norm_mean": float(np.mean(diff_norms)),
+            "sim_force_norm_min": float(np.nanmin(force_norms))
+            if force_norms.size
+            else 0.0,
+            "sim_force_norm_max": float(np.nanmax(force_norms))
+            if force_norms.size
+            else 0.0,
+            "sim_force_norm_mean": float(np.nanmean(force_norms))
+            if force_norms.size
+            else 0.0,
+            "sim_force_axis_std_x": (
+                float(np.std(sim_forces[valid_force_particle, 0]))
+                if np.any(valid_force_particle)
+                else 0.0
+            ),
+            "sim_force_axis_std_y": (
+                float(np.std(sim_forces[valid_force_particle, 1]))
+                if np.any(valid_force_particle)
+                else 0.0
+            ),
+            "sim_force_axis_std_z": (
+                float(np.std(sim_forces[valid_force_particle, 2]))
+                if np.any(valid_force_particle)
+                else 0.0
+            ),
+            "diff_norm_min": float(np.nanmin(diff_norms))
+            if np.any(valid_force_particle)
+            else 0.0,
+            "diff_norm_max": float(np.nanmax(diff_norms))
+            if np.any(valid_force_particle)
+            else 0.0,
+            "diff_norm_mean": float(np.nanmean(diff_norms))
+            if np.any(valid_force_particle)
+            else 0.0,
             "sim_force_finite_ratio": (
                 float(np.mean(sim_force_finite)) if sim_force_finite.size else 0.0
             ),
@@ -289,6 +338,12 @@ class FrankaWarpEnv(ParticleEnvironment):
                 if valid_force_particle.size
                 else 0.0
             ),
+            "invalid_force_particle_ratio": (
+                1.0 - float(np.mean(valid_force_particle))
+                if valid_force_particle.size
+                else 0.0
+            ),
+            "all_particles_invalid": float(not np.any(valid_force_particle)),
             "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
             "contact_count_mean": (
                 float(np.mean(contact_counts)) if contact_counts.size else 0.0
@@ -329,11 +384,15 @@ class FrankaWarpEnv(ParticleEnvironment):
                 state_nonfinite_counts["ctrl_nonfinite_count"]
             ),
             "repaired_world_count": 0.0,
-            "likelihood_min": float(np.min(likelihoods)),
-            "likelihood_max": float(np.max(likelihoods)),
-            "likelihood_mean": float(np.mean(likelihoods)),
-            "likelihood_std": float(np.std(likelihoods)),
-            "likelihood_range": float(np.max(likelihoods) - np.min(likelihoods)),
+            "likelihood_min": float(np.min(likelihoods)) if likelihoods.size else 0.0,
+            "likelihood_max": float(np.max(likelihoods)) if likelihoods.size else 0.0,
+            "likelihood_mean": float(np.mean(likelihoods)) if likelihoods.size else 0.0,
+            "likelihood_std": float(np.std(likelihoods)) if likelihoods.size else 0.0,
+            "likelihood_range": (
+                float(np.max(likelihoods) - np.min(likelihoods))
+                if likelihoods.size
+                else 0.0
+            ),
             "measurement_variance": float(self._measurement_variance),
         }
 
