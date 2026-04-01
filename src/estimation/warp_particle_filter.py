@@ -272,8 +272,31 @@ class FrankaWarpEnv(ParticleEnvironment):
                 {
                     **self.logging_data,
                     "event": "warp_invalid_sensor_state",
-                    "msg": f"Detected an invalid Warp sensor state at step {self._step_count}.",
+                    "msg": (
+                        "Detected non-finite values in the predicted force path for "
+                        "this Warp batch step. This means one or more entries in "
+                        "`sim_forces`, `diff`, or `likelihoods` were not finite."
+                    ),
                     "step": self._step_count,
+                    "valid_force_particle_ratio": float(
+                        np.mean(valid_force_particle)
+                    )
+                    if valid_force_particle.size
+                    else 0.0,
+                    "invalid_force_particle_ratio": (
+                        1.0 - float(np.mean(valid_force_particle))
+                        if valid_force_particle.size
+                        else 0.0
+                    ),
+                    "sim_force_nonfinite_count": sim_force_nonfinite_count,
+                    "diff_nonfinite_count": diff_nonfinite_count,
+                    "likelihood_nonfinite_count": likelihood_nonfinite_count,
+                    "observation_norm": float(np.linalg.norm(observation_np)),
+                    "sim_force_signal_particle_ratio": sim_force_signal_particle_ratio,
+                    "contact_count_mean": (
+                        float(np.mean(contact_counts)) if contact_counts.size else 0.0
+                    ),
+                    "contact_force_mismatch": contact_force_mismatch,
                 }
             )
         if state_invalid_transition:
@@ -281,8 +304,25 @@ class FrankaWarpEnv(ParticleEnvironment):
                 {
                     **self.logging_data,
                     "event": "warp_invalid_backend_state",
-                    "msg": f"Detected an invalid Warp backend state at step {self._step_count}.",
+                    "msg": (
+                        "Detected non-finite values in the Warp backend state for "
+                        "this batch step. This means one or more entries in "
+                        "`qpos`, `qvel`, `sensordata`, or `ctrl` were not finite."
+                    ),
                     "step": self._step_count,
+                    "qpos_nonfinite_count": int(
+                        state_nonfinite_counts["qpos_nonfinite_count"]
+                    ),
+                    "qvel_nonfinite_count": int(
+                        state_nonfinite_counts["qvel_nonfinite_count"]
+                    ),
+                    "sensordata_nonfinite_count": int(
+                        state_nonfinite_counts["sensordata_nonfinite_count"]
+                    ),
+                    "ctrl_nonfinite_count": int(
+                        state_nonfinite_counts["ctrl_nonfinite_count"]
+                    ),
+                    "invalid_state_events_total": int(self._invalid_state_events),
                 }
             )
 

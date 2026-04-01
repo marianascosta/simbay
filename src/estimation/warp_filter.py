@@ -165,10 +165,24 @@ class WarpParticleFilter:
                     **self.logging_data,
                     "event": "warp_all_particles_invalid_update_skipped",
                     "msg": (
-                        "Skipped a Warp measurement update because all particle "
-                        "sensor predictions were invalid."
+                        "Skipped the Warp measurement update because "
+                        "`all_particles_invalid` was true. The code left "
+                        "`self.weights` and `self._ess` unchanged for this step."
                     ),
                     "step": self._step_index,
+                    "ess_before_skip": float(self._ess),
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
+                    "invalid_force_particle_ratio": diagnostics.get(
+                        "invalid_force_particle_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "likelihood_nonfinite_count": diagnostics.get(
+                        "likelihood_nonfinite_count", 0.0
+                    ),
                 }
             )
         else:
@@ -206,10 +220,24 @@ class WarpParticleFilter:
                     **self.logging_data,
                     "event": "warp_all_particles_invalid_update_skipped",
                     "msg": (
-                        "Skipped a Warp measurement update because all particle "
-                        "sensor predictions were invalid."
+                        "Skipped the Warp measurement update because "
+                        "`all_particles_invalid` was true. The code left "
+                        "`self.weights` and `self._ess` unchanged for this step."
                     ),
                     "step": self._step_index,
+                    "ess_before_skip": float(self._ess),
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
+                    "invalid_force_particle_ratio": diagnostics.get(
+                        "invalid_force_particle_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "likelihood_nonfinite_count": diagnostics.get(
+                        "likelihood_nonfinite_count", 0.0
+                    ),
                 }
             )
         else:
@@ -234,12 +262,45 @@ class WarpParticleFilter:
                     **self.logging_data,
                     "event": "warp_weight_update_partially_invalid",
                     "msg": (
-                        f"Applied a Warp weight update with some invalid particle "
-                        f"sensor predictions at step {self._step_index}."
+                        "Applied the Warp measurement update after masking invalid "
+                        "particles. The code assigned zero likelihood to particles "
+                        "with non-finite predicted forces and normalized weights over "
+                        "the remaining particles."
                     ),
                     "step": self._step_index,
+                    "valid_force_particle_ratio": diagnostics.get(
+                        "valid_force_particle_ratio", 0.0
+                    ),
                     "invalid_force_particle_ratio": diagnostics.get(
                         "invalid_force_particle_ratio", 0.0
+                    ),
+                    "dropped_particle_count": int(
+                        round(
+                            self.N
+                            * float(
+                                diagnostics.get("invalid_force_particle_ratio", 0.0)
+                            )
+                        )
+                    ),
+                    "effective_particle_count_after_mask": int(
+                        round(
+                            self.N
+                            * float(
+                                diagnostics.get("valid_force_particle_ratio", 0.0)
+                            )
+                        )
+                    ),
+                    "ess_after_update": float(self._ess),
+                    "collapsed_to_uniform": bool(collapsed_to_uniform),
+                    "uniform_weight_l1_distance": float(uniform_weight_l1),
+                    "likelihood_finite_ratio": diagnostics.get(
+                        "likelihood_finite_ratio", 0.0
+                    ),
+                    "sim_force_nonfinite_count": diagnostics.get(
+                        "sim_force_nonfinite_count", 0.0
+                    ),
+                    "diff_nonfinite_count": diagnostics.get(
+                        "diff_nonfinite_count", 0.0
                     ),
                 }
             )

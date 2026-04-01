@@ -1677,6 +1677,7 @@ class LiftPhaseResult:
     gpu_vram_utilization_history: list[float]
     real_sensor_history: list[np.ndarray]
     mean_particle_sensor_history: list[np.ndarray]
+    initial_particles: np.ndarray
     particle_history: list[np.ndarray]
     pf_wall_durations: list[float]
     pf_cpu_durations: list[float]
@@ -1720,6 +1721,7 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
         "gpu_vram_utilization_history": [],
         "real_sensor_history": [],
         "mean_particle_sensor_history": [],
+        "initial_particles": np.array([], dtype=np.float64),
         "particle_history": [],
         "pf_wall_durations": [],
         "pf_cpu_durations": [],
@@ -1918,6 +1920,11 @@ def update_phase_4_state(
         if current_gpu_vram_utilization is not None
         else float("nan")
     )
+    if (
+        hasattr(particle_filter, "particles")
+        and np.asarray(state["initial_particles"]).size == 0
+    ):
+        state["initial_particles"] = np.asarray(particle_filter.particles).copy()
     state["real_sensor_history"].append(
         np.asarray(
             step_result.get("real_sensor_reading", np.zeros((3,))), dtype=np.float64
@@ -2297,6 +2304,7 @@ def finalize_phase_4_metrics(
         gpu_vram_utilization_history=state["gpu_vram_utilization_history"],
         real_sensor_history=state["real_sensor_history"],
         mean_particle_sensor_history=state["mean_particle_sensor_history"],
+        initial_particles=np.asarray(state["initial_particles"]).copy(),
         particle_history=state["particle_history"],
         pf_wall_durations=state["pf_wall_durations"],
         pf_cpu_durations=state["pf_cpu_durations"],

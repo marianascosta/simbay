@@ -109,6 +109,35 @@ def _percentage_axis_limits(values: list[float]) -> tuple[float, float]:
     return lower, upper
 
 
+def _backend_display_name(backend: str) -> str:
+    if backend == "mujoco-warp":
+        return "Warp-accelerated MuJoCo simulation"
+    if backend == "mujoco":
+        return "MuJoCo simulation"
+    return backend.replace("-", " ").strip()
+
+
+def _hardware_display_name(backend: str) -> str:
+    if backend == "mujoco-warp":
+        return "GPU"
+    return "CPU"
+
+
+def _plot_subtitle(
+    backend: str,
+    num_particles: int,
+    *,
+    extra: str | None = None,
+) -> str:
+    subtitle = (
+        f"{_backend_display_name(backend)} • {num_particles} particles • "
+        f"hardware: {_hardware_display_name(backend)}"
+    )
+    if extra:
+        subtitle = f"{subtitle} • {extra}"
+    return subtitle
+
+
 def build_plot_grid(
     *,
     run_id: str,
@@ -331,12 +360,25 @@ def plot_mass_estimation_evolution(
     ax: Any,
     *,
     history_estimates: list[float],
+    initial_particles: np.ndarray,
     particle_history: list[np.ndarray],
     true_mass: float,
     env: Any,
 ) -> None:
     num_steps = len(history_estimates)
     steps_to_plot = min(num_steps, len(particle_history))
+    initial_snapshot = np.asarray(initial_particles, dtype=np.float64).reshape(-1)
+
+    if initial_snapshot.size > 0:
+        ax.scatter(
+            np.zeros(initial_snapshot.shape[0], dtype=np.float64),
+            initial_snapshot,
+            color=_PRIMARY_COLOR,
+            alpha=0.35,
+            s=14,
+            zorder=3,
+            label="Initial particle values",
+        )
 
     for t in range(steps_to_plot):
         snapshot = np.asarray(particle_history[t], dtype=np.float64).reshape(-1)
@@ -1146,6 +1188,7 @@ def generate_particle_filter_plot(
     *,
     history_estimates: list[float],
     ess_history: list[float],
+    initial_particles: np.ndarray,
     particle_history: list[np.ndarray],
     true_mass: float,
     env: Any,
@@ -1156,8 +1199,8 @@ def generate_particle_filter_plot(
     return build_plot_grid(
         run_id=run_id,
         output_name="particle_filter_evolution",
-        title="Particle Filter Lift Summary",
-        subtitle=f"{backend} backend • {num_particles} particles",
+        title="Particle Filter Summary",
+        subtitle=_plot_subtitle(backend, num_particles),
         figsize=(17, 6.8),
         nrows=1,
         ncols=2,
@@ -1165,6 +1208,7 @@ def generate_particle_filter_plot(
             lambda ax: plot_mass_estimation_evolution(
                 ax,
                 history_estimates=history_estimates,
+                initial_particles=initial_particles,
                 particle_history=particle_history,
                 true_mass=true_mass,
                 env=env,
@@ -1227,8 +1271,8 @@ def generate_resample_events_timeline_plot(
     return build_plot_grid(
         run_id=run_id,
         output_name="resample_events_timeline",
-        title="Resample Events Timeline",
-        subtitle=f"{backend} backend • {num_particles} particles",
+        title="Resampling Timeline",
+        subtitle=_plot_subtitle(backend, num_particles),
         figsize=(12, 3.8),
         nrows=1,
         ncols=1,
@@ -1581,10 +1625,11 @@ def generate_sensor_comparison_plot(
     return _save_multi_axes_plot(
         run_id=run_id,
         output_name="sensor_comparison",
-        title="Real vs Particle Sensor Readings",
-        subtitle=(
-            f"{backend} backend • {num_particles} particles • "
-            "3 sensor axes plus residual summary"
+        title="Force Sensor Comparison",
+        subtitle=_plot_subtitle(
+            backend,
+            num_particles,
+            extra="three axes with residual summary",
         ),
         figsize=(13, 10.5),
         nrows=4,
@@ -1671,8 +1716,8 @@ def generate_update_duration_per_step_plot(
     return build_plot_grid(
         run_id=run_id,
         output_name="relative_error",
-        title="Relative Error",
-        subtitle=f"{backend} backend • {num_particles} particles",
+        title="Relative Error Over Time",
+        subtitle=_plot_subtitle(backend, num_particles),
         figsize=(12, 4.5),
         nrows=1,
         ncols=1,
@@ -1695,6 +1740,7 @@ def generate_particle_filter_overview_plot(
     gpu_vram_utilization_history: list[float],
     real_sensor_history: list[np.ndarray],
     mean_particle_sensor_history: list[np.ndarray],
+    initial_particles: np.ndarray,
     particle_history: list[np.ndarray],
     true_mass: float,
     env: Any,
@@ -1705,8 +1751,8 @@ def generate_particle_filter_overview_plot(
     return build_plot_grid(
         run_id=run_id,
         output_name="particle_filter_overview",
-        title="Particle Filter Lift Overview",
-        subtitle=f"{backend} backend • {num_particles} particles",
+        title="Particle Filter Overview",
+        subtitle=_plot_subtitle(backend, num_particles),
         figsize=(18, 19),
         nrows=4,
         ncols=2,
@@ -1714,6 +1760,7 @@ def generate_particle_filter_overview_plot(
             lambda ax: plot_mass_estimation_evolution(
                 ax,
                 history_estimates=history_estimates,
+                initial_particles=initial_particles,
                 particle_history=particle_history,
                 true_mass=true_mass,
                 env=env,
@@ -1758,6 +1805,7 @@ def generate_particle_filter_plots(
     gpu_vram_utilization_history: list[float],
     real_sensor_history: list[np.ndarray],
     mean_particle_sensor_history: list[np.ndarray],
+    initial_particles: np.ndarray,
     particle_history: list[np.ndarray],
     pf_wall_durations: list[float],
     true_mass: float,
@@ -1766,17 +1814,18 @@ def generate_particle_filter_plots(
     num_particles: int,
     run_id: str,
 ) -> dict[str, Path]:
-    subtitle = f"{backend} backend • {num_particles} particles"
+    subtitle = _plot_subtitle(backend, num_particles)
     return {
         "mass_estimation": _save_single_plot(
             run_id=run_id,
             output_name="mass_estimation_evolution",
-            title="Mass Estimation Evolution",
+            title="Mass Estimate Over Time",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_mass_estimation_evolution(
                 ax,
                 history_estimates=history_estimates,
+                initial_particles=initial_particles,
                 particle_history=particle_history,
                 true_mass=true_mass,
                 env=env,
@@ -1785,7 +1834,7 @@ def generate_particle_filter_plots(
         "effective_sample_size": _save_single_plot(
             run_id=run_id,
             output_name="effective_sample_size",
-            title="Effective Sample Size",
+            title="Effective Sample Size Over Time",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_effective_sample_size(
@@ -1797,7 +1846,7 @@ def generate_particle_filter_plots(
         "relative_error": _save_single_plot(
             run_id=run_id,
             output_name="relative_error",
-            title="Relative Error",
+            title="Relative Error Over Time",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_relative_error(
@@ -1809,7 +1858,7 @@ def generate_particle_filter_plots(
         "resample_events": _save_single_plot(
             run_id=run_id,
             output_name="resample_events_timeline",
-            title="Resample Events Timeline",
+            title="Resampling Timeline",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_resample_events_timeline(
@@ -1820,7 +1869,7 @@ def generate_particle_filter_plots(
         "gpu_usage": _save_single_plot(
             run_id=run_id,
             output_name="gpu_usage",
-            title="GPU Usage",
+            title="GPU Utilization Over Time",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_gpu_usage(
@@ -1831,7 +1880,7 @@ def generate_particle_filter_plots(
         "vram_usage": _save_single_plot(
             run_id=run_id,
             output_name="vram_usage",
-            title="VRAM Usage",
+            title="GPU Memory Utilization Over Time",
             subtitle=subtitle,
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_vram_usage(
@@ -1842,8 +1891,12 @@ def generate_particle_filter_plots(
         "steps_per_second": _save_single_plot(
             run_id=run_id,
             output_name="steps_per_second",
-            title="Particle Filter Steps Per Second",
-            subtitle=f"{subtitle} • measured from per-step wall time",
+            title="Particle Filter Throughput",
+            subtitle=_plot_subtitle(
+                backend,
+                num_particles,
+                extra="measured from per-step wall time",
+            ),
             figsize=(12, 4.8),
             plot_builder=lambda ax: plot_steps_per_second(
                 ax,

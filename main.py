@@ -21,6 +21,7 @@ from src.utils.plots import generate_particle_filter_plots
 from src.utils.settings import BACKEND
 from src.utils.settings import DEFAULT_OBJECT_PROPS
 from src.utils.settings import FRANKA_HOME_QPOS
+from src.utils.settings import GENERATE_PLOTS
 from src.utils.settings import HEADLESS
 from src.utils.settings import NUM_PARTICLES
 from src.utils.settings import RUN_ID
@@ -698,30 +699,39 @@ def main(run_id: str = RUN_ID) -> None:
         }
     )
 
-    logger.info({**log_data, "msg": "Started generating the output plots."})
-    output_paths = generate_particle_filter_plots(
-        history_estimates=history_estimates,
-        ess_history=lift_result.ess_history,
-        resample_events=lift_result.resample_events,
-        gpu_utilization_history=lift_result.gpu_utilization_history,
-        gpu_vram_utilization_history=lift_result.gpu_vram_utilization_history,
-        real_sensor_history=lift_result.real_sensor_history,
-        mean_particle_sensor_history=lift_result.mean_particle_sensor_history,
-        particle_history=lift_result.particle_history,
-        pf_wall_durations=lift_result.pf_wall_durations,
-        true_mass=true_mass,
-        env=env,
-        backend=backend,
-        num_particles=num_particles,
-        run_id=run_id,
-    )
-    for plot_name, output_path in output_paths.items():
+    if GENERATE_PLOTS:
+        logger.info({**log_data, "msg": "Started generating the output plots."})
+        output_paths = generate_particle_filter_plots(
+            history_estimates=history_estimates,
+            ess_history=lift_result.ess_history,
+            resample_events=lift_result.resample_events,
+            gpu_utilization_history=lift_result.gpu_utilization_history,
+            gpu_vram_utilization_history=lift_result.gpu_vram_utilization_history,
+            real_sensor_history=lift_result.real_sensor_history,
+            mean_particle_sensor_history=lift_result.mean_particle_sensor_history,
+            initial_particles=lift_result.initial_particles,
+            particle_history=lift_result.particle_history,
+            pf_wall_durations=lift_result.pf_wall_durations,
+            true_mass=true_mass,
+            env=env,
+            backend=backend,
+            num_particles=num_particles,
+            run_id=run_id,
+        )
+        for plot_name, output_path in output_paths.items():
+            logger.info(
+                {
+                    **log_data,
+                    "msg": f"Saved the {plot_name} plot to {output_path}.",
+                    "plot_name": plot_name,
+                    "path": str(output_path),
+                }
+            )
+    else:
         logger.info(
             {
                 **log_data,
-                "msg": f"Saved the {plot_name} plot to {output_path}.",
-                "plot_name": plot_name,
-                "path": str(output_path),
+                "msg": "Skipped output plot generation because `SIMBAY_GENERATE_PLOTS=0`.",
             }
         )
     gc.collect()
