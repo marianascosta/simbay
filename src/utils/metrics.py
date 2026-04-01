@@ -1730,8 +1730,6 @@ class LiftPhaseResult:
     likelihood_particle_history: list[np.ndarray]
     gpu_utilization_history: list[float]
     gpu_vram_utilization_history: list[float]
-    real_sensor_history: list[np.ndarray]
-    mean_particle_sensor_history: list[np.ndarray]
     initial_particles: np.ndarray
     particle_history: list[np.ndarray]
     pf_wall_durations: list[float]
@@ -1774,8 +1772,6 @@ def init_stage_state(stage_name: str) -> dict[str, Any] | None:
         "likelihood_particle_history": [],
         "gpu_utilization_history": [],
         "gpu_vram_utilization_history": [],
-        "real_sensor_history": [],
-        "mean_particle_sensor_history": [],
         "initial_particles": np.array([], dtype=np.float64),
         "particle_history": [],
         "pf_wall_durations": [],
@@ -2006,18 +2002,6 @@ def update_phase_4_state(
             and np.asarray(state["initial_particles"]).size == 0
         ):
             state["initial_particles"] = np.asarray(particle_filter.particles).copy()
-        state["real_sensor_history"].append(
-            np.asarray(
-                step_result.get("real_sensor_reading", np.zeros((3,))),
-                dtype=np.float64,
-            ).copy()
-        )
-        state["mean_particle_sensor_history"].append(
-            np.asarray(
-                step_result.get("mean_particle_sensor_reading", np.zeros((3,))),
-                dtype=np.float64,
-            ).copy()
-        )
         if hasattr(particle_filter, "particles"):
             state["latest_particles_snapshot"] = np.asarray(
                 particle_filter.particles
@@ -2401,8 +2385,6 @@ def finalize_phase_4_metrics(
         likelihood_particle_history=state["likelihood_particle_history"],
         gpu_utilization_history=state["gpu_utilization_history"],
         gpu_vram_utilization_history=state["gpu_vram_utilization_history"],
-        real_sensor_history=state["real_sensor_history"],
-        mean_particle_sensor_history=state["mean_particle_sensor_history"],
         initial_particles=np.asarray(state["initial_particles"]).copy(),
         particle_history=state["particle_history"],
         pf_wall_durations=state["pf_wall_durations"],
