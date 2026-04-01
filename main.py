@@ -325,6 +325,7 @@ def pf_replay(
 
 def phase_4_step_logic(
     *,
+    tracer: Any,
     backend: str,
     stage_state: dict[str, Any],
     particle_filter: Any,
@@ -332,67 +333,82 @@ def phase_4_step_logic(
     viewer: Any,
     qpos: np.ndarray,
 ) -> dict[str, Any]:
-    robot_execute_start = time.perf_counter()
-    real_robot.move_joints(qpos)
-    if viewer is not None:
-        viewer.sync()
-    stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
-
-    measurements = real_robot.get_sensor_reads()
-    noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=3)
-
-    with annotate("phase4_particle_filter_step"):
-        if backend == "mujoco-warp":
-            if not stage_state["bootstrap_applied"]:
-                step_result = particle_filter.bootstrap_first_update(
-                    qpos,
-                    noisy_ft_reading,
-                    max_attempts=3,
-                )
-                recovered_attempts = int(step_result.get("bootstrap_attempts", 1))
-                if recovered_attempts > 1:
-                    step_result["recovered_first_update_attempts"] = recovered_attempts
-                stage_state["bootstrap_applied"] = True
-            else:
-                step_result = particle_filter.step(qpos, noisy_ft_reading)
-        else:
-            particle_filter.predict(qpos)
-            particle_filter.update(noisy_ft_reading)
-            did_resample = particle_filter.effective_sample_size() < (
-                particle_filter.N / 2
-            )
-            if did_resample:
-                particle_filter.resample()
-            step_result = {
-                "ess": particle_filter.effective_sample_size(),
-                "resampled": did_resample,
-                "resample_count": getattr(
-                    particle_filter,
-                    "_resample_count",
-                    stage_state["resample_count"] + int(did_resample),
-                ),
-                "uniform_weight_l1_distance": 0.0,
-                "uniform_weight_max_deviation": 0.0,
-                "collapsed_to_uniform": False,
-                "likelihoods": np.asarray(
-                    getattr(particle_filter, "_last_likelihoods", np.ones(particle_filter.N)),
-                    dtype=np.float64,
-                ).copy(),
+    with tracing_span(tracer, "robot_execute"):
+        set_span_attributes(
+            {
+                "simbay.stage": "phase_4_lift",
+                "simbay.substage": "robot_execute",
+                "simbay.phase_step_control_dim": int(np.asarray(qpos).shape[0]),
             }
-    if "likelihoods" not in step_result:
-        step_result["likelihoods"] = np.asarray(
-            getattr(particle_filter, "_last_likelihoods", np.ones(particle_filter.N)),
-            dtype=np.float64,
-        ).copy()
-    step_result["likelihood_particles"] = np.asarray(
-        particle_filter.particles, dtype=np.float64
-    ).copy()
-    step_result["real_sensor_reading"] = np.asarray(
-        measurements, dtype=np.float64
-    ).copy()
-    step_result["mean_particle_sensor_reading"] = np.asarray(
-        particle_filter.env.mean_particle_sensor_reads(), dtype=np.float64
-    ).copy()
+        )
+        robot_execute_start = time.perf_counter()
+        real_robot.move_joints(qpos)
+        if viewer is not None:
+            viewer.sync()
+        stage_state["robot_execute_total"] += time.perf_counter() - robot_execute_start
+
+    with tracing_span(tracer, "sensor_read"):
+        measurements = real_robot.get_sensor_reads()
+        noisy_ft_reading = measurements + np.random.normal(0, 0.5, size=3)
+        set_span_attributes(
+            {
+                "simbay.stage": "phase_4_lift",
+                "simbay.substage": "sensor_read",
+                "simbay.real_sensor_fx": float(measurements[0]),
+                "simbay.real_sensor_fy": float(measurements[1]),
+                "simbay.real_sensor_fz": float(measurements[2]),
+            }
+        )
+
+    with tracing_span(tracer, "pf_update"):
+        set_span_attributes(
+            {
+                "simbay.stage": "phase_4_lift",
+                "simbay.substage": "pf_update",
+                "simbay.particle_update_strategy": (
+                    "single_control_step_across_all_particles_in_batch"
+                    if backend == "mujoco-warp"
+                    else "single_control_step_one_particle_update_at_a_time"
+                ),
+                "simbay.particles_updated_at_the_same_time": (
+                    particle_filter.N if backend == "mujoco-warp" else 1
+                ),
+            }
+        )
+        with annotate("phase4_particle_filter_step"):
+            if backend == "mujoco-warp":
+                if not stage_state["bootstrap_applied"]:
+                    step_result = particle_filter.bootstrap_first_update(
+                        qpos,
+                        noisy_ft_reading,
+                        max_attempts=3,
+                    )
+                    recovered_attempts = int(step_result.get("bootstrap_attempts", 1))
+                    if recovered_attempts > 1:
+                        step_result["recovered_first_update_attempts"] = recovered_attempts
+                    stage_state["bootstrap_applied"] = True
+                else:
+                    step_result = particle_filter.step(qpos, noisy_ft_reading)
+            else:
+                particle_filter.predict(qpos)
+                particle_filter.update(noisy_ft_reading)
+                did_resample = particle_filter.effective_sample_size() < (
+                    particle_filter.N / 2
+                )
+                if did_resample:
+                    particle_filter.resample()
+                step_result = {
+                    "ess": particle_filter.effective_sample_size(),
+                    "resampled": did_resample,
+                    "resample_count": getattr(
+                        particle_filter,
+                        "_resample_count",
+                        stage_state["resample_count"] + int(did_resample),
+                    ),
+                    "uniform_weight_l1_distance": 0.0,
+                    "uniform_weight_max_deviation": 0.0,
+                    "collapsed_to_uniform": False,
+                }
     return step_result
 
 
@@ -417,71 +433,82 @@ def run_phase_4_lift(
     phase = "phase_4_lift"
     stage_state = metrics.init_stage_state(phase)
     phase_started_at = time.perf_counter()
-    with tracing_span(tracer, phase):
-        set_span_attributes(
-            {
-                **span_attrs,
-                "simbay.stage": phase,
-                "simbay.phase_trajectory_step_count": len(trajectory),
-            }
-        )
-        for step, qpos in enumerate(trajectory):
-            metrics.set_stage_duration(phase, time.perf_counter() - phase_started_at)
-            with tracing_span(tracer, "step"):
-                set_span_attributes(
-                    {
-                        **span_attrs,
-                        "simbay.stage": phase,
-                    }
-                )
-                set_span_attributes(
-                    {
-                        "simbay.phase_step_index": step,
-                        "simbay.particle_update_strategy": (
-                            "single_control_step_across_all_particles_in_batch"
-                            if backend == "mujoco-warp"
-                            else "single_control_step_one_particle_update_at_a_time"
-                        ),
-                        "simbay.particle_updates_per_control_step": (
-                            particle_filter.N if backend == "mujoco-warp" else 1
-                        ),
-                    }
-                )
-                step_wall_start = time.perf_counter()
-                step_cpu_start = time.process_time()
-                step_result = phase_4_step_logic(
-                    backend=backend,
-                    stage_state=stage_state,
-                    particle_filter=particle_filter,
-                    real_robot=real_robot,
-                    viewer=viewer,
-                    qpos=qpos,
-                )
-                step_wall_duration = time.perf_counter() - step_wall_start
-                step_cpu_duration = time.process_time() - step_cpu_start
-                metrics.phase_4_step_observability(
-                    run_id=run_id,
-                    backend=backend,
-                    started_at=started_at,
-                    span_attrs=span_attrs,
-                    log_data=log_data,
-                    logger=logger,
-                    stage_state=stage_state,
-                    particle_filter=particle_filter,
-                    step=step,
-                    true_mass=true_mass,
-                    step_result=step_result,
-                    step_wall_duration=step_wall_duration,
-                    step_cpu_duration=step_cpu_duration,
-                )
+    set_span_attributes(
+        {
+            **span_attrs,
+            "simbay.stage": phase,
+            "simbay.phase_trajectory_step_count": len(trajectory),
+        }
+    )
+    for step, qpos in enumerate(trajectory):
         metrics.set_stage_duration(phase, time.perf_counter() - phase_started_at)
-        return metrics.finalize_phase_4_metrics(
-            log_data=log_data,
-            logger=logger,
-            state=stage_state,
-            trajectory=trajectory,
-            particle_filter=particle_filter,
-        )
+        with tracing_span(tracer, "phase_4_step"):
+            set_span_attributes(
+                {
+                    **span_attrs,
+                    "simbay.stage": phase,
+                    "simbay.substage": "phase_4_step",
+                }
+            )
+            set_span_attributes(
+                {
+                    "simbay.phase_step_index": step,
+                    "simbay.particle_update_strategy": (
+                        "single_control_step_across_all_particles_in_batch"
+                        if backend == "mujoco-warp"
+                        else "single_control_step_one_particle_update_at_a_time"
+                    ),
+                    "simbay.particle_updates_per_control_step": (
+                        particle_filter.N if backend == "mujoco-warp" else 1
+                    ),
+                }
+            )
+            step_wall_start = time.perf_counter()
+            step_cpu_start = time.process_time()
+            step_result = phase_4_step_logic(
+                tracer=tracer,
+                backend=backend,
+                stage_state=stage_state,
+                particle_filter=particle_filter,
+                real_robot=real_robot,
+                viewer=viewer,
+                qpos=qpos,
+            )
+            step_wall_duration = time.perf_counter() - step_wall_start
+            step_cpu_duration = time.process_time() - step_cpu_start
+            if metrics.metrics_enabled():
+                with tracing_span(tracer, "metrics_update"):
+                    set_span_attributes(
+                        {
+                            **span_attrs,
+                            "simbay.stage": phase,
+                            "simbay.substage": "metrics_update",
+                            "simbay.phase_step_index": step,
+                        }
+                    )
+                    metrics.phase_4_step_observability(
+                        run_id=run_id,
+                        backend=backend,
+                        started_at=started_at,
+                        span_attrs=span_attrs,
+                        log_data=log_data,
+                        logger=logger,
+                        stage_state=stage_state,
+                        particle_filter=particle_filter,
+                        step=step,
+                        true_mass=true_mass,
+                        step_result=step_result,
+                        step_wall_duration=step_wall_duration,
+                        step_cpu_duration=step_cpu_duration,
+                    )
+    metrics.set_stage_duration(phase, time.perf_counter() - phase_started_at)
+    return metrics.finalize_phase_4_metrics(
+        log_data=log_data,
+        logger=logger,
+        state=stage_state,
+        trajectory=trajectory,
+        particle_filter=particle_filter,
+    )
 
 
 @trace_call("simbay.main", span_name="main")

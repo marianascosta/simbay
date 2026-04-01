@@ -18,6 +18,9 @@ from prometheus_client import Gauge
 from prometheus_client import make_wsgi_app
 
 from .logging_utils import get_process_memory_bytes
+from .settings import ENABLE_METRICS
+from .settings import CAPTURE_PHASE4_DEBUG_HISTORY
+from .settings import CAPTURE_PHASE4_GPU_HISTORY
 from .settings import SYSTEM_METRICS_INTERVAL_SECONDS
 from .tracing import add_exemplar
 from .tracing import force_flush_tracing
@@ -1363,6 +1366,10 @@ class _MetricsState:
 _STATE: _MetricsState | None = None
 
 
+def metrics_enabled() -> bool:
+    return bool(_STATE is not None and _STATE.enabled)
+
+
 def _require_state() -> _MetricsState:
     if _STATE is None:
         raise RuntimeError(
@@ -1372,46 +1379,68 @@ def _require_state() -> _MetricsState:
 
 
 def start_stage(stage: str) -> StageToken:
+    if not metrics_enabled():
+        return StageToken(stage=stage, started_at=time.perf_counter())
     return _require_state().start_stage(stage)
 
 
 def finish_stage(token: StageToken) -> float:
+    if not metrics_enabled():
+        return time.perf_counter() - token.started_at
     return _require_state().finish_stage(token)
 
 
 def set_stage_duration(stage: str, duration: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_stage_duration(stage, duration)
 
 
 def start_substage(phase: str, substage: str) -> SubstageToken:
+    if not metrics_enabled():
+        return SubstageToken(
+            phase=phase, substage=substage, started_at=time.perf_counter()
+        )
     return _require_state().start_substage(phase, substage)
 
 
 def finish_substage(token: SubstageToken) -> float:
+    if not metrics_enabled():
+        return time.perf_counter() - token.started_at
     return _require_state().finish_substage(token)
 
 
 def set_substage_duration(phase: str, substage: str, duration: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_substage_duration(phase, substage, duration)
 
 
 def set_substage_workload(
     phase: str, substage: str, steps: int, particles: int, duration_seconds: float
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_substage_workload(
         phase, substage, steps, particles, duration_seconds
     )
 
 
 def set_particle_count(particles: int) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_particle_count(particles)
 
 
 def set_backend(backend: str, device: str) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_backend(backend, device)
 
 
 def set_run_info(backend: str, particles: int, control_dt: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_run_info(backend, particles, control_dt)
 
 
@@ -1421,6 +1450,8 @@ def set_memory_profile(
     state_bytes_per_particle: int,
     process_memory_per_particle_estimate_bytes: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_memory_profile(
         state_bytes_total=state_bytes_total,
         state_bytes_per_particle=state_bytes_per_particle,
@@ -1436,6 +1467,8 @@ def set_runtime_environment(
     default_jax_device: str,
     device_fallback_applied: bool,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_runtime_environment(
         execution_platform=execution_platform,
         execution_device=execution_device,
@@ -1453,6 +1486,8 @@ def set_mujoco_memory_profile(
     native_bytes_per_robot: int,
     native_bytes_total: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_mujoco_memory_profile(
         model_nbuffer_bytes_per_robot=model_nbuffer_bytes_per_robot,
         data_nbuffer_bytes_per_robot=data_nbuffer_bytes_per_robot,
@@ -1470,6 +1505,8 @@ def update_warp_memory(
     bytes_limit: int,
     state_bytes_estimate: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_warp_memory(
         stage=stage,
         bytes_in_use=bytes_in_use,
@@ -1487,6 +1524,8 @@ def update_filter_state(
     cpu_equivalent_cores: float,
     particles: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_filter_state(
         ess, estimate, wall_seconds, cpu_seconds, cpu_equivalent_cores, particles
     )
@@ -1498,6 +1537,8 @@ def update_weight_health(
     uniform_weight_max_deviation: float,
     collapsed_to_uniform: bool,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_weight_health(
         uniform_weight_l1_distance=uniform_weight_l1_distance,
         uniform_weight_max_deviation=uniform_weight_max_deviation,
@@ -1518,6 +1559,8 @@ def update_accuracy_metrics(
     convergence_time_to_10pct_seconds: float,
     time_to_first_estimate_seconds: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_accuracy_metrics(
         mass_abs_error_kg=mass_abs_error_kg,
         mass_rel_error_pct=mass_rel_error_pct,
@@ -1542,6 +1585,8 @@ def update_uncertainty_metrics(
     weight_entropy_normalized: float,
     weight_perplexity: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_uncertainty_metrics(
         credible_interval_50_width_kg=credible_interval_50_width_kg,
         credible_interval_90_width_kg=credible_interval_90_width_kg,
@@ -1566,6 +1611,8 @@ def update_resample_state(
     particle_p50: float,
     particle_p90: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_resample_state(
         steps=steps,
         resample_count=resample_count,
@@ -1592,6 +1639,8 @@ def update_likelihood_health(
     likelihood_mean: float,
     likelihood_std: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_likelihood_health(
         sim_force_finite_ratio=sim_force_finite_ratio,
         diff_finite_ratio=diff_finite_ratio,
@@ -1622,6 +1671,8 @@ def update_invalid_state_counts(
     sensordata_nonfinite_count: int,
     ctrl_nonfinite_count: int,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_invalid_state_counts(
         invalid_sensor_events=invalid_sensor_events,
         invalid_state_events=invalid_state_events,
@@ -1650,6 +1701,8 @@ def update_contact_health(
     valid_force_particle_ratio: float,
     sim_force_signal_particle_ratio: float,
 ) -> None:
+    if not metrics_enabled():
+        return
     _require_state().update_contact_health(
         contact_count_mean=contact_count_mean,
         contact_count_max=contact_count_max,
@@ -1662,6 +1715,8 @@ def update_contact_health(
 
 
 def set_prediction_ready(total_wall_seconds: float, final_error_pct: float) -> None:
+    if not metrics_enabled():
+        return
     _require_state().set_prediction_ready(total_wall_seconds, final_error_pct)
 
 
@@ -1792,6 +1847,8 @@ def update_warp_memory_metrics(env: Any, *, stage: str) -> None:
 
 
 def read_gpu_utilization_pct() -> float | None:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None
     state = _require_state()
     gpu_metrics = state._read_gpu_metrics()
     if gpu_metrics is None:
@@ -1800,11 +1857,26 @@ def read_gpu_utilization_pct() -> float | None:
 
 
 def read_gpu_vram_utilization_pct() -> float | None:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None
     state = _require_state()
     gpu_metrics = state._read_gpu_metrics()
     if gpu_metrics is None:
         return None
     return float(gpu_metrics["fb_utilization_pct"])
+
+
+def read_gpu_history_sample() -> tuple[float | None, float | None]:
+    if not CAPTURE_PHASE4_GPU_HISTORY or not metrics_enabled():
+        return None, None
+    state = _require_state()
+    gpu_metrics = state._read_gpu_metrics()
+    if gpu_metrics is None:
+        return None, None
+    return (
+        float(gpu_metrics["utilization_pct"]),
+        float(gpu_metrics["fb_utilization_pct"]),
+    )
 
 
 def observed_stage(stage: str, *, env_arg: str | None = None):
@@ -1823,6 +1895,24 @@ def observed_stage(stage: str, *, env_arg: str | None = None):
                 raise ValueError(
                     f"observed_stage requires logger and log_data for stage {stage}"
                 )
+
+            if not metrics_enabled():
+                stage_label = stage.replace("_", " ")
+                logger.info(
+                    {
+                        **log_data,
+                        "msg": f"Started {stage_label}.",
+                    }
+                )
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    logger.info(
+                        {
+                            **log_data,
+                            "msg": f"Finished {stage_label}.",
+                        }
+                    )
 
             stage_token = start_stage(stage)
             stage_label = stage.replace("_", " ")
@@ -1894,53 +1984,62 @@ def update_phase_4_state(
 ) -> dict[str, float]:
     current_estimate = float(particle_filter.estimate())
     current_ess = float(step_result.get("ess", particle_filter.effective_sample_size()))
-    current_gpu_utilization = read_gpu_utilization_pct()
-    current_gpu_vram_utilization = read_gpu_vram_utilization_pct()
     state["history_estimates"].append(current_estimate)
     state["ess_history"].append(current_ess)
     state["resample_events"].append(bool(step_result.get("resampled", False)))
-    state["likelihood_diagnostics_history"].append(
-        dict(step_result.get("diagnostics", {}))
-    )
-    state["likelihood_history"].append(
-        np.asarray(step_result.get("likelihoods", np.array([], dtype=np.float64))).copy()
-    )
-    state["likelihood_particle_history"].append(
-        np.asarray(
-            step_result.get("likelihood_particles", np.array([], dtype=np.float64))
-        ).copy()
-    )
-    state["gpu_utilization_history"].append(
-        float(current_gpu_utilization)
-        if current_gpu_utilization is not None
-        else float("nan")
-    )
-    state["gpu_vram_utilization_history"].append(
-        float(current_gpu_vram_utilization)
-        if current_gpu_vram_utilization is not None
-        else float("nan")
-    )
-    if (
-        hasattr(particle_filter, "particles")
-        and np.asarray(state["initial_particles"]).size == 0
-    ):
-        state["initial_particles"] = np.asarray(particle_filter.particles).copy()
-    state["real_sensor_history"].append(
-        np.asarray(
-            step_result.get("real_sensor_reading", np.zeros((3,))), dtype=np.float64
-        ).copy()
-    )
-    state["mean_particle_sensor_history"].append(
-        np.asarray(
-            step_result.get("mean_particle_sensor_reading", np.zeros((3,))),
-            dtype=np.float64,
-        ).copy()
-    )
-    if hasattr(particle_filter, "particles"):
+    if CAPTURE_PHASE4_DEBUG_HISTORY:
+        state["likelihood_diagnostics_history"].append(
+            dict(step_result.get("diagnostics", {}))
+        )
+        state["likelihood_history"].append(
+            np.asarray(
+                step_result.get("likelihoods", np.array([], dtype=np.float64))
+            ).copy()
+        )
+        state["likelihood_particle_history"].append(
+            np.asarray(
+                step_result.get("likelihood_particles", np.array([], dtype=np.float64))
+            ).copy()
+        )
+        if (
+            hasattr(particle_filter, "particles")
+            and np.asarray(state["initial_particles"]).size == 0
+        ):
+            state["initial_particles"] = np.asarray(particle_filter.particles).copy()
+        state["real_sensor_history"].append(
+            np.asarray(
+                step_result.get("real_sensor_reading", np.zeros((3,))),
+                dtype=np.float64,
+            ).copy()
+        )
+        state["mean_particle_sensor_history"].append(
+            np.asarray(
+                step_result.get("mean_particle_sensor_reading", np.zeros((3,))),
+                dtype=np.float64,
+            ).copy()
+        )
+        if hasattr(particle_filter, "particles"):
+            state["latest_particles_snapshot"] = np.asarray(
+                particle_filter.particles
+            ).copy()
+            state["particle_history"].append(np.asarray(particle_filter.particles).copy())
+    elif hasattr(particle_filter, "particles"):
         state["latest_particles_snapshot"] = np.asarray(
             particle_filter.particles
         ).copy()
-        state["particle_history"].append(np.asarray(particle_filter.particles).copy())
+
+    if CAPTURE_PHASE4_GPU_HISTORY:
+        current_gpu_utilization, current_gpu_vram_utilization = read_gpu_history_sample()
+        state["gpu_utilization_history"].append(
+            float(current_gpu_utilization)
+            if current_gpu_utilization is not None
+            else float("nan")
+        )
+        state["gpu_vram_utilization_history"].append(
+            float(current_gpu_vram_utilization)
+            if current_gpu_vram_utilization is not None
+            else float("nan")
+        )
     if state["time_to_first_estimate_seconds"] < 0.0:
         state["time_to_first_estimate_seconds"] = time.perf_counter() - started_at
     abs_error_kg = abs(current_estimate - true_mass)
@@ -2320,7 +2419,7 @@ def finalize_phase_4_metrics(
 def init_metrics(run_id: str = "unknown") -> None:
     global _STATE
     _STATE = (
-        _MetricsState(enabled=True, port=8000, run_id=run_id)
+        _MetricsState(enabled=ENABLE_METRICS, port=8000, run_id=run_id)
         .initialize_defaults()
         .start_runtime()
     )

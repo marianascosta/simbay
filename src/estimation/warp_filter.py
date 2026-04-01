@@ -4,6 +4,7 @@ import numpy as np
 
 from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.profiling import annotate
+from src.utils.tracing import trace_public_methods
 
 from .warp_particle_filter import FrankaWarpEnv
 
@@ -85,6 +86,10 @@ def _update_and_optionally_resample(
     return updated_weights, particles, ess, indexes, False
 
 
+@trace_public_methods(
+    "simbay.warp_particle_filter",
+    exclude={"estimate", "effective_sample_size", "memory_profile"},
+)
 class WarpParticleFilter:
     """NumPy-backed particle filter for the Warp environment."""
 

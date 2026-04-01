@@ -16,11 +16,16 @@ from src.utils.mujoco_utils import load_mujoco_model
 from src.utils.mujoco_utils import modify_object_properties
 from src.utils.mujoco_utils import prepare_model_for_warp
 from src.utils.profiling import annotate
+from src.utils.tracing import trace_public_methods
 
 from .base import ParticleEnvironment
 from .warp_batch import WarpBatch
 
 
+@trace_public_methods(
+    "simbay.warp_env",
+    exclude={"memory_profile", "last_measurement_diagnostics"},
+)
 class FrankaWarpEnv(ParticleEnvironment):
     """Batched MJWarp particle environment for mass estimation."""
 

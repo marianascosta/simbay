@@ -7,7 +7,10 @@ from src.utils.logging_utils import get_process_memory_bytes
 from src.utils.tracing import trace_public_methods
 
 
-@trace_public_methods("simbay.particle_filter")
+@trace_public_methods(
+    "simbay.particle_filter",
+    exclude={"estimate", "effective_sample_size", "memory_profile"},
+)
 class ParticleFilter:
     """
     A universal Particle Filter (Sequential Monte Carlo) implementation.
