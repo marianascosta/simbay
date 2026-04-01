@@ -21,6 +21,10 @@ HEADLESS = _read_bool("SIMBAY_HEADLESS", default=True)
 _backend_value = os.getenv("SIMBAY_BACKEND", "mujoco").lower()
 BACKEND = _backend_value if _backend_value in _VALID_BACKENDS else "mujoco"
 NUM_PARTICLES = int(os.getenv("SIMBAY_PARTICLES", "100"))
+WARP_MEASUREMENT_VARIANCE = max(
+    float(os.getenv("SIMBAY_WARP_MEASUREMENT_VARIANCE", "0.1")),
+    1.0e-6,
+)
 LOG_LEVEL_NAME = "INFO"
 LOG_FALLBACK_DIR = Path("/tmp/simbay-logs")
 SYSTEM_METRICS_INTERVAL_SECONDS = 1.0

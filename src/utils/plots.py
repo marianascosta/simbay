@@ -13,6 +13,14 @@ from scipy.stats import gaussian_kde
 
 os.environ.setdefault("MESA_SHADER_CACHE_DIR", "/tmp/mesa_shader_cache")
 
+_TITLE_COLOR = "#1f2933"
+_TEXT_COLOR = "#52606d"
+_GRID_COLOR = "#7b8794"
+_PRIMARY_COLOR = "#1d4ed8"
+_PRIMARY_FILL = "#93c5fd"
+_PRIMARY_MARKER = "#1e3a8a"
+_REFERENCE_COLOR = "#ea580c"
+
 
 def _patch_mujoco_renderer_close() -> None:
     renderer_cls = mujoco.Renderer
@@ -41,8 +49,47 @@ def _style_axis(ax: Any) -> None:
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_color("#c8c4ba")
     ax.spines["bottom"].set_color("#c8c4ba")
-    ax.tick_params(colors="#52606d")
-    ax.grid(True, linestyle="--", linewidth=0.8, alpha=0.25, color="#7b8794")
+    ax.tick_params(colors=_TEXT_COLOR, labelsize=10.5)
+    ax.grid(True, linestyle="--", linewidth=0.75, alpha=0.22, color=_GRID_COLOR)
+
+
+def _set_panel_title(ax: Any, title: str) -> None:
+    ax.set_title(title, fontsize=12.5, fontweight="semibold", color=_TITLE_COLOR, pad=10)
+
+
+def _style_legend(ax: Any, *, loc: str = "best", ncol: int = 1, fontsize: float = 9.5) -> None:
+    legend = ax.legend(
+        loc=loc,
+        frameon=True,
+        fancybox=False,
+        framealpha=0.95,
+        facecolor="white",
+        edgecolor="#d9e2ec",
+        ncol=ncol,
+        fontsize=fontsize,
+    )
+    if legend is not None:
+        legend.get_frame().set_linewidth(0.8)
+
+
+def _add_stat_block(ax: Any, text: str, *, x: float = 0.02, y: float = 0.04) -> None:
+    ax.text(
+        x,
+        y,
+        text,
+        transform=ax.transAxes,
+        fontsize=9.4,
+        color=_TEXT_COLOR,
+        ha="left",
+        va="bottom",
+        bbox={
+            "boxstyle": "round,pad=0.28",
+            "facecolor": "white",
+            "edgecolor": "#d9e2ec",
+            "linewidth": 0.8,
+            "alpha": 0.92,
+        },
+    )
 
 
 def _percentage_axis_limits(values: list[float]) -> tuple[float, float]:
@@ -77,10 +124,10 @@ def build_plot_grid(
     axes_array = np.atleast_1d(axes).reshape(-1)
     fig.suptitle(
         f"{title}\n{subtitle}",
-        fontsize=18,
-        fontweight="bold",
-        color="#1f2933",
-        y=1.02,
+        fontsize=15,
+        fontweight="semibold",
+        color=_TITLE_COLOR,
+        y=0.98,
     )
     for ax, builder in zip(axes_array, plot_builders):
         _style_axis(ax)
@@ -90,8 +137,8 @@ def build_plot_grid(
 
     output_dir = _run_output_dir(run_id)
     output_path = output_dir / f"{output_name}.png"
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_path
 
@@ -131,15 +178,15 @@ def _save_multi_axes_plot(
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, facecolor="white")
     fig.suptitle(
         f"{title}\n{subtitle}",
-        fontsize=18,
-        fontweight="bold",
-        color="#1f2933",
-        y=0.99,
+        fontsize=15,
+        fontweight="semibold",
+        color=_TITLE_COLOR,
+        y=0.98,
     )
     plot_builder(axes)
     output_path = _run_output_dir(run_id) / f"{output_name}.png"
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_path
 
@@ -288,10 +335,6 @@ def plot_mass_estimation_evolution(
     true_mass: float,
     env: Any,
 ) -> None:
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-    primary_marker = "#1e3a8a"
-    reference_color = "#ea580c"
     num_steps = len(history_estimates)
     steps_to_plot = min(num_steps, len(particle_history))
 
@@ -300,61 +343,53 @@ def plot_mass_estimation_evolution(
         if snapshot.size == 0:
             continue
         ax.scatter(
-            [t] * snapshot.shape[0], snapshot, color=primary_fill, alpha=0.12, s=18
+            [t] * snapshot.shape[0], snapshot, color=_PRIMARY_FILL, alpha=0.08, s=12
         )
 
     mass_steps = range(num_steps)
     ax.plot(
         mass_steps,
         history_estimates,
-        color=primary_color,
-        linewidth=3.2,
+        color=_PRIMARY_COLOR,
+        linewidth=2.8,
         label="Filter Estimate (Mean)",
     )
     ax.fill_between(
         mass_steps,
         history_estimates,
         true_mass,
-        color=primary_fill,
-        alpha=0.22,
+        color=_PRIMARY_FILL,
+        alpha=0.18,
     )
     ax.axhline(
         y=true_mass,
-        color=reference_color,
+        color=_REFERENCE_COLOR,
         linestyle="--",
-        linewidth=2,
+        linewidth=1.8,
         label=f"True Mass ({true_mass} kg)",
     )
     if history_estimates:
         ax.scatter(
             [num_steps - 1],
             [history_estimates[-1]],
-            color=primary_marker,
-            s=52,
+            color=_PRIMARY_MARKER,
+            s=44,
             zorder=4,
         )
 
-    ax.set_title(
-        "Mass Estimation Evolution",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    ax.set_ylabel("Estimated Mass (kg)", fontsize=12)
+    _set_panel_title(ax, "Mass Estimate")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
+    ax.set_ylabel("Estimated mass (kg)", fontsize=11)
     ax.set_ylim(env.min, env.max)
-    ax.legend(loc="lower right", frameon=False)
+    _style_legend(ax, loc="lower right")
     if history_estimates:
         final_error_kg = abs(true_mass - history_estimates[-1])
-        ax.text(
-            0.02,
-            0.04,
-            f"Final estimate: {history_estimates[-1]:.3f} kg\nFinal error: {final_error_kg:.3f} kg",
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
+        _add_stat_block(
+            ax,
+            (
+                f"Final estimate: {history_estimates[-1]:.3f} kg\n"
+                f"Absolute error: {final_error_kg:.3f} kg"
+            ),
         )
 
 
@@ -1060,10 +1095,6 @@ def plot_effective_sample_size(
     ess_history: list[float],
     num_particles: int,
 ) -> None:
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-    primary_marker = "#1e3a8a"
-    reference_color = "#ea580c"
     ess_steps = range(len(ess_history))
     threshold = num_particles / 2
 
@@ -1071,34 +1102,29 @@ def plot_effective_sample_size(
         ess_steps,
         ess_history,
         0,
-        color=primary_fill,
-        alpha=0.22,
+        color=_PRIMARY_FILL,
+        alpha=0.18,
     )
-    ax.plot(ess_steps, ess_history, color=primary_color, linewidth=2.8, label="ESS")
+    ax.plot(ess_steps, ess_history, color=_PRIMARY_COLOR, linewidth=2.5, label="ESS")
     ax.axhline(
         y=threshold,
-        color=reference_color,
+        color=_REFERENCE_COLOR,
         linestyle="--",
-        linewidth=1.8,
+        linewidth=1.6,
         label="Resample Threshold",
     )
     if ess_history:
         ax.scatter(
             [len(ess_history) - 1],
             [ess_history[-1]],
-            color=primary_marker,
-            s=52,
+            color=_PRIMARY_MARKER,
+            s=44,
             zorder=4,
         )
 
-    ax.set_title(
-        "Effective Sample Size",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
-    ax.set_ylabel("ESS Particles", fontsize=12)
+    _set_panel_title(ax, "Effective Sample Size")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
+    ax.set_ylabel("ESS particles", fontsize=11)
     ax.set_xlim(0, max(len(ess_history) - 1, 0))
     ax.set_ylim(
         0,
@@ -1108,17 +1134,11 @@ def plot_effective_sample_size(
             else float(num_particles)
         ),
     )
-    ax.legend(loc="lower right", frameon=False)
+    _style_legend(ax, loc="lower right")
     if ess_history:
-        ax.text(
-            0.02,
-            0.04,
+        _add_stat_block(
+            ax,
             f"Final ESS: {ess_history[-1]:.1f}\nResample threshold: {threshold:.1f}",
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
         )
 
 
@@ -1166,7 +1186,7 @@ def plot_resample_events_timeline(
     event_steps = [
         step for step, did_resample in enumerate(resample_events) if did_resample
     ]
-    ax.grid(True, axis="x", linestyle="--", linewidth=0.8, alpha=0.25, color="#7b8794")
+    ax.grid(True, axis="x", linestyle="--", linewidth=0.75, alpha=0.22, color=_GRID_COLOR)
 
     if event_steps:
         ax.vlines(
@@ -1184,31 +1204,17 @@ def plot_resample_events_timeline(
             ha="center",
             va="center",
             fontsize=12,
-            color="#52606d",
+            color=_TEXT_COLOR,
         )
 
-    ax.set_title(
-        "Resample Events Timeline",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "Resample Events")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("Resample", fontsize=12)
     ax.set_xlim(0, max(len(resample_events) - 1, 0))
     ax.set_ylim(-0.05, 1.15)
     ax.set_yticks([0.0, 1.0])
     ax.set_yticklabels(["No", "Yes"])
-    ax.text(
-        0.02,
-        0.04,
-        f"Resample count: {len(event_steps)}",
-        transform=ax.transAxes,
-        fontsize=10.5,
-        color="#52606d",
-        ha="left",
-        va="bottom",
-    )
+    _add_stat_block(ax, f"Resample count: {len(event_steps)}")
 
 
 def generate_resample_events_timeline_plot(
@@ -1246,47 +1252,37 @@ def plot_relative_error(
         for estimate in history_estimates
     ]
     steps = range(len(rel_error_pct))
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-
     if rel_error_pct:
-        ax.fill_between(steps, rel_error_pct, 0, color=primary_fill, alpha=0.22)
+        ax.fill_between(steps, rel_error_pct, 0, color=_PRIMARY_FILL, alpha=0.18)
         ax.plot(
             steps,
             rel_error_pct,
-            color=primary_color,
-            linewidth=2.8,
+            color=_PRIMARY_COLOR,
+            linewidth=2.5,
             label="Relative error",
         )
         ax.scatter(
             [len(rel_error_pct) - 1],
             [rel_error_pct[-1]],
-            color="#1e3a8a",
-            s=42,
+            color=_PRIMARY_MARKER,
+            s=40,
             zorder=3,
         )
 
-    ax.set_title(
-        "Relative Error",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "Relative Error")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("Error (%)", fontsize=12)
     ax.set_xlim(0, max(len(rel_error_pct), 1) - 1)
-    ax.legend(loc="lower right", frameon=False)
+    if rel_error_pct:
+        _style_legend(ax, loc="lower right")
 
     if rel_error_pct:
-        ax.text(
-            0.02,
-            0.04,
-            f"Final error: {rel_error_pct[-1]:.2f}%\nPeak error: {np.max(rel_error_pct):.2f}%",
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
+        _add_stat_block(
+            ax,
+            (
+                f"Final error: {rel_error_pct[-1]:.2f}%\n"
+                f"Peak error: {np.max(rel_error_pct):.2f}%"
+            ),
         )
 
 
@@ -1299,32 +1295,28 @@ def plot_gpu_usage(
     valid_gpu_values = [
         value for value in gpu_utilization_history if not np.isnan(value)
     ]
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-    reference_color = "#ea580c"
-
     if valid_gpu_values:
         ax.fill_between(
-            gpu_steps, gpu_utilization_history, 0, color=primary_fill, alpha=0.22
+            gpu_steps, gpu_utilization_history, 0, color=_PRIMARY_FILL, alpha=0.18
         )
         ax.plot(
             gpu_steps,
             gpu_utilization_history,
-            color=primary_color,
-            linewidth=2.8,
+            color=_PRIMARY_COLOR,
+            linewidth=2.5,
             label="GPU utilization",
         )
         ax.scatter(
             [len(gpu_utilization_history) - 1],
             [gpu_utilization_history[-1]],
-            color="#1e3a8a",
-            s=42,
+            color=_PRIMARY_MARKER,
+            s=40,
             zorder=3,
         )
         ax.axhline(
             y=np.mean(valid_gpu_values),
-            color=reference_color,
-            linewidth=1.8,
+            color=_REFERENCE_COLOR,
+            linewidth=1.6,
             linestyle="--",
             label="Average",
         )
@@ -1337,30 +1329,22 @@ def plot_gpu_usage(
             ha="center",
             va="center",
             fontsize=12,
-            color="#52606d",
+            color=_TEXT_COLOR,
         )
 
-    ax.set_title(
-        "GPU Usage",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "GPU Utilization")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("Utilization (%)", fontsize=12)
     ax.set_xlim(0, max(len(gpu_utilization_history), 1) - 1)
     ax.set_ylim(*_percentage_axis_limits(gpu_utilization_history))
     if valid_gpu_values:
-        ax.legend(loc="lower right", frameon=False)
-        ax.text(
-            0.02,
-            0.04,
-            f"Peak GPU: {np.max(valid_gpu_values):.1f}%\nAvg GPU: {np.mean(valid_gpu_values):.1f}%",
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
+        _style_legend(ax, loc="lower right")
+        _add_stat_block(
+            ax,
+            (
+                f"Peak GPU: {np.max(valid_gpu_values):.1f}%\n"
+                f"Average GPU: {np.mean(valid_gpu_values):.1f}%"
+            ),
         )
 
 
@@ -1373,36 +1357,32 @@ def plot_vram_usage(
     valid_vram_values = [
         value for value in gpu_vram_utilization_history if not np.isnan(value)
     ]
-    primary_color = "#1d4ed8"
-    primary_fill = "#93c5fd"
-    reference_color = "#ea580c"
-
     if valid_vram_values:
         ax.fill_between(
             vram_steps,
             gpu_vram_utilization_history,
             0,
-            color=primary_fill,
-            alpha=0.22,
+            color=_PRIMARY_FILL,
+            alpha=0.18,
         )
         ax.plot(
             vram_steps,
             gpu_vram_utilization_history,
-            color=primary_color,
-            linewidth=2.8,
+            color=_PRIMARY_COLOR,
+            linewidth=2.5,
             label="VRAM utilization",
         )
         ax.scatter(
             [len(gpu_vram_utilization_history) - 1],
             [gpu_vram_utilization_history[-1]],
-            color="#1e3a8a",
-            s=42,
+            color=_PRIMARY_MARKER,
+            s=40,
             zorder=3,
         )
         ax.axhline(
             y=np.mean(valid_vram_values),
-            color=reference_color,
-            linewidth=1.8,
+            color=_REFERENCE_COLOR,
+            linewidth=1.6,
             linestyle="--",
             label="Average",
         )
@@ -1415,30 +1395,22 @@ def plot_vram_usage(
             ha="center",
             va="center",
             fontsize=12,
-            color="#52606d",
+            color=_TEXT_COLOR,
         )
 
-    ax.set_title(
-        "VRAM Usage",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "VRAM Utilization")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("VRAM Utilization (%)", fontsize=12)
     ax.set_xlim(0, max(len(gpu_vram_utilization_history), 1) - 1)
     ax.set_ylim(*_percentage_axis_limits(gpu_vram_utilization_history))
     if valid_vram_values:
-        ax.legend(loc="lower right", frameon=False)
-        ax.text(
-            0.02,
-            0.04,
-            f"Peak VRAM: {np.max(valid_vram_values):.1f}%\nAvg VRAM: {np.mean(valid_vram_values):.1f}%",
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
+        _style_legend(ax, loc="lower right")
+        _add_stat_block(
+            ax,
+            (
+                f"Peak VRAM: {np.max(valid_vram_values):.1f}%\n"
+                f"Average VRAM: {np.mean(valid_vram_values):.1f}%"
+            ),
         )
 
 
@@ -1457,7 +1429,7 @@ def plot_sensor_comparison(
             ha="center",
             va="center",
             fontsize=12,
-            color="#52606d",
+            color=_TEXT_COLOR,
         )
         return
 
@@ -1485,28 +1457,20 @@ def plot_sensor_comparison(
             label=f"Particles {label}",
         )
 
-    ax.set_title(
-        "Real vs Particle Sensor Readings",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "Sensor Comparison")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("Force Reading", fontsize=12)
     ax.set_xlim(0, max(len(steps), 1) - 1)
-    ax.legend(loc="upper right", frameon=False, ncol=2, fontsize=9.5)
+    _style_legend(ax, loc="upper right", ncol=2, fontsize=8.8)
     mean_abs_gap = np.mean(
         np.abs(real_values[: len(steps)] - particle_values[: len(steps)]), axis=0
     )
-    ax.text(
-        0.02,
-        0.04,
-        f"Mean |gap| X/Y/Z: {mean_abs_gap[0]:.3f}, {mean_abs_gap[1]:.3f}, {mean_abs_gap[2]:.3f}",
-        transform=ax.transAxes,
-        fontsize=10.5,
-        color="#52606d",
-        ha="left",
-        va="bottom",
+    _add_stat_block(
+        ax,
+        (
+            f"Mean |gap| X/Y/Z: {mean_abs_gap[0]:.3f}, "
+            f"{mean_abs_gap[1]:.3f}, {mean_abs_gap[2]:.3f}"
+        ),
     )
 
 
@@ -1530,7 +1494,7 @@ def build_sensor_comparison_panels(
                 ha="center",
                 va="center",
                 fontsize=12,
-                color="#52606d",
+                color=_TEXT_COLOR,
             )
         return
 
@@ -1578,17 +1542,9 @@ def build_sensor_comparison_panels(
             alpha=0.12,
         )
         ax.set_ylabel(f"{label}\nForce", fontsize=11)
-        ax.legend(loc="upper right", frameon=False, fontsize=9)
-        ax.text(
-            0.01,
-            0.04,
-            f"Mean |gap|: {np.mean(axis_gap):.3f}",
-            transform=ax.transAxes,
-            fontsize=9.8,
-            color="#52606d",
-            ha="left",
-            va="bottom",
-        )
+        _set_panel_title(ax, label)
+        _style_legend(ax, loc="upper right", fontsize=8.6)
+        _add_stat_block(ax, f"Mean |gap|: {np.mean(axis_gap):.3f}", x=0.01, y=0.04)
 
     residual_ax = axes_array[3]
     residual_colors = ["#1d4ed8", "#dc2626", "#16a34a"]
@@ -1602,18 +1558,15 @@ def build_sensor_comparison_panels(
             label=label,
         )
     residual_ax.axhline(0.0, color="#111827", linewidth=1.2, linestyle="--", alpha=0.8)
-    residual_ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(residual_ax, "Residuals")
+    residual_ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     residual_ax.set_ylabel("Residual\nReal - Mean", fontsize=11)
-    residual_ax.legend(loc="upper right", frameon=False, ncol=3, fontsize=9)
-    residual_ax.text(
-        0.01,
-        0.04,
-        "Residuals near zero indicate particle mean matches the real sensor reading.",
-        transform=residual_ax.transAxes,
-        fontsize=9.8,
-        color="#52606d",
-        ha="left",
-        va="bottom",
+    _style_legend(residual_ax, loc="upper right", ncol=3, fontsize=8.6)
+    _add_stat_block(
+        residual_ax,
+        "Residuals near zero indicate the particle mean tracks the real sensor.",
+        x=0.01,
+        y=0.04,
     )
 
 
@@ -1662,38 +1615,32 @@ def plot_steps_per_second(
         ax.plot(
             steps,
             steps_per_second,
-            color="#1d4ed8",
-            linewidth=2.8,
+            color=_PRIMARY_COLOR,
+            linewidth=2.5,
             label="PF update steps/s",
         )
         ax.scatter(
             [len(steps_per_second) - 1],
             [steps_per_second[-1]],
-            color="#1e3a8a",
-            s=42,
+            color=_PRIMARY_MARKER,
+            s=40,
             zorder=3,
         )
         ax.axhline(
             y=float(np.mean(valid_sps)),
-            color="#ea580c",
-            linewidth=1.8,
+            color=_REFERENCE_COLOR,
+            linewidth=1.6,
             linestyle="--",
             label="Average",
         )
-        ax.legend(loc="upper right", frameon=False)
-        ax.text(
-            0.02,
-            0.04,
+        _style_legend(ax, loc="upper right")
+        _add_stat_block(
+            ax,
             (
                 f"Particles: {num_particles}\n"
-                f"Avg: {np.mean(valid_sps):.2f} steps/s\n"
+                f"Average: {np.mean(valid_sps):.2f} steps/s\n"
                 f"Peak: {np.max(valid_sps):.2f} steps/s"
             ),
-            transform=ax.transAxes,
-            fontsize=10.5,
-            color="#52606d",
-            ha="left",
-            va="bottom",
         )
     else:
         ax.text(
@@ -1704,16 +1651,11 @@ def plot_steps_per_second(
             ha="center",
             va="center",
             fontsize=12,
-            color="#52606d",
+            color=_TEXT_COLOR,
         )
 
-    ax.set_title(
-        "Particle Filter Steps Per Second",
-        fontsize=15,
-        fontweight="bold",
-        color="#1f2933",
-    )
-    ax.set_xlabel("Simulation Step (Lifting Phase)", fontsize=12)
+    _set_panel_title(ax, "Particle Filter Throughput")
+    ax.set_xlabel("Simulation Step (lifting phase)", fontsize=11)
     ax.set_ylabel("Steps / second", fontsize=12)
     ax.set_xlim(0, max(len(pf_wall_durations), 1) - 1)
 
